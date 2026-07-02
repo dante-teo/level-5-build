@@ -2,7 +2,7 @@
 
 Level5 Build is an Electrobun desktop app: Bun + a native OS webview (no bundled Chromium/CEF), React 18, Vite 6 for the webview bundle, Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
-Currently the app is an early desktop AI coding agent shell: a single frameless window showing a full-bleed background image, with the runtime, RPC, styling, and component foundation in place for the product workspace.
+Currently the app is an early desktop AI coding agent shell: a single frameless window with a code-native white gradient backdrop, light translucent chrome, and the runtime, RPC, styling, and component foundation in place for the product workspace.
 
 See also:
 

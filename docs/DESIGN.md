@@ -400,7 +400,7 @@ Implementation is accepted only if:
 
 ## 27. Current App Foundation
 
-The app currently renders a single full-bleed background image (`app/src/mainview/assets/background.png`, `background-size: cover`) with no other UI. Future screens should build from this design system rather than continuing as a blank canvas.
+The app currently renders a code-native full-bleed white gradient background (`.app-gradient-background`) with soft blue, violet, and pink light fields. Future screens should build from this design system rather than continuing as a blank canvas.
 
 ## 28. shadcn/ui Foundation
 

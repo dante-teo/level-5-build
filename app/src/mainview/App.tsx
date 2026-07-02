@@ -2,7 +2,6 @@ import type { ButtonHTMLAttributes, PointerEvent, ReactNode } from "react";
 import { useAtom } from "jotai";
 import { MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import appIcon from "@/assets/app-icon.png";
-import backgroundImage from "@/assets/background.png";
 import { electroview } from "@/lib/electrobun";
 import { cn } from "@/lib/utils";
 import { isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
@@ -63,8 +62,7 @@ function App() {
 
 	return (
 		<div
-			className="electrobun-webkit-app-region-drag fixed inset-0 flex h-screen w-screen overflow-hidden bg-cover bg-center bg-no-repeat text-foreground"
-			style={{ backgroundImage: `url(${backgroundImage})` }}
+			className="app-gradient-background electrobun-webkit-app-region-drag fixed inset-0 flex h-screen w-screen overflow-hidden text-foreground"
 			onDoubleClick={() => electroview.rpc?.request.toggleMaximizeWindow()}
 		>
 			<aside

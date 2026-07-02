@@ -133,3 +133,17 @@
 		font-family: "Departure Mono", "SF Mono", SFMono-Regular, ui-monospace, monospace;
 	}
 }
+
+@layer components {
+	.app-gradient-background {
+		background:
+			linear-gradient(120deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 48%),
+			radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.7), transparent 33rem),
+			radial-gradient(circle at 88% 10%, rgba(95, 91, 255, 0.23), transparent 30rem),
+			radial-gradient(circle at 74% 86%, rgba(232, 130, 255, 0.28), transparent 35rem),
+			radial-gradient(circle at 8% 88%, rgba(93, 188, 255, 0.24), transparent 33rem),
+			radial-gradient(circle at 42% 72%, rgba(255, 183, 220, 0.18), transparent 29rem),
+			radial-gradient(circle at 48% 54%, rgba(255, 255, 255, 0.78), transparent 24rem),
+			linear-gradient(145deg, #ffffff 0%, #fdfdff 42%, #f8fbff 70%, #ffffff 100%);
+	}
+}

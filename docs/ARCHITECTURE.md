@@ -118,8 +118,12 @@ Current app RPC includes the mock-agent development surface:
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `startMockPrompt({ prompt, cwd, model, approvalMode })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running.
 - `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests.
+- `listMockSessions()`: returns the app-side mock session summaries currently known to the main process.
+- `loadMockSession({ sessionId })`: loads or resumes a known mock session and replays the cached transcript into the webview.
+- `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
+- `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
 - `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
-- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, errors, and stop reasons.
+- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, session summaries, errors, and stop reasons.
 
 The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.
 
@@ -134,7 +138,11 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 - reuses the current mock session for subsequent prompts in the same cwd;
 - closes and recreates the mock session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
+- keeps an app-side in-memory map of session summaries so the sidebar can show a newly created session immediately after `session/new`;
+- keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, and tool calls, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
 - normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
+
+The sidebar session list is intentionally not populated on app open. It begins empty, then reflects sessions created or loaded during the current main-process lifetime. The underlying mock server still persists ACP session state for protocol testing, but the app-side full transcript cache is in memory and is reset when the main process exits.
 
 Keep this mock client local-development oriented. Real provider/client architecture should be introduced separately rather than growing production assumptions into this mock path.
 

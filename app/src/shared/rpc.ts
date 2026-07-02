@@ -51,6 +51,14 @@ export type MockConfigOption = {
 	options?: Array<{ value: string; name: string; description?: string }>;
 };
 
+export type MockSessionSummary = {
+	sessionId: string;
+	title: string;
+	cwd: string;
+	updatedAt: string;
+	messageCount: number;
+};
+
 export type MockAgentUpdate =
 	| { kind: "status"; status: MockRunStatus; sessionId?: string; cwd?: string }
 	| MockMessageUpdate
@@ -58,6 +66,7 @@ export type MockAgentUpdate =
 	| { kind: "tool"; tool: MockToolCall }
 	| { kind: "permission"; request: MockPermissionRequest }
 	| { kind: "config"; options: MockConfigOption[] }
+	| { kind: "session"; session: MockSessionSummary }
 	| { kind: "stop"; stopReason: string }
 	| { kind: "error"; message: string };
 
@@ -78,6 +87,24 @@ export type RespondToMockPermissionParams = {
 	optionId: string;
 };
 
+export type LoadMockSessionParams = {
+	sessionId: string;
+};
+
+export type LoadMockSessionResponse = {
+	loaded: boolean;
+	reason?: string;
+};
+
+export type DeleteMockSessionParams = {
+	sessionId: string;
+};
+
+export type DeleteMockSessionResponse = {
+	deleted: boolean;
+	reason?: string;
+};
+
 export type AppRPC = {
 	// functions that execute in the main (bun) process, callable from the webview
 	bun: RPCSchema<{
@@ -96,6 +123,22 @@ export type AppRPC = {
 			};
 			respondToMockPermission: {
 				params: RespondToMockPermissionParams;
+				response: boolean;
+			};
+			listMockSessions: {
+				params: void;
+				response: MockSessionSummary[];
+			};
+			loadMockSession: {
+				params: LoadMockSessionParams;
+				response: LoadMockSessionResponse;
+			};
+			deleteMockSession: {
+				params: DeleteMockSessionParams;
+				response: DeleteMockSessionResponse;
+			};
+			startNewMockChat: {
+				params: void;
 				response: boolean;
 			};
 			resetMockChat: {

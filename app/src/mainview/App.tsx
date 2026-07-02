@@ -1,6 +1,7 @@
 import {
 	type ButtonHTMLAttributes,
 	type KeyboardEvent,
+	type MouseEvent,
 	type PointerEvent,
 	type ReactNode,
 	useEffect,
@@ -16,14 +17,18 @@ import {
 	Folder,
 	GitBranch,
 	Laptop,
+	LoaderCircle,
 	MessageSquarePlus,
+	MoreHorizontal,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
 	Send,
 	Settings,
 	ShieldCheck,
+	Sparkles,
 	SquareTerminal,
+	Trash2,
 	User,
 	X,
 } from "lucide-react";
@@ -40,6 +45,7 @@ import type {
 	MockPermissionRequest,
 	MockPlanItem,
 	MockRunStatus,
+	MockSessionSummary,
 	MockToolCall,
 } from "@shared/rpc";
 
@@ -71,6 +77,12 @@ type TranscriptItem =
 	| { type: "tool"; key: string; tool: ToolCallView }
 	| { type: "permission"; key: string; request: MockPermissionRequest }
 	| { type: "error"; key: string; message: string };
+
+type SessionContextMenu = {
+	sessionId: string;
+	x: number;
+	y: number;
+};
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 	return (
@@ -147,6 +159,54 @@ function shortFolderName(path: string | null) {
 	return parts.length > 0 ? parts[parts.length - 1] : path;
 }
 
+function sessionTitle(session: MockSessionSummary | undefined) {
+	const title = session?.title.trim();
+	return title || "New chat";
+}
+
+function sortSessions(sessions: MockSessionSummary[]) {
+	return [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function upsertSession(sessions: MockSessionSummary[], nextSession: MockSessionSummary) {
+	const withoutCurrent = sessions.filter((session) => session.sessionId !== nextSession.sessionId);
+	return sortSessions([...withoutCurrent, nextSession]);
+}
+
+function isMissingRpcHandlerError(error: unknown, methodName: string) {
+	return error instanceof Error && error.message.includes("has no handler") && error.message.includes(methodName);
+}
+
+function sessionActivityLabel(status: MockRunStatus) {
+	if (status === "starting" || status === "running") return "Chat is working";
+	if (status === "completed") return "Chat completed";
+	return undefined;
+}
+
+function SessionActivityIndicator({ status }: { status: MockRunStatus }) {
+	if (status === "starting" || status === "running") {
+		return (
+			<span
+				aria-label={sessionActivityLabel(status)}
+				className="ml-auto flex size-5 shrink-0 items-center justify-center text-muted-foreground"
+			>
+				<LoaderCircle className="size-4 animate-spin" strokeWidth={2} />
+			</span>
+		);
+	}
+	if (status === "completed") {
+		return (
+			<span
+				aria-label={sessionActivityLabel(status)}
+				className="ml-auto flex size-5 shrink-0 items-center justify-center text-[var(--app-accent)]"
+			>
+				<Sparkles className="size-4" strokeWidth={2} />
+			</span>
+		);
+	}
+	return null;
+}
+
 function App() {
 	const [isSidebarCollapsed, setIsSidebarCollapsed] = useAtom(isSidebarCollapsedAtom);
 	const [sidebarWidth, setSidebarWidth] = useAtom(sidebarWidthAtom);
@@ -155,6 +215,10 @@ function App() {
 	const [model, setModel] = useState<MockModelId>("mock-pro");
 	const [approvalMode, setApprovalMode] = useState<ApprovalModeId>("ask");
 	const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
+	const [sessions, setSessions] = useState<MockSessionSummary[]>([]);
+	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+	const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
+	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 	const [runStatus, setRunStatus] = useState<MockRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -165,11 +229,18 @@ function App() {
 	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
 	const isRunning = runStatus === "starting" || runStatus === "running";
 	const hasConversation = transcriptItems.length > 0;
+	const activeSessionStatus = activeSessionId ? runStatus : "idle";
+	const deleteTarget = deleteTargetId ? sessions.find((session) => session.sessionId === deleteTargetId) : undefined;
+	const menuSession = contextMenu ? sessions.find((session) => session.sessionId === contextMenu.sessionId) : undefined;
 
 	useEffect(() => {
 		const handler = (update: MockAgentUpdate) => {
 			if (update.kind === "status") {
 				setRunStatus(update.status);
+				if (update.sessionId) {
+					setActiveSessionId(update.sessionId);
+					void refreshMockSessions();
+				}
 				return;
 			}
 			if (update.kind === "message") {
@@ -188,9 +259,18 @@ function App() {
 				setTranscriptItems((current) => upsertPermissionItem(current, update.request));
 				return;
 			}
+			if (update.kind === "session") {
+				setSessions((current) => upsertSession(current, update.session));
+				if (update.session.sessionId) {
+					setActiveSessionId(update.session.sessionId);
+				}
+				void refreshMockSessions();
+				return;
+			}
 			if (update.kind === "stop") {
 				setStopReason(update.stopReason);
 				setRunStatus("completed");
+				void refreshMockSessions();
 				return;
 			}
 			if (update.kind === "error") {
@@ -203,6 +283,38 @@ function App() {
 		rpc?.addMessageListener("mockAgentUpdate", handler);
 		return () => rpc?.removeMessageListener("mockAgentUpdate", handler);
 	}, []);
+
+	useEffect(() => {
+		if (!contextMenu) {
+			return;
+		}
+
+		function closeMenu() {
+			setContextMenu(null);
+		}
+
+		function handleKeyDown(event: globalThis.KeyboardEvent) {
+			if (event.key === "Escape") {
+				closeMenu();
+			}
+		}
+
+		document.addEventListener("pointerdown", closeMenu);
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", closeMenu);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [contextMenu]);
+
+	useEffect(() => {
+		if (contextMenu && !sessions.some((session) => session.sessionId === contextMenu.sessionId)) {
+			setContextMenu(null);
+		}
+		if (deleteTargetId && !sessions.some((session) => session.sessionId === deleteTargetId)) {
+			setDeleteTargetId(null);
+		}
+	}, [contextMenu, deleteTargetId, sessions]);
 
 	useEffect(() => {
 		const textarea = textareaRef.current;
@@ -287,6 +399,30 @@ function App() {
 		return [...current.filter((item) => item.type !== "error"), { type: "error", key: `error-${Date.now()}`, message }];
 	}
 
+	async function refreshMockSessions() {
+		try {
+			const nextSessions = await electroview.rpc?.request.listMockSessions();
+			if (nextSessions) {
+				setSessions(sortSessions(nextSessions));
+			}
+		} catch (error) {
+			if (isMissingRpcHandlerError(error, "listMockSessions")) {
+				return;
+			}
+			setTranscriptItems((current) =>
+				upsertErrorItem(current, error instanceof Error ? error.message : "Failed to refresh chats."),
+			);
+		}
+	}
+
+	function resetConversationPane() {
+		optimisticUserTextRef.current = null;
+		setPrompt("");
+		setTranscriptItems([]);
+		currentPlanKeyRef.current = `plan-${Date.now()}`;
+		setStopReason(null);
+	}
+
 	function handleResizePointerDown(event: PointerEvent<HTMLDivElement>) {
 		if (isSidebarCollapsed) {
 			return;
@@ -337,6 +473,11 @@ function App() {
 			optimisticUserTextRef.current = null;
 			setRunStatus("idle");
 			setTranscriptItems((current) => upsertErrorItem(current, "The mock agent is already running or the prompt was empty."));
+			return;
+		}
+		if (response.sessionId) {
+			setActiveSessionId(response.sessionId);
+			void refreshMockSessions();
 		}
 	}
 
@@ -357,13 +498,69 @@ function App() {
 	}
 
 	async function handleNewChat() {
-		await electroview.rpc?.request.resetMockChat();
-		optimisticUserTextRef.current = null;
-		setPrompt("");
-		setTranscriptItems([]);
-		currentPlanKeyRef.current = "plan-initial";
+		if (isRunning) {
+			return;
+		}
+		const started = await electroview.rpc?.request.startNewMockChat();
+		if (started === false) {
+			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before starting a new chat."));
+			return;
+		}
+		resetConversationPane();
+		setActiveSessionId(null);
+		setContextMenu(null);
+		setDeleteTargetId(null);
 		setRunStatus("idle");
-		setStopReason(null);
+	}
+
+	async function handleSelectSession(sessionId: string) {
+		if (isRunning || sessionId === activeSessionId) {
+			return;
+		}
+		resetConversationPane();
+		setContextMenu(null);
+		setActiveSessionId(sessionId);
+		setRunStatus("idle");
+		const response = await electroview.rpc?.request.loadMockSession({ sessionId });
+		if (!response?.loaded) {
+			setSessions((current) => current.filter((session) => session.sessionId !== sessionId));
+			setActiveSessionId(null);
+			setTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to load chat."));
+		}
+		void refreshMockSessions();
+	}
+
+	function handleSessionContextMenu(event: MouseEvent<HTMLButtonElement>, sessionId: string) {
+		event.preventDefault();
+		event.stopPropagation();
+		setContextMenu({ sessionId, x: event.clientX, y: event.clientY });
+	}
+
+	function openDeleteDialog(sessionId: string) {
+		setDeleteTargetId(sessionId);
+		setContextMenu(null);
+	}
+
+	async function confirmDeleteSession() {
+		if (!deleteTargetId) {
+			return;
+		}
+		const targetId = deleteTargetId;
+		const response = await electroview.rpc?.request.deleteMockSession({ sessionId: targetId });
+		if (!response?.deleted) {
+			setDeleteTargetId(null);
+			setTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to delete chat."));
+			return;
+		}
+
+		setSessions((current) => current.filter((session) => session.sessionId !== targetId));
+		setDeleteTargetId(null);
+		setContextMenu(null);
+		if (targetId === activeSessionId) {
+			resetConversationPane();
+			setActiveSessionId(null);
+			setRunStatus("idle");
+		}
 	}
 
 	return (
@@ -390,14 +587,54 @@ function App() {
 							<SidebarButton
 								aria-label="New chat"
 								title="New chat"
-								className="h-11 w-full justify-start gap-3 px-3 text-[14px] font-medium text-foreground hover:bg-white/70"
+								disabled={isRunning}
+								className="h-11 w-full justify-start gap-3 px-3 text-[14px] font-medium text-foreground hover:bg-white/70 disabled:cursor-not-allowed disabled:opacity-45"
 								onClick={() => void handleNewChat()}
 							>
 								<MessageSquarePlus className="size-4 shrink-0" strokeWidth={1.8} />
 								<span className="truncate">New chat</span>
 							</SidebarButton>
 
-							<div className="min-h-0 flex-1" />
+							<section className="mt-3 flex min-h-0 flex-1 flex-col" aria-label="All chats">
+								<div className="flex h-9 shrink-0 items-center justify-between px-3 text-[13px] font-semibold text-muted-foreground">
+									<span>All chats</span>
+									<MoreHorizontal className="size-4" strokeWidth={1.8} />
+								</div>
+								{sessions.length === 0 ? (
+									<div className="flex flex-1 items-start justify-center px-3 pt-3 text-center text-[14px] font-semibold text-muted-foreground">
+										No recent chats
+									</div>
+								) : (
+									<div className="min-h-0 flex-1 overflow-y-auto pr-1">
+										<div className="flex flex-col gap-1">
+											{sessions.map((session) => {
+												const isActive = session.sessionId === activeSessionId;
+												return (
+													<SidebarButton
+														key={session.sessionId}
+														aria-label={`Open ${sessionTitle(session)}`}
+														title={sessionTitle(session)}
+														aria-disabled={isRunning}
+														className={cn(
+															"h-10 w-full justify-start gap-2 px-3 text-[14px] font-medium",
+															isActive
+																? "bg-[var(--app-selected-surface)] text-foreground"
+																: "text-muted-foreground hover:bg-white/70 hover:text-foreground",
+															isRunning ? "cursor-not-allowed opacity-60" : "",
+														)}
+														onClick={() => void handleSelectSession(session.sessionId)}
+														onContextMenu={(event) => handleSessionContextMenu(event, session.sessionId)}
+													>
+														<MessageSquarePlus className="size-4 shrink-0" strokeWidth={1.7} />
+														<span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
+														{isActive ? <SessionActivityIndicator status={activeSessionStatus} /> : null}
+													</SidebarButton>
+												);
+											})}
+										</div>
+									</div>
+								)}
+							</section>
 
 							<div className="border-t border-[var(--app-sidebar-border)] pt-3">
 								<SidebarButton
@@ -425,6 +662,25 @@ function App() {
 				)}
 			</aside>
 
+			{contextMenu && menuSession ? (
+				<div
+					className="electrobun-webkit-app-region-no-drag fixed z-30 w-44 rounded-[20px] border border-[var(--app-sidebar-border)] bg-white/92 p-1.5 shadow-[0_18px_46px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+					style={{ left: contextMenu.x, top: contextMenu.y }}
+					onDoubleClick={(event) => event.stopPropagation()}
+					onPointerDown={(event) => event.stopPropagation()}
+				>
+					<button
+						type="button"
+						className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-[14px] font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-45"
+						disabled={isRunning && contextMenu.sessionId === activeSessionId}
+						onClick={() => openDeleteDialog(contextMenu.sessionId)}
+					>
+						<Trash2 className="size-4 shrink-0" strokeWidth={1.9} />
+						<span>Delete</span>
+					</button>
+				</div>
+			) : null}
+
 			<div
 				className="electrobun-webkit-app-region-no-drag fixed z-10 inline-flex h-11 w-auto items-center gap-2 rounded-full border border-[var(--app-sidebar-border)] bg-white/80 py-1 pr-4 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl"
 				style={{
@@ -447,9 +703,12 @@ function App() {
 
 			<main className="electrobun-webkit-app-region-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-20" aria-label="Workspace">
 				<div className={cn("mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col", hasConversation ? "" : "justify-center")}>
-					<div className={cn("flex min-h-0 w-full flex-col", hasConversation ? "h-full" : "")}>
+					<div className={cn("flex min-h-0 w-full flex-col", hasConversation ? "relative h-full" : "")}>
 						{hasConversation ? (
-							<div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5 pr-1">
+							<div
+								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pb-56 pt-24"
+								style={{ left: `${renderedSidebarWidth}px` }}
+							>
 								<div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
 									{transcriptItems.map((item) => {
 										if (item.type === "message") {
@@ -471,7 +730,7 @@ function App() {
 							</div>
 						) : null}
 
-						<div className="mx-auto w-full max-w-3xl shrink-0 overflow-hidden rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl">
+						<div className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-hidden rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}>
 							<div className="px-6 pt-4">
 								<textarea
 									ref={textareaRef}
@@ -562,6 +821,58 @@ function App() {
 					</div>
 				</div>
 			</main>
+
+			{deleteTarget ? (
+				<div
+					className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-foreground/18 p-6 backdrop-blur-md"
+					role="presentation"
+					onDoubleClick={(event) => event.stopPropagation()}
+					onMouseDown={(event) => {
+						if (event.target === event.currentTarget) {
+							setDeleteTargetId(null);
+						}
+					}}
+				>
+					<section
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="delete-chat-title"
+						aria-describedby="delete-chat-description"
+						className="w-full max-w-sm rounded-[24px] border border-[var(--app-sidebar-border)] bg-white/92 p-5 shadow-[0_28px_80px_rgba(17,24,39,0.22)] backdrop-blur-2xl"
+					>
+						<div className="flex items-start gap-3">
+							<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+								<Trash2 className="size-5" strokeWidth={1.9} />
+							</div>
+							<div className="min-w-0 flex-1">
+								<h2 id="delete-chat-title" className="text-[18px] font-semibold text-foreground">
+									Delete chat?
+								</h2>
+								<p id="delete-chat-description" className="mt-1 text-[14px] leading-5 text-muted-foreground">
+									This will remove "{sessionTitle(deleteTarget)}" from your recent chats.
+								</p>
+							</div>
+						</div>
+						<div className="mt-6 flex justify-end gap-2">
+							<button
+								type="button"
+								className="h-10 rounded-2xl px-4 text-[14px] font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+								onClick={() => setDeleteTargetId(null)}
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								className="h-10 rounded-2xl bg-red-600 px-4 text-[14px] font-semibold text-white shadow-[0_10px_24px_rgba(220,38,38,0.2)] transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-45"
+								disabled={isRunning && deleteTarget.sessionId === activeSessionId}
+								onClick={() => void confirmDeleteSession()}
+							>
+								Delete
+							</button>
+						</div>
+					</section>
+				</div>
+			) : null}
 		</div>
 	);
 }

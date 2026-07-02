@@ -160,6 +160,8 @@ Rules:
 - Never collapse into icon-only mode automatically.
 - Manual collapse hides the sidebar completely. Keep the collapse/expand affordance outside the sidebar so it remains reachable when the sidebar is hidden.
 - Selected rows use a subtle surface tint plus the accent color.
+- Session rows in the current mock UI live under an `All chats` header. The empty state should sit close to the header, not centered deep in the sidebar.
+- The active session row may show a compact right-aligned state indicator: spinner while running, quiet completion glyph when done, and no indicator while idle.
 - Group hierarchy should be readable without heavy separators.
 - Bottom account/settings areas may use a quiet divider.
 - The floating app capsule sits just outside the sidebar edge. Only the collapse/expand icon inside the capsule is clickable; app logo/name text are display-only.
@@ -225,6 +227,8 @@ Rules:
 - Timestamps and metadata use caption styling.
 - Plans, changed files, and summaries can appear as compact cards.
 - Avoid decorative message chrome.
+- In the current mock chat workspace, the transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
+- Native transcript scrollbars should stay hidden; scrolling must still work.
 
 ## 14. Review Panel
 

@@ -41,6 +41,8 @@ bun run build:web
 
 The app's current agent workflow is mock-only, and the mock ACP server is bundled into the Electrobun app resources. Opening the app shows the composer and does not start ACP. The first valid Send lazily starts the app-side mock ACP client, spawns the bundled mock server with the app's Bun runtime, creates a mock session, and streams normalized updates into the webview transcript. Folder selection is optional; if no folder is selected, the mock session uses the user's home directory as cwd without presenting it as the selected project. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
 
+The sidebar's `All chats` list is backed by app-side in-memory session summaries. A row appears as soon as `session/new` succeeds for the first prompt. The app also keeps an in-memory transcript cache for each known mock session so selecting a previous chat restores message, plan, and tool cards. The mock server still persists protocol session state, but the app-side full transcript cache is reset when the Electrobun main process exits; restart the main process after changing Bun-side RPC handlers or cache behavior.
+
 The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history. Try prompts such as `/plan`, `/fix`, `/test`, `permission`, `fail`, `refuse`, or `max tokens` to exercise different mock UI states.
 
 For protocol-level testing, spawn the mock directly with:

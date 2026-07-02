@@ -146,4 +146,14 @@
 			radial-gradient(circle at 48% 54%, rgba(255, 255, 255, 0.78), transparent 24rem),
 			linear-gradient(145deg, #ffffff 0%, #fdfdff 42%, #f8fbff 70%, #ffffff 100%);
 	}
+
+	.app-scrollbar-transparent {
+		scrollbar-width: none;
+	}
+
+	.app-scrollbar-transparent::-webkit-scrollbar {
+		display: none;
+		width: 0;
+		height: 0;
+	}
 }

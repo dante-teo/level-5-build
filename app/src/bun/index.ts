@@ -6,12 +6,17 @@ import { BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
 import type {
 	AppRPC,
 	ApprovalModeId,
+	DeleteMockSessionParams,
+	DeleteMockSessionResponse,
+	LoadMockSessionParams,
+	LoadMockSessionResponse,
 	MockAgentUpdate,
 	MockConfigOption,
 	MockContentBlock,
 	MockModelId,
 	MockPermissionRequest,
 	MockPlanItem,
+	MockSessionSummary,
 	MockToolCall,
 	RespondToMockPermissionParams,
 	StartMockPromptParams,
@@ -141,6 +146,10 @@ function asOptionalString(value: JsonValue | undefined): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
+function asNumber(value: JsonValue | undefined, fallback = 0): number {
+	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 class MockAcpClient {
 	private process: Bun.PipedSubprocess | null = null;
 	private stdin: Bun.PipedSubprocess["stdin"] | null = null;
@@ -148,6 +157,8 @@ class MockAcpClient {
 	private stdoutBuffer = "";
 	private readonly pending = new Map<RpcId, PendingRequest>();
 	private readonly permissionRequests = new Map<RpcId, MockPermissionRequest>();
+	private readonly sessions = new Map<string, MockSessionSummary>();
+	private readonly transcripts = new Map<string, MockAgentUpdate[]>();
 	private initialized = false;
 	private sessionId: string | null = null;
 	private currentCwd: string | null = null;
@@ -197,6 +208,14 @@ class MockAcpClient {
 					prompt: [{ type: "text", text: params.prompt }],
 				}),
 			);
+			const existingSession = this.sessions.get(this.sessionId);
+			if (existingSession) {
+				this.rememberSession({
+					...existingSession,
+					updatedAt: new Date().toISOString(),
+					messageCount: existingSession.messageCount + 1,
+				});
+			}
 			this.emit({ kind: "stop", stopReason: asString(result.stopReason, "end_turn") });
 			this.emit({ kind: "status", status: "completed", cwd, sessionId: this.sessionId });
 		} catch (error) {
@@ -219,6 +238,89 @@ class MockAcpClient {
 		return true;
 	}
 
+	async listSessions(): Promise<MockSessionSummary[]> {
+		return this.sortedSessions();
+	}
+
+	async loadSession({ sessionId }: LoadMockSessionParams): Promise<LoadMockSessionResponse> {
+		if (this.running) {
+			return { loaded: false, reason: "A mock agent turn is already running." };
+		}
+		if (!sessionId) {
+			return { loaded: false, reason: "No session was selected." };
+		}
+
+		try {
+			const session = this.sessions.get(sessionId);
+			if (!session) {
+				return { loaded: false, reason: "That chat no longer exists." };
+			}
+
+			await this.ensureProcess();
+			await this.ensureInitialized();
+			this.permissionRequests.clear();
+			const cachedTranscript = this.transcripts.get(sessionId);
+			const result = asObject(
+				await this.request(cachedTranscript ? "session/resume" : "session/load", {
+					sessionId,
+					cwd: session.cwd,
+					mcpServers: [],
+				}),
+			);
+			this.sessionId = sessionId;
+			this.currentCwd = session.cwd;
+			this.rememberSession(session);
+			this.emit({ kind: "status", status: "idle", sessionId, cwd: session.cwd });
+			this.emitConfig(result.configOptions);
+			if (cachedTranscript) {
+				this.replayTranscript(sessionId);
+			}
+			return { loaded: true };
+		} catch (error) {
+			return { loaded: false, reason: error instanceof Error ? error.message : "Failed to load chat." };
+		}
+	}
+
+	async deleteSession({ sessionId }: DeleteMockSessionParams): Promise<DeleteMockSessionResponse> {
+		if (!sessionId) {
+			return { deleted: false, reason: "No session was selected." };
+		}
+		if (this.running && sessionId === this.sessionId) {
+			return { deleted: false, reason: "Wait for the active agent turn to finish before deleting this chat." };
+		}
+
+		try {
+			await this.ensureProcess();
+			await this.ensureInitialized();
+			await this.request("session/delete", { sessionId });
+			this.permissionRequests.clear();
+			this.sessions.delete(sessionId);
+			this.transcripts.delete(sessionId);
+			if (sessionId === this.sessionId) {
+				this.sessionId = null;
+				this.currentCwd = null;
+				this.emit({ kind: "status", status: "idle" });
+			}
+			return { deleted: true };
+		} catch (error) {
+			return { deleted: false, reason: error instanceof Error ? error.message : "Failed to delete chat." };
+		}
+	}
+
+	async startNewChat(): Promise<boolean> {
+		if (this.running) {
+			return false;
+		}
+		this.permissionRequests.clear();
+		if (this.sessionId) {
+			await this.request("session/close", { sessionId: this.sessionId }).catch(() => undefined);
+		}
+		this.sessionId = null;
+		this.currentCwd = null;
+		this.emit({ kind: "status", status: "idle" });
+		return true;
+	}
+
 	async reset(): Promise<void> {
 		this.running = false;
 		for (const [, pending] of this.pending) {
@@ -233,6 +335,8 @@ class MockAcpClient {
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
+		this.sessions.clear();
+		this.transcripts.clear();
 		this.emit({ kind: "status", status: "idle" });
 	}
 
@@ -299,8 +403,57 @@ class MockAcpClient {
 		}
 		this.sessionId = sessionId;
 		this.currentCwd = cwd;
+		this.rememberSession({
+			sessionId,
+			title: "New chat",
+			cwd,
+			updatedAt: new Date().toISOString(),
+			messageCount: 0,
+		});
 		this.emit({ kind: "status", status: "starting", sessionId, cwd });
 		this.emitConfig(result.configOptions);
+	}
+
+	private rememberSession(session: MockSessionSummary): MockSessionSummary {
+		const existing = this.sessions.get(session.sessionId);
+		const nextSession = {
+			...existing,
+			...session,
+			title: session.title.trim() || existing?.title || "New chat",
+			cwd: session.cwd || existing?.cwd || this.currentCwd || homedir(),
+			updatedAt: session.updatedAt || existing?.updatedAt || new Date().toISOString(),
+			messageCount: session.messageCount || existing?.messageCount || 0,
+		};
+		this.sessions.set(session.sessionId, nextSession);
+		this.emit({ kind: "session", session: nextSession });
+		return nextSession;
+	}
+
+	private sortedSessions(): MockSessionSummary[] {
+		return [...this.sessions.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	}
+
+	private rememberTranscriptUpdate(sessionId: string, update: MockAgentUpdate): void {
+		if (!sessionId) {
+			return;
+		}
+		const current = this.transcripts.get(sessionId) ?? [];
+		this.transcripts.set(sessionId, upsertTranscriptUpdate(current, update));
+	}
+
+	private emitTranscriptUpdate(sessionId: string, update: MockAgentUpdate): void {
+		this.rememberTranscriptUpdate(sessionId, update);
+		this.emit(update);
+	}
+
+	private replayTranscript(sessionId: string): void {
+		const transcript = this.transcripts.get(sessionId);
+		if (!transcript) {
+			return;
+		}
+		for (const update of transcript) {
+			this.emit(update);
+		}
 	}
 
 	private request(method: string, params?: JsonValue): Promise<JsonValue> {
@@ -423,9 +576,10 @@ class MockAcpClient {
 		const params = asObject(message.params);
 		const update = asObject(params.update);
 		const updateType = asString(update.sessionUpdate);
+		const sessionId = asString(params.sessionId, this.sessionId ?? "");
 
 		if (updateType === "user_message_chunk" || updateType === "agent_message_chunk") {
-			this.emit({
+			this.emitTranscriptUpdate(sessionId, {
 				kind: "message",
 				role: updateType === "user_message_chunk" ? "user" : "agent",
 				messageId: asString(update.messageId),
@@ -434,22 +588,34 @@ class MockAcpClient {
 			return;
 		}
 		if (updateType === "plan") {
-			this.emit({
+			this.emitTranscriptUpdate(sessionId, {
 				kind: "plan",
 				items: Array.isArray(update.entries) ? update.entries.map(normalizePlanItem) : [],
 			});
 			return;
 		}
 		if (updateType === "tool_call") {
-			this.emit({ kind: "tool", tool: normalizeToolCall(update) });
+			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update) });
 			return;
 		}
 		if (updateType === "tool_call_update") {
-			this.emit({ kind: "tool", tool: normalizeToolCall(update) });
+			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update) });
 			return;
 		}
 		if (updateType === "config_option_update") {
 			this.emitConfig(update.configOptions);
+			return;
+		}
+		if (updateType === "session_info_update") {
+			this.rememberSession(
+				normalizeSessionSummary({
+					sessionId,
+					cwd: this.currentCwd ?? "",
+					title: update.title,
+					updatedAt: update.updatedAt,
+					_meta: update._meta,
+				}),
+			);
 		}
 	}
 
@@ -522,6 +688,54 @@ function normalizeContent(value: JsonValue | undefined): MockContentBlock {
 	return { type: asString(object.type, "unknown"), ...object };
 }
 
+function mergeContentBlock(left: MockContentBlock, right: MockContentBlock): MockContentBlock {
+	if (left.type === "text" && right.type === "text") {
+		return { type: "text", text: `${left.text}${right.text}` };
+	}
+	return right;
+}
+
+function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpdate): MockAgentUpdate[] {
+	if (update.kind === "message") {
+		const index = current.findIndex(
+			(entry) => entry.kind === "message" && entry.messageId === update.messageId && entry.role === update.role,
+		);
+		if (index < 0) {
+			return [...current, update];
+		}
+		return current.map((entry, entryIndex) =>
+			entryIndex === index && entry.kind === "message"
+				? { ...entry, content: mergeContentBlock(entry.content, update.content) }
+				: entry,
+		);
+	}
+	if (update.kind === "plan") {
+		return [...current.filter((entry) => entry.kind !== "plan"), update];
+	}
+	if (update.kind === "tool") {
+		const index = current.findIndex(
+			(entry) => entry.kind === "tool" && entry.tool.toolCallId === update.tool.toolCallId,
+		);
+		if (index < 0) {
+			return [...current, update];
+		}
+		return current.map((entry, entryIndex) =>
+			entryIndex === index && entry.kind === "tool"
+				? {
+						kind: "tool",
+						tool: {
+							...entry.tool,
+							...update.tool,
+							title: update.tool.title === "Mock tool" ? entry.tool.title : update.tool.title,
+							kind: update.tool.kind === "tool" ? entry.tool.kind : update.tool.kind,
+						},
+					}
+				: entry,
+		);
+	}
+	return current;
+}
+
 function normalizePlanItem(value: JsonValue): MockPlanItem {
 	const object = asObject(value);
 	return {
@@ -541,6 +755,20 @@ function normalizeToolCall(value: JsonValue | undefined): MockToolCall {
 		content: Array.isArray(object.content) ? object.content : undefined,
 		locations: Array.isArray(object.locations) ? object.locations : undefined,
 		rawInput: object.rawInput,
+	};
+}
+
+function normalizeSessionSummary(value: JsonValue | undefined): MockSessionSummary {
+	const object = asObject(value);
+	const meta = asObject(object._meta);
+	const title = asString(object.title).trim();
+	const displayTitle = title === "New mock agent session" ? "" : title;
+	return {
+		sessionId: asString(object.sessionId),
+		title: displayTitle || "New chat",
+		cwd: asString(object.cwd),
+		updatedAt: asString(object.updatedAt, new Date(0).toISOString()),
+		messageCount: asNumber(meta.messageCount),
 	};
 }
 
@@ -580,6 +808,30 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 			},
 			respondToMockPermission: (params: RespondToMockPermissionParams) => {
 				return mockClient?.respondToPermission(params) ?? false;
+			},
+			listMockSessions: async () => {
+				if (!mockClient) {
+					return [];
+				}
+				return mockClient.listSessions();
+			},
+			loadMockSession: async (params: LoadMockSessionParams) => {
+				if (!mockClient) {
+					return { loaded: false, reason: "The mock agent has not started yet." };
+				}
+				return mockClient.loadSession(params);
+			},
+			deleteMockSession: async (params: DeleteMockSessionParams): Promise<DeleteMockSessionResponse> => {
+				if (!mockClient) {
+					return { deleted: false, reason: "The mock agent has not started yet." };
+				}
+				return mockClient.deleteSession(params);
+			},
+			startNewMockChat: async () => {
+				if (!mockClient) {
+					return true;
+				}
+				return mockClient.startNewChat();
 			},
 			resetMockChat: async () => {
 				await mockClient?.reset();

@@ -90,14 +90,14 @@ function normalizeMode(mode: string | undefined): ApprovalModeId {
 	return MOCK_MODES.has(mode as ApprovalModeId) ? (mode as ApprovalModeId) : DEFAULT_MODE;
 }
 
-function findMockServerPaths(): { mockServerDir: string; mockServerScript: string } {
+function findMockServerPaths(): { mockServerDir: string; mockServerEntrypoint: string } {
 	for (const start of [process.cwd(), bundledMainDir]) {
 		let current = resolve(start);
 		while (true) {
 			const candidateDir = resolve(current, "acp-mock-server");
-			const candidateScript = resolve(candidateDir, "start.sh");
-			if (existsSync(candidateScript)) {
-				return { mockServerDir: candidateDir, mockServerScript: candidateScript };
+			const candidateEntrypoint = resolve(candidateDir, "src/index.ts");
+			if (existsSync(candidateEntrypoint)) {
+				return { mockServerDir: candidateDir, mockServerEntrypoint: candidateEntrypoint };
 			}
 
 			const parent = dirname(current);
@@ -108,7 +108,12 @@ function findMockServerPaths(): { mockServerDir: string; mockServerScript: strin
 		}
 	}
 
-	throw new Error("Unable to locate acp-mock-server/start.sh from the running app bundle.");
+	throw new Error("Unable to locate bundled acp-mock-server/src/index.ts.");
+}
+
+function getBunRuntimePath(): string {
+	const bundledRuntime = resolve(dirname(process.execPath), process.platform === "win32" ? "bun.exe" : "bun");
+	return existsSync(bundledRuntime) ? bundledRuntime : process.execPath;
 }
 
 function resolveCwd(cwd: string | null | undefined): string {
@@ -236,9 +241,9 @@ class MockAcpClient {
 			return;
 		}
 
-		const { mockServerDir, mockServerScript } = findMockServerPaths();
+		const { mockServerDir, mockServerEntrypoint } = findMockServerPaths();
 		const subprocess = Bun.spawn({
-			cmd: [mockServerScript],
+			cmd: [getBunRuntimePath(), mockServerEntrypoint],
 			cwd: mockServerDir,
 			stdin: "pipe",
 			stdout: "pipe",
@@ -246,6 +251,7 @@ class MockAcpClient {
 			env: {
 				...process.env,
 				ACP_MOCK_LOG: process.env.ACP_MOCK_LOG ?? "info",
+				ACP_MOCK_STATE_PATH: process.env.ACP_MOCK_STATE_PATH ?? resolve(homedir(), ".level5-build", "acp-mock-state.json"),
 			},
 		});
 		this.process = subprocess;

@@ -6,7 +6,7 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 `app/` is an early Electrobun desktop app shell with a mock-agent chat workflow: a frameless window with a native-feeling React workspace, a light translucent sidebar, placeholder New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC.
 
-The first shipped agent path is intentionally local and mock-only. On app open, the workspace shows a centered prompt composer and does not start or initialize ACP. The first valid Send lazily spawns `acp-mock-server/`, creates a mock ACP session, sends the prompt, and renders streamed mock messages, plans, tool calls, permission requests, errors, and stop reasons. Folder selection is optional; when unset, the mock ACP session uses the user's home directory as its cwd behind the scenes.
+The first shipped agent path is intentionally local and mock-only. On app open, the workspace shows a centered prompt composer and does not start or initialize ACP. The first valid Send lazily spawns the bundled `acp-mock-server/`, creates a mock ACP session, sends the prompt, and renders streamed mock messages, plans, tool calls, permission requests, errors, and stop reasons. Folder selection is optional; when unset, the mock ACP session uses the user's home directory as its cwd behind the scenes.
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
 

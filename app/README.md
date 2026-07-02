@@ -37,15 +37,9 @@ bun run test
 bun run build:web
 ```
 
-## Manual ACP Mock Testing
+## ACP Mock Backend
 
-The repository includes a standalone ACP mock agent in `../acp-mock-server/`. To launch the desktop app and mock server together from the repository root:
-
-```bash
-./scripts/start-app-with-acp-mock.sh
-```
-
-The app's current agent workflow is mock-only. Opening the app shows the composer and does not start ACP. The first valid Send lazily starts the app-side mock ACP client, creates a mock session, and streams normalized updates into the webview transcript. Folder selection is optional; if no folder is selected, the mock session uses the user's home directory as cwd without presenting it as the selected project.
+The app's current agent workflow is mock-only, and the mock ACP server is bundled into the Electrobun app resources. Opening the app shows the composer and does not start ACP. The first valid Send lazily starts the app-side mock ACP client, spawns the bundled mock server with the app's Bun runtime, creates a mock session, and streams normalized updates into the webview transcript. Folder selection is optional; if no folder is selected, the mock session uses the user's home directory as cwd without presenting it as the selected project. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
 
 The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history. Try prompts such as `/plan`, `/fix`, `/test`, `permission`, `fail`, `refuse`, or `max tokens` to exercise different mock UI states.
 
@@ -109,7 +103,7 @@ When you run `bun run dev` (without HMR):
 - **App metadata**: edit `electrobun.config.ts`
 - **Release version**: push tags like `v0.0.0`; CI syncs `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`
 - **Main process ⇄ webview calls**: add methods to the `AppRPC` type in `src/shared/rpc.ts`, implement the handler in `src/bun/index.ts`, call it from the webview via `electroview.rpc.request.<method>()`
-- **Mock ACP UI/client flow**: edit `src/bun/index.ts` for the stdio mock client and `src/mainview/App.tsx` for the composer/transcript rendering. Keep mock ACP startup lazy so app open does not touch ACP.
+- **Mock ACP UI/client flow**: edit `src/bun/index.ts` for the stdio mock client, `../acp-mock-server/src/` for mock server behavior, and `src/mainview/App.tsx` for the composer/transcript rendering. Keep mock ACP startup lazy so app open does not touch ACP.
 
 ## CI and Releases
 

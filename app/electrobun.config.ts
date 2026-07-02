@@ -14,6 +14,10 @@ export default {
 		copy: {
 			"dist/index.html": "views/mainview/index.html",
 			"dist/assets": "views/mainview/assets",
+			"../acp-mock-server/src": "acp-mock-server/src",
+			"../acp-mock-server/package.json": "acp-mock-server/package.json",
+			"../acp-mock-server/start.sh": "acp-mock-server/start.sh",
+			"../acp-mock-server/tsconfig.json": "acp-mock-server/tsconfig.json",
 		},
 		// Ignore Vite output in watch mode — HMR handles view rebuilds separately
 		watchIgnore: ["dist/**"],

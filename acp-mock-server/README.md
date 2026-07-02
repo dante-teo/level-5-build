@@ -22,15 +22,18 @@ Useful environment variables:
 - `ACP_MOCK_LOG=debug|info|silent`: logging level
 - `ACP_MOCK_KEEPALIVE=1`: keep the process alive after stdin closes, useful for manual side-by-side launching
 
-## Manual App + Mock Run
+## Bundled App Backend
 
-From the repository root:
+The desktop app bundles this mock server into its Electrobun resources and treats it as the local ACP backend for the current UI work. When running the app normally:
 
 ```bash
-./scripts/start-app-with-acp-mock.sh
+cd app
+bun run dev:hmr
 ```
 
-This starts `app` with `bun run dev:hmr` and starts the ACP mock server in parallel. Press `Ctrl-C` to stop both.
+The app does not start ACP on launch. The first valid prompt lazily spawns the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime, then communicates over stdio. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
+
+The root `scripts/start-app-with-acp-mock.sh` helper remains useful only when you intentionally want a separate long-lived standalone mock process next to the app for manual protocol work.
 
 ## ACP Surface Covered
 

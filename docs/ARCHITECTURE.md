@@ -9,7 +9,7 @@ This repo currently hosts:
 - `scripts/`, root-level helper scripts for workflows that span multiple packages.
 - `docs/`, shared architecture/product/design documentation.
 
-Root-level packages are intentionally independent. The app can be built and checked without the mock server, and the mock server can be spawned by any ACP-compatible client over stdio.
+The mock server remains usable as a standalone stdio ACP server, and the desktop app now bundles the mock server runtime files into its Electrobun resources so the app can treat it as its local ACP backend while the UI surface is being built out.
 
 ## `acp-mock-server/` — ACP test agent
 
@@ -45,15 +45,7 @@ Model selection is exposed through the ACP-native `configOptions` response (`con
 
 ### Manual testing with the app
 
-From the repo root:
-
-```bash
-./scripts/start-app-with-acp-mock.sh
-```
-
-This starts the ACP mock server and `app`'s `bun run dev:hmr` workflow together. The script keeps both process trees tied to the terminal and stops them on `Ctrl-C`.
-
-The app also has a built-in mock ACP client path for the current composer workflow. The main process lazily spawns `acp-mock-server/start.sh` only after the user sends the first prompt; simply opening the app must not start ACP, initialize a session, or list sessions. This keeps the empty workspace cheap and avoids protocol side effects before user intent is clear.
+The app has a built-in mock ACP client path for the current composer workflow. The main process lazily spawns the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime only after the user sends the first prompt; simply opening the app must not start ACP, initialize a session, or list sessions. This keeps the empty workspace cheap and avoids protocol side effects before user intent is clear.
 
 ### Verification
 
@@ -87,7 +79,7 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 
 ### Build / dev flow
 
-- `bun run start`: `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process against the bundled assets. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` -> `views/mainview/index.html` and `dist/assets` -> `views/mainview/assets`; the main process loads the webview from the `views://mainview/index.html` custom protocol.
+- `bun run start`: `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process against the bundled assets. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` -> `views/mainview/index.html`, `dist/assets` -> `views/mainview/assets`, and the mock ACP server runtime files -> `acp-mock-server/`; the main process loads the webview from the `views://mainview/index.html` custom protocol.
 - `bun run dev`: runs `electrobun dev --watch` without rebuilding the Vite webview first. Use it only when bundled assets already exist or the change is limited to Electrobun-side files.
 - `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside `bun run start`. `app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
 - `bun run build`: production build (`vite build && electrobun build`).
@@ -135,8 +127,9 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 
 `app/src/bun/index.ts` contains a small stdio JSON-RPC client for local mock-agent development. It:
 
-- resolves `acp-mock-server/start.sh` lazily when the first prompt is sent, by searching upward from the running process cwd and bundled main file location;
-- spawns the mock server with protocol stdout/stderr kept separate;
+- resolves bundled `acp-mock-server/src/index.ts` lazily when the first prompt is sent, by searching upward from the running process cwd and bundled main file location;
+- spawns the mock server with the app's Bun runtime, with protocol stdout/stderr kept separate;
+- stores mock server state under `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set;
 - sends `initialize`, then `session/new`, then mock config updates for model and mode, then `session/prompt`;
 - reuses the current mock session for subsequent prompts in the same cwd;
 - closes and recreates the mock session if the selected folder changes;

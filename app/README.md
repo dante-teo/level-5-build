@@ -2,7 +2,13 @@
 
 An Electrobun desktop app: Bun + a native OS webview (no bundled Chromium/CEF), React 18, Vite 6 for the webview bundle, Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
-Currently the app is an empty shell: a single frameless window showing a full-bleed background image.
+Currently the app is an early desktop AI coding agent shell: a single frameless window showing a full-bleed background image, with the runtime, RPC, styling, and component foundation in place for the product workspace.
+
+See also:
+
+- `../docs/PRODUCT.md` for product direction
+- `../docs/ARCHITECTURE.md` for runtime architecture
+- `../docs/DESIGN.md` for visual and interaction rules
 
 ## Getting Started
 
@@ -10,11 +16,14 @@ Currently the app is an empty shell: a single frameless window showing a full-bl
 # Install dependencies
 bun install
 
-# Development without HMR (uses bundled assets)
-bun run dev
+# Build the webview once, then launch Electrobun against bundled assets
+bun run start
 
 # Development with HMR (recommended)
 bun run dev:hmr
+
+# Watch Electrobun-side files without rebuilding the Vite webview first
+bun run dev
 
 # Build for production (bundles the webview, then builds the app)
 bun run build
@@ -31,8 +40,10 @@ When you run `bun run dev:hmr`:
 
 When you run `bun run dev` (without HMR):
 
-1. Electrobun starts and loads from `views://mainview/index.html`
-2. You need to rebuild (`bun run start`, which runs `vite build` first) to see changes
+1. Electrobun starts in watch mode
+2. The app loads from `views://mainview/index.html`
+3. Bundled webview assets must already exist; use `bun run start` to rebuild them before launching
+4. Use this mostly for Bun/main-process changes, not React UI iteration
 
 ## Project Structure
 

@@ -1,32 +1,445 @@
 # Design System
 
-## Current state
+> Product: Desktop AI Coding Agent
 
-The app currently renders a single full-bleed background image (`app/src/mainview/assets/background.png`, `background-size: cover`) with no other UI — a blank canvas for future screens.
+This document is the source of truth for visual and interaction design in the desktop app. Before changing UI, read this document and reuse the established tokens, components, and layout patterns.
 
-## shadcn/ui foundation
+## 1. Product Philosophy
 
-A shadcn/ui foundation is set up for future component work, configured manually (not via `shadcn init`'s framework auto-detection, since Electrobun's Bun+Vite setup isn't one of its recognized presets):
+The application is a desktop-native AI coding environment. It must feel calm, focused, premium, lightweight, and fast.
 
-- Config: `app/components.json` — style `new-york`, base color `neutral`, CSS variables enabled, icon library `lucide`.
-- Add components from within `app/`: `bunx shadcn@latest add <component>` — they're generated into `src/mainview/components/ui/` per the aliases below. Double check generated imports resolve correctly against this project's aliases (auto-detection may guess wrong given the non-standard bundler setup).
-- Utility: `cn()` in `app/src/mainview/lib/utils.ts` (clsx + tailwind-merge) for merging conditional Tailwind classes.
+Priorities:
 
-## Path aliases
+1. Clarity
+2. Consistency
+3. Information hierarchy
+4. Speed
+5. Visual beauty
 
-Configured identically in both `app/vite.config.ts` (`resolve.alias`) and `app/tsconfig.json` (`compilerOptions.paths`) — update both together when adding new aliases:
+Never design like a marketing website. Never imitate Windows settings panels. Never use decoration without purpose.
 
-- `@/*` → `app/src/mainview/*` (webview code, matches `components.json`'s `@/components`, `@/lib`, etc.)
-- `@shared/*` → `app/src/shared/*` (types/contracts shared between the main process and the webview, e.g. the RPC schema)
+## 2. Visual Language
 
-## Styling
+Keywords:
 
-Tailwind CSS v4 — CSS-first configuration, no `tailwind.config.js`. Theme tokens (colors, radius) and the dark-mode variant live in `app/src/mainview/index.css` as CSS custom properties plus an `@theme inline` block, following shadcn's standard v4 token set.
+- Calm
+- Airy
+- Native
+- Minimal
+- Professional
+- Precise
 
-## Window chrome
+Avoid:
 
-Frameless window: `titleBarStyle: "hiddenInset"` — native traffic lights (close/minimize/maximize), no visible title bar. There is no custom title bar/nav built yet. If one is added:
+- Loud gradients
+- Neon colors
+- Rounded cartoon UI
+- Gaming aesthetics
+- Excessive borders
+- Arbitrary decorative icons
 
-- Mark the draggable strip/background with the `electrobun-webkit-app-region-drag` class.
-- Mark any interactive controls inside a draggable region (buttons, inputs, etc.) with `electrobun-webkit-app-region-no-drag` so clicks reach them instead of starting a window drag.
-- Double-clicking the current draggable background toggles maximize/fill-screen (see `docs/ARCHITECTURE.md` for why this exists in place of native drag-to-tile).
+The reference direction is a quiet macOS-style workspace: soft translucent surfaces, crisp type, subtle shadows, generous breathing room, and a restrained blue-violet accent used only for state and primary action.
+
+## 3. Color Tokens
+
+Use the existing Tailwind v4 CSS token system in `app/src/mainview/index.css`. Do not introduce one-off colors in components.
+
+Core tokens:
+
+- Background: `#FAFAFC`
+- Secondary background: `#F4F4F8`
+- Surface: `rgba(255, 255, 255, 0.72)`
+- Primary text: `#171717`
+- Secondary text: `#6B7280`
+- Muted text: `#9CA3AF`
+- Border: `rgba(0, 0, 0, 0.08)`
+- Success: `#16A34A`
+- Warning: `#F59E0B`
+- Danger: `#DC2626`
+
+Accent:
+
+- Use exactly one accent color throughout the application.
+- Accent coverage should never exceed roughly 5% of the viewport.
+- Use accent for selected navigation, focused controls, primary actions, active tabs, and small state indicators.
+
+## 4. Typography
+
+Primary font: Inter.
+
+Monospace font: JetBrains Mono.
+
+Type scale:
+
+- Display: `32px / 700`
+- H1: `28px / 700`
+- H2: `22px / 650`
+- H3: `18px / 600`
+- Body: `14px / 400`
+- Caption: `12px / 500`
+
+Never introduce arbitrary font sizes. Match display text to its container: use compact text inside sidebars, panels, cards, buttons, and toolbars.
+
+## 5. Spacing Scale
+
+Only use these spacing values:
+
+- `4`
+- `8`
+- `12`
+- `16`
+- `20`
+- `24`
+- `32`
+- `40`
+- `48`
+- `64`
+
+No arbitrary spacing values. Layout rhythm should feel calm and readable, not loose or web-hero-like.
+
+## 6. Radius
+
+Use only these radius values:
+
+- Window: `28`
+- Panel: `24`
+- Card: `20`
+- Input: `18`
+- Button: `16`
+- Chip: `999`
+
+Do not invent new radius values.
+
+## 7. Shadow
+
+Use only four elevations:
+
+- E0: none
+- E1: card
+- E2: floating panel
+- E3: modal
+
+Never stack heavy shadows. Shadows should create quiet depth, not a floating-card collage.
+
+## 8. App Layout
+
+The primary layout is:
+
+`Sidebar | Workspace | Optional Review Overlay`
+
+Rules:
+
+- Sidebar is fixed at `280px`.
+- Workspace grows to fill remaining space.
+- Review panel overlays the workspace from the right.
+- Opening the review panel must never push or resize the workspace.
+- Top bar always spans the full workspace width.
+- Top bar actions remain right aligned.
+- Window controls remain native.
+
+The first screen should feel like a real app workspace, not a landing page.
+
+## 9. Sidebar
+
+Width: `280px`.
+
+Contains:
+
+- Workspace switcher
+- Navigation
+- Project groups
+- Recent conversations
+- Settings
+- Account status
+
+Rules:
+
+- Never collapse into icon-only mode automatically.
+- Selected rows use a subtle surface tint plus the accent color.
+- Group hierarchy should be readable without heavy separators.
+- Bottom account/settings areas may use a quiet divider.
+
+## 10. Workspace
+
+The workspace is the primary content area.
+
+Rules:
+
+- Padding: `24`.
+- Keep maximum readability for chat, plans, file lists, and diffs.
+- Do not place decorative cards behind content.
+- Preserve open space when the conversation is empty.
+- Let the bottom composer anchor the interaction model.
+
+## 11. Top Bar
+
+Height: `56`.
+
+Contains:
+
+- Project title
+- Branch or context metadata
+- Quick actions
+- Active tool tabs when applicable
+
+Rules:
+
+- Top bar controls align right.
+- Use icon buttons for compact actions.
+- Use visible labels only for navigation tabs or commands that require clarity.
+- Interactive controls inside draggable regions must opt out of drag behavior.
+
+## 12. Prompt Composer
+
+The composer is docked near the bottom of the workspace.
+
+Rules:
+
+- Large rounded container.
+- Supports text, attachments, agent selection, and send.
+- Grows with content.
+- Maximum height is 8 text lines before internal scrolling.
+- Placeholder text is muted and concise.
+- Send is the only primary action in the composer group.
+
+## 13. Chat
+
+Assistant messages:
+
+- Use surface background when contained.
+- Prefer readable text blocks over speech bubbles.
+
+User messages:
+
+- Use subtle tint only.
+- Do not use speech bubbles.
+
+Rules:
+
+- Spacing between messages: `20`.
+- Timestamps and metadata use caption styling.
+- Plans, changed files, and summaries can appear as compact cards.
+- Avoid decorative message chrome.
+
+## 14. Review Panel
+
+The review experience may appear in two modes:
+
+- Floating right overlay for compact review.
+- Right-side tool surface with tabs when review, terminal, or browser need persistent access.
+
+Preferred floating width: `380`.
+
+Maximum floating width: `420`.
+
+Contains:
+
+- Summary
+- Changed files
+- Diff preview
+- Approval actions
+
+Rules:
+
+- Opening review must never shift the main workspace.
+- Floating review should not become a full-height sidebar.
+- Persistent tool surfaces may fill height, but must read as a mode of the workspace rather than a second app shell.
+- Commit or approval actions belong at the bottom of the review surface.
+
+## 15. Diff Viewer
+
+Rules:
+
+- Use monospace.
+- Use split view when possible.
+- Use syntax highlighting.
+- Use restrained addition/deletion colors.
+- Avoid excessive background color and noisy borders.
+- File rows should show changed counts clearly.
+
+## 16. Buttons
+
+Variants:
+
+- Primary
+- Secondary
+- Ghost
+- Danger
+
+Rules:
+
+- Only one primary button per visual group.
+- Loading states keep width fixed.
+- Disabled opacity is `40%`.
+- Prefer lucide icons inside icon buttons.
+- Use text or icon+text buttons only for clear commands.
+
+## 17. Inputs
+
+Rules:
+
+- Height: `44`.
+- Rounded.
+- No visible border until focused unless the surrounding surface needs a boundary.
+- Focus uses the accent ring.
+- Hit target minimum is `40x40`.
+
+## 18. Cards
+
+Rules:
+
+- Padding: `20`.
+- Radius: `20`.
+- Soft elevation.
+- Do not nest cards; split content into separate groups instead.
+- Use cards for real grouped content: plans, file summaries, metrics, and modals.
+- Do not use decorative cards as section backgrounds.
+
+## 19. Motion
+
+Allowed durations:
+
+- `120ms`
+- `180ms`
+- `240ms`
+
+Rules:
+
+- Use ease-out.
+- Avoid bounce.
+- Animations should be subtle and functional.
+- Motion should clarify state changes, not entertain.
+
+## 20. Empty States
+
+Every empty state must explain:
+
+- What happened
+- Why it happened
+- The next action
+
+Never leave blank screens unless the blank space is an intentional ready state with a clear composer or primary action.
+
+## 21. Loading
+
+Rules:
+
+- Prefer skeletons.
+- Avoid spinners longer than 2 seconds.
+- Preserve layout dimensions during loading.
+
+## 22. Keyboard
+
+Rules:
+
+- Every major action should have a shortcut.
+- The app should support keyboard-first workflow.
+- Visible focus states are required.
+- Do not remove native focus outlines unless replacing them with accessible equivalents.
+
+## 23. Accessibility
+
+Rules:
+
+- Minimum contrast: WCAG AA.
+- Hit target minimum: `40x40`.
+- Never rely solely on color.
+- Tooltips must name unfamiliar icon-only actions.
+- Text must not overflow, overlap, or become unreadable on supported window sizes.
+
+## 24. Implementation Rules
+
+Before changing UI:
+
+1. Read this document.
+2. Reuse existing components.
+3. Reuse existing tokens.
+4. Reuse existing spacing.
+5. Reuse existing colors.
+6. Reuse existing shadows.
+7. Reuse existing layout patterns.
+
+If unsure, reuse the closest existing pattern.
+
+## 25. Forbidden Patterns
+
+Do not:
+
+- Add new visual styles.
+- Mix multiple design languages.
+- Introduce gradients without approval.
+- Create floating windows unless specified.
+- Push layout when opening overlays.
+- Use arbitrary pixel values.
+- Duplicate components.
+- Add decorative icons.
+- Add unnecessary borders.
+- Create landing-page hero layouts inside the app shell.
+- Use card backgrounds behind page sections.
+
+## 26. Acceptance Checklist
+
+Implementation is accepted only if:
+
+- Spacing follows the scale.
+- Typography follows the scale.
+- Colors come from the token set.
+- Radius follows the token set.
+- Shadows follow the elevation set.
+- Overlay panels do not shift layout.
+- There is one primary CTA per section.
+- Keyboard navigation works.
+- Loading and empty states exist.
+- No arbitrary styles are introduced.
+- The result feels native, calm, precise, and fast.
+
+## 27. Current App Foundation
+
+The app currently renders a single full-bleed background image (`app/src/mainview/assets/background.png`, `background-size: cover`) with no other UI. Future screens should build from this design system rather than continuing as a blank canvas.
+
+## 28. shadcn/ui Foundation
+
+A shadcn/ui foundation is set up for future component work, configured manually because Electrobun's Bun + Vite setup is not one of `shadcn init`'s recognized presets.
+
+- Config: `app/components.json`
+- Style: `new-york`
+- Base color: `neutral`
+- CSS variables: enabled
+- Icon library: `lucide`
+- Component output: `app/src/mainview/components/ui/`
+- Utility: `cn()` in `app/src/mainview/lib/utils.ts`
+
+Add components from within `app/`:
+
+```bash
+bunx shadcn@latest add <component>
+```
+
+Double check generated imports resolve correctly against this project's aliases. Auto-detection may guess wrong because the bundler setup is non-standard.
+
+## 29. Path Aliases
+
+Aliases are configured identically in `app/vite.config.ts` and `app/tsconfig.json`. Update both together when adding new aliases.
+
+- `@/*` -> `app/src/mainview/*`
+- `@shared/*` -> `app/src/shared/*`
+
+## 30. Styling Implementation
+
+Tailwind CSS v4 is CSS-first in this project. There is no `tailwind.config.js`.
+
+Theme tokens and the dark-mode variant live in `app/src/mainview/index.css` as CSS custom properties plus an `@theme inline` block, following shadcn's standard v4 token set. Keep the design tokens in this document aligned with those CSS variables.
+
+## 31. Window Chrome
+
+The window is frameless with `titleBarStyle: "hiddenInset"`:
+
+- Native traffic lights are used.
+- There is no visible native title bar.
+- Electrobun is not Electron, so Electron APIs and title-bar patterns do not apply.
+
+If a custom top bar or draggable region is added:
+
+- Mark draggable background strips with `electrobun-webkit-app-region-drag`.
+- Mark interactive controls inside a draggable region with `electrobun-webkit-app-region-no-drag`.
+- Double-clicking the current draggable background toggles maximize/fill-screen. See `docs/ARCHITECTURE.md` for why this exists in place of native drag-to-tile.

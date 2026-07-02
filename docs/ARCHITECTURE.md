@@ -17,8 +17,9 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 
 ### Build / dev flow
 
-- `bun run start` (used by both `dev` variants): `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` → `views/mainview/index.html` and `dist/assets` → `views/mainview/assets`; the main process loads the webview from the `views://mainview/index.html` custom protocol.
-- `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside Electrobun. `app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
+- `bun run start`: `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process against the bundled assets. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` -> `views/mainview/index.html` and `dist/assets` -> `views/mainview/assets`; the main process loads the webview from the `views://mainview/index.html` custom protocol.
+- `bun run dev`: runs `electrobun dev --watch` without rebuilding the Vite webview first. Use it only when bundled assets already exist or the change is limited to Electrobun-side files.
+- `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside `bun run start`. `app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
 - `bun run build`: production build (`vite build && electrobun build`).
 
 ### Main process ⇄ webview RPC

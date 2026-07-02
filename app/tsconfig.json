@@ -21,6 +21,6 @@
 			"@shared/*": ["src/shared/*"]
 		}
 	},
-	"include": ["src"],
+	"include": ["src", "scripts", "tests"],
 	"exclude": ["node_modules", "dist", "build", "../../package/dist"]
 }

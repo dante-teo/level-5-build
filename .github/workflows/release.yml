@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS release
+    runs-on: macos-14
+    env:
+      HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      HAS_NOTARIZATION: ${{ secrets.ELECTROBUN_APPLEID != '' && secrets.ELECTROBUN_APPLEIDPASS != '' }}
+
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Sync version from tag
+        run: bun run version:sync -- "${GITHUB_REF_NAME}"
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+
+      - name: Import Apple certificate
+        if: ${{ env.HAS_APPLE_CERTIFICATE == 'true' }}
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          echo "${APPLE_CERTIFICATE_P12}" | base64 --decode > certificate.p12
+          security import certificate.p12 -k build.keychain -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" build.keychain
+
+      - name: Build app
+        env:
+          ELECTROBUN_CODESIGN: ${{ env.HAS_APPLE_CERTIFICATE == 'true' && 'true' || 'false' }}
+          ELECTROBUN_NOTARIZE: ${{ env.HAS_NOTARIZATION == 'true' && 'true' || 'false' }}
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+        run: bun run build:stable
+
+      - name: Package macOS app
+        id: package
+        run: |
+          bun run release:package:mac -- "${GITHUB_REF_NAME}" | tee package-output.txt
+          echo "artifact_name=$(grep '^artifact_name=' package-output.txt | cut -d= -f2-)" >> "${GITHUB_OUTPUT}"
+          echo "artifact_path=$(grep '^artifact_path=' package-output.txt | cut -d= -f2-)" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.artifact_path }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Calculate Homebrew checksum
+        id: checksum
+        run: echo "sha256=$(shasum -a 256 '${{ steps.package.outputs.artifact_path }}' | awk '{print $1}')" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: dante-teo/homebrew-tap
+          path: homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Homebrew cask
+        env:
+          HOMEBREW_CASK_SHA256: ${{ steps.checksum.outputs.sha256 }}
+          HOMEBREW_CASK_ARTIFACT: ${{ steps.package.outputs.artifact_name }}
+        run: bun run release:cask -- ../homebrew-tap
+
+      - name: Commit Homebrew cask
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/level5-build.rb
+          git commit -m "Update Level5 Build to ${GITHUB_REF_NAME}" || exit 0
+          git push
+
+      - name: Checkout main for version bump
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: version-bump
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit version bump
+        working-directory: version-bump/app
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          bun run version:sync -- "${GITHUB_REF_NAME}"
+          git add package.json electrobun.config.ts src/shared/version.ts
+          git commit -m "Bump Level5 Build to ${GITHUB_REF_NAME}" || exit 0
+          git push origin main

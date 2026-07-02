@@ -1,6 +1,6 @@
-# app
+# Level5 Build
 
-An Electrobun desktop app: Bun + a native OS webview (no bundled Chromium/CEF), React 18, Vite 6 for the webview bundle, Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
+Level5 Build is an Electrobun desktop app: Bun + a native OS webview (no bundled Chromium/CEF), React 18, Vite 6 for the webview bundle, Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
 Currently the app is an early desktop AI coding agent shell: a single frameless window showing a full-bleed background image, with the runtime, RPC, styling, and component foundation in place for the product workspace.
 
@@ -27,6 +27,14 @@ bun run dev
 
 # Build for production (bundles the webview, then builds the app)
 bun run build
+
+# Build a stable macOS release artifact
+bun run build:stable
+
+# Run the current local check suite
+bun run lint
+bun run test
+bun run build:web
 ```
 
 ## How HMR Works
@@ -63,6 +71,8 @@ When you run `bun run dev` (without HMR):
 │   └── shared/
 │       └── rpc.ts             # Typed RPC contract shared between bun and webview
 ├── components.json            # shadcn/ui config (run `bunx shadcn@latest add <component>` here)
+├── assets/                    # App icons and generated macOS icon files
+├── scripts/                   # Release/version/package helper scripts
 ├── electrobun.config.ts       # Electrobun app metadata + build/copy config
 ├── vite.config.ts             # Vite config (React + Tailwind v4 plugins, @ and @shared aliases)
 ├── tsconfig.json              # Path aliases matching vite.config.ts
@@ -76,7 +86,34 @@ When you run `bun run dev` (without HMR):
 - **Vite settings**: edit `vite.config.ts`
 - **Window settings** (size, title bar style, drag regions): edit `src/bun/index.ts` and the `electrobun-webkit-app-region-drag` / `-no-drag` classes in the webview
 - **App metadata**: edit `electrobun.config.ts`
+- **Release version**: push tags like `v0.0.0`; CI syncs `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`
 - **Main process ⇄ webview calls**: add methods to the `AppRPC` type in `src/shared/rpc.ts`, implement the handler in `src/bun/index.ts`, call it from the webview via `electroview.rpc.request.<method>()`
+
+## CI and Releases
+
+GitHub Actions runs app checks on pushes and pull requests to `main`:
+
+- `bun install --frozen-lockfile`
+- `bun run lint`
+- `bun run test`
+- `bun run build:web`
+
+Pushing a tag like `v0.0.0` runs the release workflow. It syncs the version from the tag into `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`, builds a stable macOS artifact, creates a GitHub Release, updates `dante-teo/homebrew-tap`, and commits the synced version back to `main`.
+
+The Homebrew release is currently macOS ARM64-only. The generated cask includes `depends_on arch: :arm64`; add Intel/Windows packaging later as separate release work.
+
+Required repository secrets for signed Homebrew releases:
+
+- `APPLE_CERTIFICATE_P12`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `MACOS_KEYCHAIN_PASSWORD`
+- `ELECTROBUN_DEVELOPER_ID`
+- `ELECTROBUN_TEAMID`
+- `ELECTROBUN_APPLEID`
+- `ELECTROBUN_APPLEIDPASS`
+- `HOMEBREW_TAP_TOKEN`
+
+`MACOS_KEYCHAIN_PASSWORD` is just a random password for the temporary GitHub Actions keychain. `HOMEBREW_TAP_TOKEN` only needs write access to `dante-teo/homebrew-tap`.
 
 ## Known limitation: no native window-tiling on drag
 

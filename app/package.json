@@ -1,14 +1,22 @@
 {
-	"name": "app",
-	"version": "0.0.1",
-	"description": "Electrobun app with React, Tailwind CSS v4, shadcn/ui, and Vite HMR",
+	"name": "level5-build",
+	"version": "0.0.0",
+	"description": "Level5 Build desktop app",
 	"scripts": {
 		"start": "vite build && electrobun dev",
 		"dev": "electrobun dev --watch",
 		"dev:hmr": "concurrently \"bun run hmr\" \"bun run start\"",
 		"hmr": "vite --port 5173",
+		"lint": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "bun test",
+		"build:web": "vite build",
 		"build": "vite build && electrobun build",
-		"build:canary": "vite build && electrobun build --env=canary"
+		"build:stable": "vite build && electrobun build --env=stable",
+		"build:canary": "vite build && electrobun build --env=canary",
+		"version:sync": "bun scripts/sync-version.ts",
+		"release:package:mac": "bun scripts/package-macos.ts",
+		"release:cask": "bun scripts/emit-homebrew-cask.ts"
 	},
 	"dependencies": {
 		"class-variance-authority": "^0.7.1",

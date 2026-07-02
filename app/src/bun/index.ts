@@ -46,7 +46,7 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 });
 
 mainWindow = new BrowserWindow({
-	title: "App",
+	title: "Level5 Build",
 	url,
 	titleBarStyle: "hiddenInset",
 	frame: {

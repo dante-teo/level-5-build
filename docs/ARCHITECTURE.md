@@ -21,6 +21,25 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 - `bun run dev`: runs `electrobun dev --watch` without rebuilding the Vite webview first. Use it only when bundled assets already exist or the change is limited to Electrobun-side files.
 - `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside `bun run start`. `app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
 - `bun run build`: production build (`vite build && electrobun build`).
+- `bun run build:stable`: stable macOS release build (`vite build && electrobun build --env=stable`). Electrobun emits release artifacts under `app/artifacts/`.
+- `bun run release:package:mac -- v0.0.0`: copies Electrobun's stable DMG to a versioned GitHub Release artifact name.
+- `bun run release:cask`: writes `Casks/level5-build.rb` in the Homebrew tap checkout using the release artifact name and SHA-256 supplied through environment variables.
+
+### Release automation
+
+The release workflow is tag-driven. Pushing a tag like `v0.0.0` causes CI to:
+
+1. Sync the tag version into `app/package.json`, `app/electrobun.config.ts`, and `app/src/shared/version.ts`.
+2. Run typecheck, tests, and the stable Electrobun build.
+3. Create a GitHub Release with the versioned macOS ARM64 DMG.
+4. Update `dante-teo/homebrew-tap` with an ARM64-only Homebrew Cask.
+5. Commit the synced version files back to `main`.
+
+`HOMEBREW_TAP_TOKEN` is used only for the tap repository. The main app repository checkout and version-bump push use `GITHUB_TOKEN`.
+
+### App icon packaging
+
+The source logo lives at `app/assets/icon.png`; the macOS bundle icon lives at `app/assets/App.icns`. A post-build hook (`app/scripts/apply-macos-icon.ts`) copies `App.icns` into the app bundle before codesigning/notarization and updates the bundle plist icon keys. This avoids relying on Electrobun's `.iconset` conversion path, which depends on `iconutil` behavior on the build host.
 
 ### Main process ⇄ webview RPC
 

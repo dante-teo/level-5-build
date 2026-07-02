@@ -1,0 +1,2 @@
+[plugins."build-web-apps@openai-curated"]
+enabled = true

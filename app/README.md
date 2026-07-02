@@ -2,7 +2,7 @@
 
 Level5 Build is an Electrobun desktop app: Bun + a native OS webview (no bundled Chromium/CEF), React 18, Vite 6 for the webview bundle, Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
-Currently the app is an early desktop AI coding agent shell: a single frameless window with a code-native white gradient backdrop, light translucent chrome, and the runtime, RPC, styling, and component foundation in place for the product workspace.
+Currently the app is an early desktop AI coding agent shell: a single frameless window with a code-native white gradient backdrop, light translucent chrome, a composer-first mock chat workspace, and the runtime, RPC, styling, and component foundation in place for the product workspace.
 
 See also:
 
@@ -45,7 +45,9 @@ The repository includes a standalone ACP mock agent in `../acp-mock-server/`. To
 ./scripts/start-app-with-acp-mock.sh
 ```
 
-The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history.
+The app's current agent workflow is mock-only. Opening the app shows the composer and does not start ACP. The first valid Send lazily starts the app-side mock ACP client, creates a mock session, and streams normalized updates into the webview transcript. Folder selection is optional; if no folder is selected, the mock session uses the user's home directory as cwd without presenting it as the selected project.
+
+The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history. Try prompts such as `/plan`, `/fix`, `/test`, `permission`, `fail`, `refuse`, or `max tokens` to exercise different mock UI states.
 
 For protocol-level testing, spawn the mock directly with:
 
@@ -107,6 +109,7 @@ When you run `bun run dev` (without HMR):
 - **App metadata**: edit `electrobun.config.ts`
 - **Release version**: push tags like `v0.0.0`; CI syncs `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`
 - **Main process ⇄ webview calls**: add methods to the `AppRPC` type in `src/shared/rpc.ts`, implement the handler in `src/bun/index.ts`, call it from the webview via `electroview.rpc.request.<method>()`
+- **Mock ACP UI/client flow**: edit `src/bun/index.ts` for the stdio mock client and `src/mainview/App.tsx` for the composer/transcript rendering. Keep mock ACP startup lazy so app open does not touch ACP.
 
 ## CI and Releases
 

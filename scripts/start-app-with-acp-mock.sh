@@ -49,4 +49,6 @@ Desktop app:
 Press Ctrl-C to stop both.
 EOF
 
-wait -n "$APP_PID" "$ACP_PID"
+while kill -0 "$APP_PID" 2>/dev/null && kill -0 "$ACP_PID" 2>/dev/null; do
+	sleep 1
+done

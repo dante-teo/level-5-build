@@ -53,6 +53,8 @@ From the repo root:
 
 This starts the ACP mock server and `app`'s `bun run dev:hmr` workflow together. The script keeps both process trees tied to the terminal and stops them on `Ctrl-C`.
 
+The app also has a built-in mock ACP client path for the current composer workflow. The main process lazily spawns `acp-mock-server/start.sh` only after the user sends the first prompt; simply opening the app must not start ACP, initialize a session, or list sessions. This keeps the empty workspace cheap and avoids protocol side effects before user intent is clear.
+
 ### Verification
 
 From `acp-mock-server/`:
@@ -118,6 +120,30 @@ The webview bundles product fonts from `app/src/mainview/assets/fonts/` and decl
 ### Main process ⇄ webview RPC
 
 A typed RPC contract lives in `app/src/shared/rpc.ts` (`AppRPC`, built on Electrobun's `RPCSchema`). It's implemented on the main-process side via `BrowserView.defineRPC` (passed into the `BrowserWindow` constructor) in `app/src/bun/index.ts`, and consumed in the webview via `Electroview.defineRPC` in `app/src/mainview/lib/electrobun.ts` (exported as `electroview`). To add a new main-process capability: add the method to `AppRPC.bun.requests`, implement it in `src/bun/index.ts`'s handler object, and call it from the webview via `electroview.rpc.request.<method>()`.
+
+Current app RPC includes the mock-agent development surface:
+
+- `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
+- `startMockPrompt({ prompt, cwd, model, approvalMode })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running.
+- `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests.
+- `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
+- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, errors, and stop reasons.
+
+The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.
+
+### Mock ACP client flow
+
+`app/src/bun/index.ts` contains a small stdio JSON-RPC client for local mock-agent development. It:
+
+- resolves `acp-mock-server/start.sh` lazily when the first prompt is sent, by searching upward from the running process cwd and bundled main file location;
+- spawns the mock server with protocol stdout/stderr kept separate;
+- sends `initialize`, then `session/new`, then mock config updates for model and mode, then `session/prompt`;
+- reuses the current mock session for subsequent prompts in the same cwd;
+- closes and recreates the mock session if the selected folder changes;
+- resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
+- normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
+
+Keep this mock client local-development oriented. Real provider/client architecture should be introduced separately rather than growing production assumptions into this mock path.
 
 ### Window chrome
 

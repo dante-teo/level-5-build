@@ -6,7 +6,7 @@ This repo currently hosts one app, `app/`, a self-contained project (own `packag
 
 ## `app/` — Electrobun desktop app
 
-Stack: [Bun](https://bun.sh) (runtime + main process), [Electrobun](https://blackboard.sh/electrobun) (desktop app shell using the OS's native webview — WKWebView on macOS, WebView2 on Windows, webkit2gtk on Linux — not a bundled Chromium/CEF; `bundleCEF` is explicitly disabled for all platforms), React 18, Vite 6 (bundles the webview UI), Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
+Stack: [Bun](https://bun.sh) (runtime + main process), [Electrobun](https://blackboard.sh/electrobun) (desktop app shell using the OS's native webview — WKWebView on macOS, WebView2 on Windows, webkit2gtk on Linux — not a bundled Chromium/CEF; `bundleCEF` is explicitly disabled for all platforms), React 18, Jotai for webview UI state, Vite 6 (bundles the webview UI), Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
 Electrobun is not Electron — it has a different architecture and API surface. Don't assume Electron APIs/patterns apply.
 
@@ -14,6 +14,7 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 
 - **Main process** (`app/src/bun/index.ts`, runs under Bun): creates the `BrowserWindow`, owns app lifecycle, and implements the bun-side RPC handlers.
 - **Webview** (`app/src/mainview/`): a normal React SPA. Vite's project root is `src/mainview`; it builds to `app/dist`.
+- **Webview state** (`app/src/mainview/state/`): small Jotai atoms for cross-component UI state such as sidebar collapse and width.
 
 ### Build / dev flow
 
@@ -40,6 +41,12 @@ The release workflow is tag-driven. Pushing a tag like `v0.0.0` causes CI to:
 ### App icon packaging
 
 The source logo lives at `app/assets/icon.png`; the macOS bundle icon lives at `app/assets/App.icns`. A post-build hook (`app/scripts/apply-macos-icon.ts`) copies `App.icns` into the app bundle before codesigning/notarization and updates the bundle plist icon keys. This avoids relying on Electrobun's `.iconset` conversion path, which depends on `iconutil` behavior on the build host.
+
+The webview should not import the full application icon directly for small UI chrome. Use optimized web assets under `app/src/mainview/assets/` such as `app-icon.png`, which is sized for in-app display and emitted by Vite with the rest of the webview assets.
+
+### Fonts and webview assets
+
+The webview bundles product fonts from `app/src/mainview/assets/fonts/` and declares them in `app/src/mainview/index.css`. The UI font is Barlow; code and monospace surfaces use Departure Mono. Because these fonts are bundled into the Vite build, the app does not depend on the user's local Font Book at runtime.
 
 ### Main process ⇄ webview RPC
 

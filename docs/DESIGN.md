@@ -65,9 +65,11 @@ Accent:
 
 ## 4. Typography
 
-Primary font: Inter.
+Primary font: Barlow.
 
-Monospace font: JetBrains Mono.
+Monospace font: Departure Mono.
+
+The webview bundles these fonts from `app/src/mainview/assets/fonts/`; do not rely on system-installed fonts for the shipped app.
 
 Type scale:
 
@@ -129,7 +131,8 @@ The primary layout is:
 
 Rules:
 
-- Sidebar is fixed at `280px`.
+- Sidebar is user-resizable from `260px` to `420px`.
+- Collapsing the sidebar hides it completely (`0px`) rather than leaving an icon rail.
 - Workspace grows to fill remaining space.
 - Review panel overlays the workspace from the right.
 - Opening the review panel must never push or resize the workspace.
@@ -141,7 +144,7 @@ The first screen should feel like a real app workspace, not a landing page.
 
 ## 9. Sidebar
 
-Width: `280px`.
+Width: user-resizable from `260px` to `420px`; collapsed width is `0px`.
 
 Contains:
 
@@ -155,9 +158,11 @@ Contains:
 Rules:
 
 - Never collapse into icon-only mode automatically.
+- Manual collapse hides the sidebar completely. Keep the collapse/expand affordance outside the sidebar so it remains reachable when the sidebar is hidden.
 - Selected rows use a subtle surface tint plus the accent color.
 - Group hierarchy should be readable without heavy separators.
 - Bottom account/settings areas may use a quiet divider.
+- The floating app capsule sits just outside the sidebar edge. Only the collapse/expand icon inside the capsule is clickable; app logo/name text are display-only.
 
 ## 10. Workspace
 

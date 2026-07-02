@@ -4,7 +4,7 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is an early Electrobun desktop app shell: a single frameless window displaying a full-bleed background image, with no shipped product workflow yet. The technical foundation is in place for a native-feeling React workspace with Bun-side capabilities exposed through typed RPC.
+`app/` is an early Electrobun desktop app shell: a frameless window with a native-feeling React workspace, a light translucent sidebar, placeholder New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC. The core agent workflow is not shipped yet.
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
 

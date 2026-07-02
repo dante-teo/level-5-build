@@ -1,0 +1,15 @@
+{
+	"name": "acp-mock-server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "A fully functional ACP v1 mock agent server for client testing.",
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "bunx tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

@@ -2,7 +2,74 @@
 
 ## Repo layout
 
-This repo currently hosts one app, `app/`, a self-contained project (own `package.json`/`node_modules`/lockfile). The root only holds shared docs and the license — the layout leaves room for additional apps/packages to sit alongside `app/` later.
+This repo currently hosts:
+
+- `app/`, a self-contained Electrobun desktop app project with its own `package.json`, lockfile, and dependencies.
+- `acp-mock-server/`, a standalone Bun/TypeScript Agent Client Protocol mock server for local client and integration testing.
+- `scripts/`, root-level helper scripts for workflows that span multiple packages.
+- `docs/`, shared architecture/product/design documentation.
+
+Root-level packages are intentionally independent. The app can be built and checked without the mock server, and the mock server can be spawned by any ACP-compatible client over stdio.
+
+## `acp-mock-server/` — ACP test agent
+
+`acp-mock-server/` is a dependency-light Bun/TypeScript implementation of an ACP v1 agent over newline-delimited JSON-RPC stdio. It is designed for testing client UI and protocol handling without a real model or real code edits.
+
+### Transport and process model
+
+- The protocol entrypoint is `acp-mock-server/start.sh`, which execs `bun src/index.ts`.
+- The server reads UTF-8 JSON-RPC messages from stdin and writes only JSON-RPC messages to stdout.
+- Logs go to stderr. Do not route diagnostic output to stdout; ACP clients expect stdout to be protocol-clean.
+- Session state persists to `.mock-acp-state.json` by default, ignored by git. Override with `ACP_MOCK_STATE_PATH`.
+
+### Mocked ACP surface
+
+The mock supports initialization, auth/logout, session lifecycle (`new`, `load`, `resume`, `close`, `list`, `delete`), prompt turns, cancellation, legacy modes, session config options, slash commands, permission requests, model discovery/switching, and mock extension methods under `_mock/*`.
+
+The server emits realistic `session/update` notifications for:
+
+- agent/user message chunks
+- plans
+- tool calls and tool call updates
+- usage updates
+- slash command availability
+- current mode changes
+- config option updates
+- session info/title updates
+
+Initial session notifications are intentionally emitted after the `session/new` response so clients can create per-session UI state before handling updates.
+
+### Model and command testing
+
+Model selection is exposed through the ACP-native `configOptions` response (`configId: "model"`, set with `session/set_config_option`) and through direct mock extension methods (`_mock/list_models`, `_mock/set_model`). Slash commands are advertised with `available_commands_update` so autocomplete and command-palette UI can be tested without adding real agent logic.
+
+### Manual testing with the app
+
+From the repo root:
+
+```bash
+./scripts/start-app-with-acp-mock.sh
+```
+
+This starts the ACP mock server and `app`'s `bun run dev:hmr` workflow together. The script keeps both process trees tied to the terminal and stops them on `Ctrl-C`.
+
+### Verification
+
+From `acp-mock-server/`:
+
+```bash
+bun test
+bunx tsc --noEmit -p tsconfig.json
+```
+
+From the repo root:
+
+```bash
+bash -n scripts/start-app-with-acp-mock.sh
+bash -n acp-mock-server/start.sh
+```
+
+Use `./start.sh` for ACP stdio smoke tests instead of `bun run`; some Bun script invocations echo command banners before process output, which would pollute ACP stdout.
 
 ## `app/` — Electrobun desktop app
 

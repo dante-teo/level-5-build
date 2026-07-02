@@ -37,6 +37,25 @@ bun run test
 bun run build:web
 ```
 
+## Manual ACP Mock Testing
+
+The repository includes a standalone ACP mock agent in `../acp-mock-server/`. To launch the desktop app and mock server together from the repository root:
+
+```bash
+./scripts/start-app-with-acp-mock.sh
+```
+
+The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history.
+
+For protocol-level testing, spawn the mock directly with:
+
+```bash
+cd ../acp-mock-server
+./start.sh
+```
+
+`./start.sh` keeps stdout JSON-RPC-only for ACP clients; diagnostic logs go to stderr.
+
 ## How HMR Works
 
 When you run `bun run dev:hmr`:

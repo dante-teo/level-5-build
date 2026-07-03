@@ -1441,7 +1441,8 @@ function App() {
 
 			{isDashboardEligible ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed right-6 top-[30px] z-30 flex flex-col items-end gap-2"
+					className="electrobun-webkit-app-region-no-drag fixed right-6 z-30 flex flex-col items-end gap-2"
+					style={{ top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px` }}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
 					<div

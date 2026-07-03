@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { ApprovalModeId, AgentPermissionOption } from "../../shared/rpc";
 
 export type AgentPermissionMode = "normal" | "bypass";
+export type AgentBackendId = "devin" | "mock";
 
 export type AgentSpawnOptions = {
 	cmd: string[];
@@ -14,6 +15,7 @@ export type AgentSpawnOptions = {
 export const DEFAULT_APPROVAL_MODE: ApprovalModeId = "ask";
 
 const APPROVAL_MODES = new Set<ApprovalModeId>(["ask", "auto", "full-access"]);
+const USE_ACP_MOCK_VALUE = "1";
 
 export function normalizeApprovalMode(mode: string | undefined): ApprovalModeId {
 	return APPROVAL_MODES.has(mode as ApprovalModeId) ? (mode as ApprovalModeId) : DEFAULT_APPROVAL_MODE;
@@ -45,6 +47,68 @@ export function buildDevinSpawnOptions(input: {
 	};
 }
 
+export function isAcpMockEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.LEVEL5_USE_ACP_MOCK === USE_ACP_MOCK_VALUE;
+}
+
+export function selectedAgentBackend(env: NodeJS.ProcessEnv = process.env): AgentBackendId {
+	return isAcpMockEnabled(env) ? "mock" : "devin";
+}
+
+export function defaultMockStatePath(): string {
+	return resolve(homedir(), ".level5-build", "acp-mock-state.json");
+}
+
+export function resolveMockAcpIndexPath(input: { env?: NodeJS.ProcessEnv; execPath?: string; cwd?: string } = {}): string {
+	const env = input.env ?? process.env;
+	const cwd = input.cwd ?? process.cwd();
+	const execPath = input.execPath ?? process.execPath;
+	const explicitPath = env.LEVEL5_ACP_MOCK_INDEX_PATH;
+	if (explicitPath) {
+		return explicitPath;
+	}
+	const candidates = [
+		resolve(dirname(execPath), "../Resources/app/acp-mock-server/src/index.ts"),
+		resolve(dirname(execPath), "Resources/app/acp-mock-server/src/index.ts"),
+		resolve(cwd, "../acp-mock-server/src/index.ts"),
+		resolve(cwd, "acp-mock-server/src/index.ts"),
+	];
+
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1] ?? resolve("acp-mock-server/src/index.ts");
+}
+
+export function resolveBunExecutablePath(input: { execPath?: string } = {}): string {
+	const execPath = input.execPath ?? process.execPath;
+	const siblingBun = resolve(dirname(execPath), process.platform === "win32" ? "bun.exe" : "bun");
+	return existsSync(siblingBun) ? siblingBun : "bun";
+}
+
+export function buildMockSpawnOptions(input: {
+	cwd: string;
+	env?: NodeJS.ProcessEnv;
+	mockIndexPath?: string;
+	bunExecutablePath?: string;
+}): AgentSpawnOptions {
+	const mockIndexPath = input.mockIndexPath ?? resolveMockAcpIndexPath({ env: input.env });
+	const env = input.env ?? process.env;
+	return {
+		cmd: [input.bunExecutablePath ?? resolveBunExecutablePath(), mockIndexPath],
+		cwd: input.cwd,
+		env: {
+			...env,
+			ACP_MOCK_STATE_PATH: env.ACP_MOCK_STATE_PATH ?? defaultMockStatePath(),
+		},
+	};
+}
+
+export function buildAgentSpawnOptions(input: {
+	approvalMode: ApprovalModeId;
+	cwd: string;
+	env?: NodeJS.ProcessEnv;
+}): AgentSpawnOptions {
+	return isAcpMockEnabled(input.env) ? buildMockSpawnOptions({ cwd: input.cwd, env: input.env }) : buildDevinSpawnOptions(input);
+}
+
 export const AGENT_CLIENT_CAPABILITIES = {
 	fs: { readTextFile: false, writeTextFile: false },
 	terminal: false,
@@ -53,6 +117,8 @@ export const AGENT_CLIENT_CAPABILITIES = {
 
 export const DEVIN_MISSING_CLI_MESSAGE =
 	"Devin CLI is not available. Install the Devin CLI, make sure `devin` is on PATH, and run `devin auth login` before starting an agent chat.";
+export const ACP_MOCK_SPAWN_FAILURE_MESSAGE =
+	"ACP mock backend is not available. Make sure acp-mock-server is present in the repository or bundled app resources.";
 
 export function isDevinAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
 	const path = env.PATH ?? "";

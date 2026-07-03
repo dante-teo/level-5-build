@@ -1,13 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
 	AGENT_CLIENT_CAPABILITIES,
+	ACP_MOCK_SPAWN_FAILURE_MESSAGE,
 	DEVIN_MISSING_CLI_MESSAGE,
+	buildAgentSpawnOptions,
+	buildMockSpawnOptions,
 	buildSelectedPermissionResponse,
 	buildDevinSpawnOptions,
 	devinPermissionMode,
+	isAcpMockEnabled,
 	isDevinAvailable,
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
+	resolveBunExecutablePath,
+	selectedAgentBackend,
 } from "./runtime";
 
 describe("Devin ACP runtime", () => {
@@ -32,6 +38,45 @@ describe("Devin ACP runtime", () => {
 			cwd: "/tmp/project",
 			env: {},
 		});
+	});
+
+	test("selects Devin by default and mock only when explicitly enabled", () => {
+		expect(isAcpMockEnabled({})).toBe(false);
+		expect(selectedAgentBackend({})).toBe("devin");
+		expect(isAcpMockEnabled({ LEVEL5_USE_ACP_MOCK: "1" })).toBe(true);
+		expect(selectedAgentBackend({ LEVEL5_USE_ACP_MOCK: "1" })).toBe("mock");
+	});
+
+	test("builds the mock ACP process command without requiring Devin on PATH", () => {
+		const options = buildMockSpawnOptions({
+			cwd: "/tmp/project",
+			env: { LEVEL5_USE_ACP_MOCK: "1", PATH: "" },
+			mockIndexPath: "/tmp/repo/acp-mock-server/src/index.ts",
+			bunExecutablePath: "bun",
+		});
+		expect(options.cmd).toEqual(["bun", "/tmp/repo/acp-mock-server/src/index.ts"]);
+		expect(options.cwd).toBe("/tmp/project");
+		expect(options.env.ACP_MOCK_STATE_PATH).toContain(".level5-build/acp-mock-state.json");
+	});
+
+	test("builds agent command from the selected backend", () => {
+		expect(buildAgentSpawnOptions({ approvalMode: "ask", cwd: "/tmp/project", env: {} }).cmd).toEqual([
+			"devin",
+			"--permission-mode",
+			"normal",
+			"acp",
+		]);
+		expect(
+			buildAgentSpawnOptions({
+				approvalMode: "full-access",
+				cwd: "/tmp/project",
+				env: { LEVEL5_USE_ACP_MOCK: "1", LEVEL5_ACP_MOCK_INDEX_PATH: "/tmp/repo/acp-mock-server/src/index.ts" },
+			}).cmd,
+		).toContain("/tmp/repo/acp-mock-server/src/index.ts");
+	});
+
+	test("falls back to PATH bun when no sibling runtime is available", () => {
+		expect(resolveBunExecutablePath({ execPath: "/tmp/no-such-dir/launcher" })).toBe("bun");
 	});
 
 	test("initializes with honest v1 client capabilities", () => {
@@ -75,6 +120,7 @@ describe("Devin ACP runtime", () => {
 	test("missing CLI error tells the user how to recover", () => {
 		expect(DEVIN_MISSING_CLI_MESSAGE).toContain("Install the Devin CLI");
 		expect(DEVIN_MISSING_CLI_MESSAGE).toContain("devin auth login");
+		expect(ACP_MOCK_SPAWN_FAILURE_MESSAGE).toContain("ACP mock backend");
 	});
 
 	test("missing CLI detector returns false for an empty PATH", () => {

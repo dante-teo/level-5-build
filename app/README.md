@@ -22,6 +22,9 @@ bun run start
 # Development with HMR (recommended)
 bun run dev:hmr
 
+# Development with HMR against the local ACP mock backend
+bun run dev:mock
+
 # Watch Electrobun-side files without rebuilding the Vite webview first
 bun run dev
 
@@ -47,6 +50,14 @@ The app's production agent workflow uses Devin ACP. Opening the app shows the co
 The app-side ACP code is split into a reusable protocol core under `src/bun/acp/`, runtime helpers under `src/bun/agent/`, and the session adapter in `src/bun/index.ts`. The core handles NDJSON JSON-RPC transport, vendored ACP `v0.11.3` schema validation, request timeouts, pending-request cleanup, buffered notifications, extension request handling, and the idle-turn watchdog.
 
 Devin must be installed and authenticated outside the app. Make sure `devin` is on `PATH` and run `devin auth login` before starting an agent chat. The app passes through `process.env`, so environment-based credentials such as `WINDSURF_API_KEY` remain available to Devin.
+
+For local manual testing without Devin, run the app against the bundled mock ACP backend:
+
+```bash
+bun run dev:mock
+```
+
+This sets `LEVEL5_USE_ACP_MOCK=1`, skips Devin CLI detection, and lazily spawns the bundled or repo-local `acp-mock-server/src/index.ts` over stdio when a project is prepared or the first prompt is sent. Mock app state defaults to `~/.level5-build/acp-mock-state.json`; override the state path with `ACP_MOCK_STATE_PATH` or the mock entrypoint with `LEVEL5_ACP_MOCK_INDEX_PATH` when testing a custom mock checkout.
 
 Approval modes map to Devin permission modes conservatively: `ask` and `auto` spawn Devin with `--permission-mode normal`; `full-access` spawns Devin with `--permission-mode bypass`. In `auto`, ACP permission requests are answered with the first allow-like option when available. In v1 the app does not advertise ACP filesystem or terminal client capabilities.
 

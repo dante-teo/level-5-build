@@ -32,7 +32,31 @@ export const defaultConfig = {
 	skillset: "full-stack"
 };
 
+export const mockModels = [
+	{ id: "mock-fast", name: "Mock Fast", description: "Shorter responses and quicker tool updates.", contextWindow: 64000 },
+	{ id: "mock-pro", name: "Mock Pro", description: "Balanced testing behavior.", contextWindow: 200000 },
+	{ id: "mock-deep", name: "Mock Deep", description: "More planning and richer tool narratives.", contextWindow: 1000000 }
+] as const;
+
+export function modelContextWindow(modelId: string): number {
+	return mockModels.find((model) => model.id === modelId)?.contextWindow ?? mockModels[1].contextWindow;
+}
+
 export function buildConfigOptions(config: Record<string, string>): JsonObject[] {
+	return [
+		{
+			id: "model",
+			name: "Model",
+			description: "Mock model personality used for timing and confidence claims.",
+			category: "model",
+			type: "select",
+			currentValue: config.model ?? defaultConfig.model,
+			options: mockModels.map(({ id, name, description }) => ({ value: id, name, description }))
+		}
+	];
+}
+
+export function buildAllConfigOptions(config: Record<string, string>): JsonObject[] {
 	return [
 		{
 			id: "mode",
@@ -47,19 +71,7 @@ export function buildConfigOptions(config: Record<string, string>): JsonObject[]
 				description: mode.description
 			}))
 		},
-		{
-			id: "model",
-			name: "Model",
-			description: "Mock model personality used for timing and confidence claims.",
-			category: "model",
-			type: "select",
-			currentValue: config.model ?? defaultConfig.model,
-			options: [
-				{ value: "mock-fast", name: "Mock Fast", description: "Shorter responses and quicker tool updates." },
-				{ value: "mock-pro", name: "Mock Pro", description: "Balanced testing behavior." },
-				{ value: "mock-deep", name: "Mock Deep", description: "More planning and richer tool narratives." }
-			]
-		},
+		...buildConfigOptions(config),
 		{
 			id: "reasoning",
 			name: "Reasoning",
@@ -121,7 +133,10 @@ export const availableCommands = [
 	{ name: "plan", description: "Create a detailed implementation plan.", input: { hint: "feature or fix to plan" } },
 	{ name: "review", description: "Review code and report risks.", input: { hint: "file, diff, or area to review" } },
 	{ name: "fix", description: "Simulate a code edit with a diff.", input: { hint: "bug or failing behavior" } },
-	{ name: "test", description: "Simulate running tests and reporting results.", input: { hint: "test target or command" } },
+	{ name: "test", description: "Simulate running tests and reporting results.", input: { hint: "test target or command" } }
+] as const;
+
+export const hiddenScenarioCommands = [
 	{ name: "search", description: "Simulate searching the workspace.", input: { hint: "query" } },
 	{ name: "web", description: "Simulate fetching current external information.", input: { hint: "query to fetch" } },
 	{ name: "explain", description: "Explain a file, error, or concept.", input: { hint: "thing to explain" } },

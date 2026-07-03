@@ -1,4 +1,14 @@
-import { availableCommands, buildConfigOptions, defaultConfig, mockSkills, supportedModes } from "./fixtures";
+import {
+	availableCommands,
+	buildAllConfigOptions,
+	buildConfigOptions,
+	defaultConfig,
+	hiddenScenarioCommands,
+	mockModels,
+	mockSkills,
+	modelContextWindow,
+	supportedModes
+} from "./fixtures";
 import {
 	JsonRpcErrorCode,
 	RpcException,
@@ -149,7 +159,7 @@ export class AcpMockServer {
 			case "_mock/list_skills":
 				return { skills: mockSkills as unknown as JsonValue };
 			case "_mock/list_slash_commands":
-				return { availableCommands: availableCommands as unknown as JsonValue };
+				return { availableCommands: [...availableCommands, ...hiddenScenarioCommands] as unknown as JsonValue };
 			case "_mock/reset":
 				return this.resetSession(params);
 			default:
@@ -168,44 +178,20 @@ export class AcpMockServer {
 			agentCapabilities: {
 				loadSession: true,
 				promptCapabilities: {
-					image: true,
-					audio: true,
-					embeddedContext: true
-				},
-				mcpCapabilities: {
-					http: true,
-					sse: true
-				},
-				auth: {
-					logout: {}
+					embeddedContext: false
 				},
 				sessionCapabilities: {
 					list: {},
 					delete: {},
 					resume: {},
-					close: {},
-					additionalDirectories: {}
-				},
-				_meta: {
-					"mock/fullSurface": true,
-					"mock/directModelApi": true,
-					"mock/slashCommandAutocomplete": true,
-					"mock/skills": mockSkills
+					close: {}
 				}
 			},
 			agentInfo: {
-				name: "acp-mock-agent",
-				title: "ACP Mock Agent",
+				name: "devin-mock-agent",
+				title: "Devin Mock Agent",
 				version: "0.1.0"
-			},
-			authMethods: [
-				{
-					id: "mock-login",
-					name: "Mock login",
-					description: "Authenticate against the local mock agent.",
-					type: "agent"
-				}
-			]
+			}
 		};
 	}
 
@@ -459,6 +445,10 @@ export class AcpMockServer {
 			await this.testScenario(session, turn);
 			return turn.cancelled ? "cancelled" : "end_turn";
 		}
+		if (lower.startsWith("/review") || lower.includes("review")) {
+			await this.reviewScenario(session, turn);
+			return turn.cancelled ? "cancelled" : "end_turn";
+		}
 		if (lower.startsWith("/fix") || lower.includes("edit") || lower.includes("fix") || lower.includes("refactor")) {
 			await this.editScenario(session, turn);
 			return turn.cancelled ? "cancelled" : "end_turn";
@@ -478,8 +468,8 @@ export class AcpMockServer {
 			["Report a concise answer", "medium", "pending"]
 		]);
 		await this.tool(session, "search", "Scanning workspace structure", "completed", "Found app/, docs/, and acp-mock-server/ roots.", turn);
-		await this.usage(session, 1840, 200000, 0.002);
-		await this.say(session, "I inspected the mock workspace context and I am ready to help. Try `/plan`, `/fix` (asks for permission before the simulated edit), `/test`, `/review`, `/web`, `/skills`, `/mode code`, `permission`, `fail`, `refuse`, or `max tokens` to exercise specific ACP client states.");
+		await this.usage(session, 1840, 0.002);
+		await this.say(session, "I inspected the mock workspace context and I am ready to help. Try `/plan`, `/review`, `/fix`, or `/test` to exercise the core ACP client states.");
 	}
 
 	private async planScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
@@ -566,8 +556,20 @@ export class AcpMockServer {
 			]
 		});
 		await this.checkpoint(turn);
-		await this.usage(session, 4240, 200000, 0.006);
+		await this.usage(session, 4240, 0.006);
 		await this.say(session, "Mock test run complete:\n\n- TypeScript: passed\n- Unit tests: 18 passed\n- Build smoke: passed\n\nThis is simulated terminal-style output for client rendering.");
+	}
+
+	private async reviewScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
+		this.sendPlan(session.sessionId, [
+			["Inspect the requested surface", "high", "completed"],
+			["Check for regressions and missing tests", "high", "in_progress"],
+			["Report findings by severity", "medium", "pending"]
+		]);
+		await this.tool(session, "search", "Reviewing relevant changes", "completed", "Scanned the simulated diff and did not find blocking issues.", turn, [
+			{ path: `${session.cwd}/app/src/mainview/App.tsx`, line: 1 }
+		]);
+		await this.say(session, "Review complete.\n\nNo blocking findings in this mocked review. Residual risk: this is a deterministic mock response, so use it to test rendering and flow rather than code quality.");
 	}
 
 	private async webScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
@@ -694,11 +696,11 @@ export class AcpMockServer {
 		});
 	}
 
-	private async usage(session: SessionRecord, used: number, size: number, amount: number): Promise<void> {
+	private async usage(session: SessionRecord, used: number, amount: number): Promise<void> {
 		this.sendSessionUpdate(session.sessionId, {
 			sessionUpdate: "usage_update",
 			used,
-			size,
+			size: modelContextWindow(session.config.model),
 			cost: { amount, currency: "USD" }
 		});
 		await this.sleep();
@@ -753,7 +755,7 @@ export class AcpMockServer {
 	}
 
 	private applyConfig(session: SessionRecord, configId: string, value: string): void {
-		const options = buildConfigOptions(session.config);
+		const options = buildAllConfigOptions(session.config);
 		const option = options.find((entry) => entry.id === configId);
 		if (!option || !Array.isArray(option.options) || !option.options.some((entry) => asObject(entry).value === value)) {
 			throw new RpcException(JsonRpcErrorCode.InvalidParams, `Invalid ${configId} value: ${value}`);
@@ -789,11 +791,7 @@ export class AcpMockServer {
 	}
 
 	private models(): JsonObject[] {
-		return [
-			{ id: "mock-fast", name: "Mock Fast", description: "Fast deterministic responses.", contextWindow: 64000 },
-			{ id: "mock-pro", name: "Mock Pro", description: "Balanced realistic agent behavior.", contextWindow: 200000 },
-			{ id: "mock-deep", name: "Mock Deep", description: "Longer plans and richer update streams.", contextWindow: 1000000 }
-		];
+		return mockModels.map((model) => ({ ...model }));
 	}
 
 	private resetSession(params: JsonValue | undefined): JsonValue {

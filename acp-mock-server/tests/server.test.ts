@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("ACP mock server", () => {
-	test("initializes with broad capabilities, auth, models, skills, and commands metadata", async () => {
+	test("initializes with Devin-like app-relevant capabilities and no advertised mock surface", async () => {
 		const server = createServer();
 		await send(server, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1, clientCapabilities: {} } });
 
@@ -41,11 +41,12 @@ describe("ACP mock server", () => {
 		const capabilities = result.agentCapabilities as Record<string, JsonValue>;
 		expect(result.protocolVersion).toBe(1);
 		expect((capabilities.sessionCapabilities as Record<string, JsonValue>).list).toEqual({});
-		expect((capabilities._meta as Record<string, JsonValue>)["mock/directModelApi"]).toBe(true);
-		expect(Array.isArray(result.authMethods)).toBe(true);
+		expect(capabilities._meta).toBeUndefined();
+		expect(capabilities.mcpCapabilities).toBeUndefined();
+		expect(result.authMethods).toBeUndefined();
 	});
 
-	test("creates sessions with modes, config options, and slash command update", async () => {
+	test("creates sessions with model config and core slash command update", async () => {
 		const server = createServer();
 		await initialize(server);
 		await send(server, { jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: tmp, mcpServers: [] } });
@@ -54,10 +55,13 @@ describe("ACP mock server", () => {
 		const response = all.find((message) => (message as Record<string, JsonValue>).id === 2) as Record<string, JsonValue>;
 		const result = response.result as Record<string, JsonValue>;
 		expect(typeof result.sessionId).toBe("string");
-		expect(Array.isArray(result.configOptions)).toBe(true);
+		const configOptions = result.configOptions as Array<Record<string, JsonValue>>;
+		expect(configOptions.map((option) => option.id)).toEqual(["model"]);
 		expect((all.at(-1) as Record<string, JsonValue>).id).toBe(response.id);
 		await Bun.sleep(1);
-		expect(JSON.stringify(messages())).toContain("available_commands_update");
+		const commandUpdate = messages().find((message) => JSON.stringify(message).includes("available_commands_update")) as Record<string, JsonValue>;
+		const commands = (((commandUpdate.params as Record<string, JsonValue>).update as Record<string, JsonValue>).availableCommands as Array<Record<string, JsonValue>>);
+		expect(commands.map((command) => command.name)).toEqual(["help", "plan", "review", "fix", "test"]);
 		expect(JSON.stringify(messages())).toContain("config_option_update");
 	});
 
@@ -69,6 +73,12 @@ describe("ACP mock server", () => {
 		await send(server, { jsonrpc: "2.0", id: 3, method: "_mock/list_models", params: { sessionId } });
 		expect(JSON.stringify(messages().at(-1))).toContain("mock-deep");
 
+		await send(server, { jsonrpc: "2.0", id: 30, method: "_mock/list_slash_commands", params: { sessionId } });
+		const commandsResponse = messages().find((message) => (message as Record<string, JsonValue>).id === 30) as Record<string, JsonValue>;
+		const extensionCommands = ((commandsResponse.result as Record<string, JsonValue>).availableCommands as Array<Record<string, JsonValue>>).map((command) => command.name);
+		expect(extensionCommands).toContain("fail");
+		expect(extensionCommands).toContain("tokens");
+
 		await send(server, {
 			jsonrpc: "2.0",
 			id: 4,
@@ -77,6 +87,28 @@ describe("ACP mock server", () => {
 		});
 		const response = messages().find((message) => (message as Record<string, JsonValue>).id === 4) as Record<string, JsonValue>;
 		expect(JSON.stringify(response)).toContain("mock-deep");
+	});
+
+	test("uses the selected model context window for usage updates", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 4,
+			method: "session/set_config_option",
+			params: { sessionId, configId: "model", value: "mock-deep" }
+		});
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 5,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "/test please" }] }
+		});
+
+		const usageUpdate = messages().find((message) => JSON.stringify(message).includes("usage_update")) as Record<string, JsonValue>;
+		const update = (usageUpdate.params as Record<string, JsonValue>).update as Record<string, JsonValue>;
+		expect(update.size).toBe(1000000);
 	});
 
 	test("streams realistic prompt updates and ends the turn", async () => {
@@ -91,8 +123,7 @@ describe("ACP mock server", () => {
 			params: { sessionId, prompt: [{ type: "text", text: "/fix a layout bug" }] }
 		});
 
-		await Bun.sleep(5);
-		const permissionRequest = messages().find(
+		const permissionRequest = await waitForMessage(
 			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
 		) as Record<string, JsonValue>;
 		expect(permissionRequest).toBeTruthy();
@@ -119,8 +150,7 @@ describe("ACP mock server", () => {
 			params: { sessionId, prompt: [{ type: "text", text: "/fix a layout bug" }] }
 		});
 
-		await Bun.sleep(5);
-		const permissionRequest = messages().find(
+		const permissionRequest = await waitForMessage(
 			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
 		) as Record<string, JsonValue>;
 		expect(permissionRequest).toBeTruthy();
@@ -171,6 +201,37 @@ describe("ACP mock server", () => {
 		await prompt;
 		expect(JSON.stringify(messages())).toContain("\"stopReason\":\"cancelled\"");
 	});
+
+	test("keeps hidden QA prompt triggers without advertising them as slash commands", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+		output = [];
+
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 9,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "please fail" }] }
+		});
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 10,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "refuse this" }] }
+		});
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 11,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "max tokens" }] }
+		});
+
+		const all = JSON.stringify(messages());
+		expect(all).toContain("\"status\":\"failed\"");
+		expect(all).toContain("\"stopReason\":\"refusal\"");
+		expect(all).toContain("\"stopReason\":\"max_tokens\"");
+	});
 });
 
 function createServer(delayMs = 0, statePath = join(tmp, "state.json")): AcpMockServer {
@@ -197,4 +258,14 @@ function messages(): RpcMessage[] {
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as RpcMessage);
+}
+
+async function waitForMessage(predicate: (message: RpcMessage) => boolean, timeoutMs = 1000): Promise<RpcMessage | undefined> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const message = messages().find(predicate);
+		if (message) return message;
+		await Bun.sleep(1);
+	}
+	return undefined;
 }

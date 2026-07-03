@@ -9,7 +9,7 @@ This repo currently hosts:
 - `scripts/`, root-level helper scripts for workflows that span multiple packages.
 - `docs/`, shared architecture/product/design documentation.
 
-The mock server remains usable as a standalone stdio ACP server and protocol fixture. The desktop app's normal runtime path uses Devin ACP through the local `devin` CLI.
+The mock server remains usable as a standalone stdio ACP server and protocol fixture. The desktop app's normal runtime path uses Devin ACP through the local `devin` CLI, with `LEVEL5_USE_ACP_MOCK=1` as an explicit manual-test backend switch.
 
 ## `acp-mock-server/` — ACP test agent
 
@@ -27,6 +27,8 @@ The mock server remains usable as a standalone stdio ACP server and protocol fix
 
 The mock supports initialization, auth/logout, session lifecycle (`new`, `load`, `resume`, `close`, `list`, `delete`), prompt turns, cancellation, legacy modes, session config options, slash commands, permission requests, model discovery/switching, and mock extension methods under `_mock/*`.
 
+By default, its advertised surface is intentionally Devin-like and app-relevant: visible config is limited to `model`, visible slash commands are `help`, `plan`, `review`, `fix`, and `test`, and mock-only `_mock/*` helpers are callable but not advertised through initialization metadata. `_mock/list_slash_commands` intentionally returns both visible commands and hidden QA commands for direct protocol probing.
+
 Permission requests aren't just a standalone demo path: the edit scenario (triggered by `/fix`, or a prompt containing "edit"/"fix"/"refactor") sends a `session/request_permission` for its simulated diff before applying it, so approval-mode UI can be exercised without needing the literal word "permission"/"approve" in the prompt. A dedicated scenario triggered by those exact words (`permissionScenario`) still exists for direct testing.
 
 The server emits realistic `session/update` notifications for:
@@ -42,15 +44,24 @@ The server emits realistic `session/update` notifications for:
 
 Initial session notifications are intentionally emitted after the `session/new` response so clients can create per-session UI state before handling updates.
 
-**Known simplification:** `usage_update`'s `size` (context window token limit) is currently hardcoded per scenario call site rather than derived from the session's selected model, even though `models()` already advertises distinct `contextWindow` values per model (`mock-fast` 64k, `mock-pro` 200k, `mock-deep` 1M). This matters only when running the mock server as a test fixture. Fix by threading the session's model `contextWindow` into the `usage()` call sites in `acp-mock-server/src/server.ts`.
+`usage_update.size` is derived from the selected mock model context window (`mock-fast` 64k, `mock-pro` 200k, `mock-deep` 1M), so the app's context indicator can be tested against model changes.
 
 ### Model and command testing
 
-Model selection is exposed through the ACP-native `configOptions` response (`configId: "model"`, set with `session/set_config_option`) and through direct mock extension methods (`_mock/list_models`, `_mock/set_model`). Slash commands are advertised with `available_commands_update` so autocomplete and command-palette UI can be tested without adding real agent logic.
+Model selection is exposed through the ACP-native `configOptions` response (`configId: "model"`, set with `session/set_config_option`) and through direct mock extension methods (`_mock/list_models`, `_mock/set_model`). Slash commands are advertised with `available_commands_update` so autocomplete and command-palette UI can be tested without adding real agent logic. Hidden prompt phrases such as `fail`, `refuse`, `max tokens`, `permission`, and `web` / `fetch` still exercise QA edge states without appearing in the visible slash-command menu.
 
 ### Manual testing with the app
 
-The desktop app does not use the mock server for normal chat/session work. Use `./start.sh` from `acp-mock-server/` when manually testing protocol behavior outside the app.
+The desktop app does not use the mock server for normal chat/session work unless `LEVEL5_USE_ACP_MOCK=1` is set. The convenient manual app command is:
+
+```bash
+cd app
+bun run dev:mock
+```
+
+Use `./start.sh` from `acp-mock-server/` when manually testing protocol behavior outside the app.
+
+Mock-mode app runs use `~/.level5-build/acp-mock-state.json` for state unless `ACP_MOCK_STATE_PATH` is set. Set `LEVEL5_ACP_MOCK_INDEX_PATH` to an absolute `acp-mock-server/src/index.ts` path when testing a custom mock checkout instead of the bundled or repo-local copy.
 
 ### Verification
 
@@ -122,8 +133,8 @@ Current app RPC includes the agent runtime surface:
 
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `selectAttachmentFile()` / `selectAttachmentFolder()`: open single-selection file/directory pickers for the composer's "Add to prompt" menu, independent of the project-folder picker above.
-- `prepareAgentSession({ cwd, approvalMode })`: warms up Devin ACP for a selected project folder. It starts `devin --permission-mode <mode> acp`, initializes ACP, creates or reuses a session for the cwd, and lets ACP `configOptions` / `available_commands_update` populate composer controls before the first prompt.
-- `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the Devin ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. `approvalMode` maps to Devin process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`.
+- `prepareAgentSession({ cwd, approvalMode })`: warms up ACP for a selected project folder. By default it starts `devin --permission-mode <mode> acp`; with `LEVEL5_USE_ACP_MOCK=1`, it starts the bundled/repo-local mock server instead. It initializes ACP, creates or reuses a session for the cwd, and lets ACP `configOptions` / `available_commands_update` populate composer controls before the first prompt.
+- `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. For Devin, `approvalMode` maps to process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`.
 - `cancelAgentPrompt()`: sends ACP `session/cancel` for the active turn and answers pending permission requests with ACP's cancelled outcome. The composer send button becomes this stop control while a turn is active.
 - `respondToAgentPermission({ requestId, optionId })`: answers `session/request_permission` requests that were surfaced to the user (approval mode `ask`, or any request the client could not auto-resolve). Responses use ACP's selected-outcome shape: `{ outcome: { outcome: "selected", optionId } }`.
 - `listAgentSessions()`: returns cached known session summaries without spawning Devin. If Devin is already connected, it may call ACP `session/list` to refresh summaries; app open must not spawn or auth-probe the CLI.
@@ -143,10 +154,11 @@ The app-side workflow is split between a reusable ACP protocol core in `app/src/
 
 `app/src/bun/acp/` owns the newline-delimited JSON-RPC transport, vendored ACP `v0.11.3` schema validation, typed lifecycle errors, request timeouts, buffered notifications, and the turn idle watchdog. This layer stays provider-agnostic.
 
-`app/src/bun/agent/runtime.ts` owns Devin-specific process and permission-mode helpers. `app/src/bun/index.ts` contains the session adapter. It:
+`app/src/bun/agent/runtime.ts` owns backend process selection and Devin permission-mode helpers. `app/src/bun/index.ts` contains the session adapter. It:
 
 - detects `devin` on `PATH` and emits a clear install/login error if unavailable;
 - spawns Devin as `devin --permission-mode normal acp` for `ask` / `auto`, and `devin --permission-mode bypass acp` for `full-access`;
+- skips Devin CLI detection and spawns the mock ACP server when `LEVEL5_USE_ACP_MOCK=1`, using `LEVEL5_ACP_MOCK_INDEX_PATH` as an optional entrypoint override;
 - passes `process.env` through so Devin can use CLI login state or environment credentials such as `WINDSURF_API_KEY`;
 - initializes ACP with honest v1 client capabilities: no client-side filesystem or terminal capability is advertised;
 - sends `initialize`, then `session/new` or `session/load`, then optional `session/set_config_option` for model, then `session/prompt`;

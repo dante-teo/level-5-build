@@ -22,18 +22,22 @@ Useful environment variables:
 - `ACP_MOCK_LOG=debug|info|silent`: logging level
 - `ACP_MOCK_KEEPALIVE=1`: keep the process alive after stdin closes, useful for manual side-by-side launching
 
-## Bundled App Backend
+## App Mock Backend
 
-The desktop app bundles this mock server into its Electrobun resources and treats it as the local ACP backend for the current UI work. When running the app normally:
+The desktop app uses real Devin ACP by default. To run the app against this mock backend for manual testing:
 
 ```bash
 cd app
-bun run dev:hmr
+bun run dev:mock
 ```
 
-The app does not start ACP on launch. The first valid prompt lazily spawns the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime, then communicates over stdio. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
+This is equivalent to running the app with `LEVEL5_USE_ACP_MOCK=1`. The app still does not start ACP on launch. Selecting a project or sending the first prompt lazily spawns the bundled or repo-local `acp-mock-server/src/index.ts` over stdio. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_INDEX_PATH=/absolute/path/to/acp-mock-server/src/index.ts`.
 
-The root `scripts/start-app-with-acp-mock.sh` helper remains useful only when you intentionally want a separate long-lived standalone mock process next to the app for manual protocol work.
+From the repo root, the same manual app flow is available as:
+
+```bash
+./scripts/start-app-with-acp-mock.sh
+```
 
 ## ACP Surface Covered
 
@@ -88,16 +92,31 @@ Clients can discover and set models in two ways:
 
 Available models are `mock-fast`, `mock-pro`, and `mock-deep`.
 
+By default, these are the only visible ACP config options. Older hidden config options remain accepted internally for compatibility, but they are not advertised to the app.
+
+## Slash Commands
+
+The default visible slash-command surface is intentionally small and app-relevant:
+
+- `help`
+- `plan`
+- `review`
+- `fix`
+- `test`
+
+Mock-only extension methods and hidden QA paths remain callable, but they are not advertised in initialization metadata or app-facing slash-command updates. Protocol clients that call `_mock/list_slash_commands` receive both the visible commands and the hidden QA commands for manual probing.
+
 ## Prompt Scenarios
 
 Send text prompts containing these words or slash commands:
 
 - `/plan`: streams plan updates
+- `/review` or `review`: emits a review-style tool call and summary
 - `/fix` or `edit`: emits read/edit tool calls and a diff
 - `/test` or `build`: emits execute-style tool output
-- `/web`: emits fetch-style tool output
-- `/skills`: lists mock skills
-- `/mode code`: switches mode and updates config
+- `web` or `fetch`: hidden QA trigger for fetch-style tool output
+- `skills`: hidden QA trigger for mock skill text
+- `/mode code`: hidden compatibility path for mode updates
 - `permission`: sends `session/request_permission`
 - `fail`: emits a failed tool call
 - `refuse`: returns `stopReason: "refusal"`

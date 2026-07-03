@@ -14,12 +14,14 @@ import {
 import { startAcpTurnIdleWatchdog, type AcpTurnIdleWatchdog } from "./acp/watchdog";
 import {
 	AGENT_CLIENT_CAPABILITIES,
+	ACP_MOCK_SPAWN_FAILURE_MESSAGE,
 	DEFAULT_APPROVAL_MODE,
 	DEVIN_MISSING_CLI_MESSAGE,
+	buildAgentSpawnOptions,
 	buildSelectedPermissionResponse,
-	buildDevinSpawnOptions,
 	devinPermissionMode,
 	isDevinAvailable,
+	selectedAgentBackend,
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
 	resolveAgentCwd,
@@ -381,7 +383,9 @@ class AgentAcpClient {
 	}
 
 	private async ensureProcess(cwd: string): Promise<void> {
-		const permissionMode = devinPermissionMode(this.approvalMode);
+		const backend = selectedAgentBackend();
+		const permissionMode = backend === "mock" ? "mock" : devinPermissionMode(this.approvalMode);
+		const spawnFailureMessage = backend === "mock" ? ACP_MOCK_SPAWN_FAILURE_MESSAGE : DEVIN_MISSING_CLI_MESSAGE;
 		if (this.process) {
 			if (this.processCwd === cwd && this.processPermissionMode === permissionMode) {
 				return;
@@ -392,10 +396,10 @@ class AgentAcpClient {
 		}
 
 		try {
-			if (!isDevinAvailable()) {
+			if (backend === "devin" && !isDevinAvailable()) {
 				throw new AcpError("spawn_failure", DEVIN_MISSING_CLI_MESSAGE);
 			}
-			const options = buildDevinSpawnOptions({ approvalMode: this.approvalMode, cwd });
+			const options = buildAgentSpawnOptions({ approvalMode: this.approvalMode, cwd });
 			const subprocess = Bun.spawn({
 				...options,
 				stdin: "pipe",
@@ -410,7 +414,7 @@ class AgentAcpClient {
 			if (error instanceof AcpError) {
 				throw error;
 			}
-			throw new AcpError("spawn_failure", DEVIN_MISSING_CLI_MESSAGE);
+			throw new AcpError("spawn_failure", spawnFailureMessage);
 		}
 
 		if (!this.process || !this.stdin) {

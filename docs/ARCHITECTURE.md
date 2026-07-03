@@ -42,6 +42,8 @@ The server emits realistic `session/update` notifications for:
 
 Initial session notifications are intentionally emitted after the `session/new` response so clients can create per-session UI state before handling updates.
 
+**Known simplification:** `usage_update`'s `size` (context window token limit) is currently hardcoded per scenario call site rather than derived from the session's selected model, even though `models()` already advertises distinct `contextWindow` values per model (`mock-fast` 64k, `mock-pro` 200k, `mock-deep` 1M). This was inert while the app ignored `usage_update`; now that the app renders a context-usage indicator from it (see `mockAgentUpdate` below and `docs/DESIGN.md` §12), switching to `mock-fast` or `mock-deep` will still show a percentage computed against the hardcoded value. Fix by threading the session's model `contextWindow` into the `usage()` call sites in `acp-mock-server/src/server.ts`.
+
 ### Model and command testing
 
 Model selection is exposed through the ACP-native `configOptions` response (`configId: "model"`, set with `session/set_config_option`) and through direct mock extension methods (`_mock/list_models`, `_mock/set_model`). Slash commands are advertised with `available_commands_update` so autocomplete and command-palette UI can be tested without adding real agent logic.
@@ -128,7 +130,7 @@ Current app RPC includes the mock-agent development surface:
 - `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
 - `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
 - `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
-- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, session summaries, errors, informational notes (e.g. auto-approval), and stop reasons.
+- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, context/usage updates, permission requests, session summaries, errors, informational notes (e.g. auto-approval), and stop reasons.
 
 The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.
 
@@ -151,7 +153,7 @@ The app-side mock workflow is split between a reusable ACP protocol core in `app
 - closes and recreates the mock session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
 - keeps an app-side in-memory map of session summaries so the sidebar can show a newly created session immediately after `session/new`;
-- keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, and tool calls, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
+- keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, tool calls, and the latest usage/context-window update, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
 - normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
 
 The default prompt idle timeout is 120 seconds and can be overridden for local testing with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS`.

@@ -665,6 +665,14 @@ class MockAcpClient {
 			this.emitConfig(update.configOptions);
 			return;
 		}
+		if (updateType === "usage_update") {
+			this.emitTranscriptUpdate(sessionId, {
+				kind: "usage",
+				used: asNumber(update.used),
+				size: asNumber(update.size, 1),
+			});
+			return;
+		}
 		if (updateType === "session_info_update") {
 			this.rememberSession(
 				normalizeSessionSummary({
@@ -770,6 +778,9 @@ function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpd
 	}
 	if (update.kind === "plan") {
 		return [...current.filter((entry) => entry.kind !== "plan"), update];
+	}
+	if (update.kind === "usage") {
+		return [...current.filter((entry) => entry.kind !== "usage"), update];
 	}
 	if (update.kind === "tool") {
 		const index = current.findIndex(

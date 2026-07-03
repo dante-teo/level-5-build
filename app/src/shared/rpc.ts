@@ -86,6 +86,11 @@ export type MockPromptAttachment = {
 	name: string;
 };
 
+export type MockUsage = {
+	used: number;
+	size: number;
+};
+
 export type MockAgentUpdate =
 	| { kind: "status"; status: MockRunStatus; sessionId?: string; cwd?: string }
 	| MockMessageUpdate
@@ -94,6 +99,7 @@ export type MockAgentUpdate =
 	| { kind: "permission"; request: MockPermissionRequest }
 	| { kind: "config"; options: MockConfigOption[] }
 	| { kind: "session"; session: MockSessionSummary }
+	| { kind: "usage"; used: number; size: number }
 	| { kind: "stop"; stopReason: string }
 	| { kind: "error"; message: string }
 	| { kind: "info"; id: string; message: string };

@@ -60,6 +60,7 @@ import {
 	type MockSkill,
 	type MockSlashCommand,
 	type MockToolCall,
+	type MockUsage,
 } from "@shared/rpc";
 
 const SIDEBAR_MIN_WIDTH = 260;
@@ -305,6 +306,7 @@ function App() {
 	const [model, setModel] = useState<MockModelId>("mock-pro");
 	const [approvalMode, setApprovalMode] = useState<ApprovalModeId>("ask");
 	const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
+	const [usage, setUsage] = useState<MockUsage | null>(null);
 	const [sessions, setSessions] = useState<MockSessionSummary[]>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
@@ -405,6 +407,10 @@ function App() {
 			}
 			if (update.kind === "tool") {
 				setTranscriptItems((current) => upsertToolItem(current, update.tool));
+				return;
+			}
+			if (update.kind === "usage") {
+				setUsage({ used: update.used, size: update.size });
 				return;
 			}
 			if (update.kind === "permission") {
@@ -738,6 +744,7 @@ function App() {
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setStopReason(null);
 		setPendingPermission(null);
+		setUsage(null);
 	}
 
 	function closeProjectMenu() {
@@ -1410,6 +1417,8 @@ function App() {
 
 								<div className="min-w-0 flex-1" />
 
+								{hasConversation ? <ContextUsageRing used={usage?.used ?? 0} size={usage?.size ?? 1} /> : null}
+
 								<SelectControl
 									label="Model"
 									value={model}
@@ -1671,6 +1680,51 @@ function AttachmentChip({ attachment, onRemove }: { attachment: AttachmentItem; 
 				<X className="size-3" strokeWidth={2} />
 			</button>
 		</span>
+	);
+}
+
+function ContextUsageRing({ used, size }: { used: number; size: number }) {
+	const ratio = size > 0 ? Math.min(Math.max(used / size, 0), 1) : 0;
+	const radius = 6;
+	const circumference = 2 * Math.PI * radius;
+	const dashOffset = circumference * (1 - ratio);
+	const usedPercent = Math.round(ratio * 100);
+	const leftPercent = 100 - usedPercent;
+	const progressColorClass = ratio >= 0.9 ? "text-red-500" : ratio >= 0.75 ? "text-amber-500" : "text-[var(--app-accent)]";
+
+	return (
+		<div
+			tabIndex={0}
+			role="group"
+			aria-label={`Context window: ${usedPercent}% used, ${leftPercent}% left`}
+			className="group relative flex shrink-0 items-center justify-center p-1 focus:outline-none"
+		>
+			<svg viewBox="0 0 16 16" className="size-4 -rotate-90" aria-hidden="true">
+				<circle cx="8" cy="8" r={radius} fill="none" strokeWidth="2" className="stroke-muted-foreground/25" />
+				<circle
+					cx="8"
+					cy="8"
+					r={radius}
+					fill="none"
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeDasharray={circumference}
+					strokeDashoffset={dashOffset}
+					className={cn("stroke-current transition-[stroke-dashoffset]", progressColorClass)}
+				/>
+			</svg>
+
+			<div
+				role="tooltip"
+				className="pointer-events-none absolute bottom-[calc(100%+12px)] left-1/2 z-30 w-[196px] -translate-x-1/2 rounded-2xl border border-[var(--app-sidebar-border)] bg-white/95 px-4 py-3 text-center opacity-0 shadow-[0_18px_46px_rgba(17,24,39,0.18)] backdrop-blur-2xl transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+			>
+				<div className="text-[13px] font-medium text-muted-foreground">Context window:</div>
+				<div className="mt-1 text-[14px] font-semibold text-foreground">
+					{usedPercent}% used ({leftPercent}% left)
+				</div>
+				<div className="absolute left-1/2 top-full -mt-1.5 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-b border-r border-[var(--app-sidebar-border)] bg-white/95" />
+			</div>
+		</div>
 	);
 }
 

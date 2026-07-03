@@ -72,6 +72,10 @@ const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_COLLAPSED_WIDTH = 0;
 const SIDEBAR_FLOATING_TOGGLE_GAP = 8;
 const SIDEBAR_FLOATING_TOGGLE_TOP = 30;
+// Matches the dashboard trigger capsule's natural height (size-11 icon + p-1.5 padding + border).
+// Both floating top capsules sit inside an invisible row of this height so they share one
+// vertical center line regardless of their own content height.
+const SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT = 58;
 const COMPOSER_MIN_HEIGHT = 56;
 const COMPOSER_MAX_HEIGHT = 192;
 const DASHBOARD_REFRESH_DEBOUNCE_MS = 500;
@@ -1401,118 +1405,125 @@ function App() {
 			) : null}
 
 			<div
-				className={cn(
-					"electrobun-webkit-app-region-no-drag fixed z-10 inline-flex w-auto items-center gap-2 border border-[var(--app-sidebar-border)] bg-white/80 py-1 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl",
-					shouldShowSessionContext
-						? "min-h-14 max-w-[32.5rem] rounded-full pr-4"
-						: "h-11 rounded-full pr-4",
-				)}
+				className="electrobun-webkit-app-region-no-drag fixed z-10 flex items-center"
 				style={{
 					left: `${renderedSidebarWidth + SIDEBAR_FLOATING_TOGGLE_GAP}px`,
 					top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`,
+					height: `${SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT}px`,
 				}}
 				onDoubleClick={(event) => event.stopPropagation()}
 			>
-				<SidebarButton
-					aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-					title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-					className="size-9 justify-center rounded-full hover:bg-accent hover:text-foreground"
-					onClick={() => setIsSidebarCollapsed((value) => !value)}
+				<div
+					className={cn(
+						"inline-flex w-auto items-center gap-2 border border-[var(--app-sidebar-border)] bg-white/80 py-1 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl",
+						shouldShowSessionContext
+							? "min-h-14 max-w-[32.5rem] rounded-full pr-4"
+							: "h-11 rounded-full pr-4",
+					)}
 				>
-					<SidebarToggleIcon className="size-5 shrink-0" strokeWidth={1.8} />
-				</SidebarButton>
-				{shouldShowSessionContext ? (
-					<div className="min-w-0 py-1">
-						<div className="flex min-w-0 items-center gap-2">
-							<span className="min-w-0 truncate text-[14px] font-semibold leading-5 text-foreground">{topBarTitle}</span>
-							<MoreHorizontal className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+					<SidebarButton
+						aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+						title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+						className="size-9 justify-center rounded-full hover:bg-accent hover:text-foreground"
+						onClick={() => setIsSidebarCollapsed((value) => !value)}
+					>
+						<SidebarToggleIcon className="size-5 shrink-0" strokeWidth={1.8} />
+					</SidebarButton>
+					{shouldShowSessionContext ? (
+						<div className="min-w-0 py-1">
+							<div className="flex min-w-0 items-center gap-2">
+								<span className="min-w-0 truncate text-[14px] font-semibold leading-5 text-foreground">{topBarTitle}</span>
+								<MoreHorizontal className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+							</div>
+							{topBarSubtitle ? (
+								<div className="truncate text-[12px] font-medium leading-4 text-muted-foreground">{topBarSubtitle}</div>
+							) : null}
 						</div>
-						{topBarSubtitle ? (
-							<div className="truncate text-[12px] font-medium leading-4 text-muted-foreground">{topBarSubtitle}</div>
-						) : null}
-					</div>
-				) : (
-					<>
-						<img src={appIcon} alt="" className="size-6 shrink-0 rounded-full" />
-						<span className="shrink-0 text-[14px] font-semibold text-foreground">{topBarTitle}</span>
-					</>
-				)}
+					) : (
+						<>
+							<img src={appIcon} alt="" className="size-6 shrink-0 rounded-full" />
+							<span className="shrink-0 text-[14px] font-semibold text-foreground">{topBarTitle}</span>
+						</>
+					)}
+				</div>
 			</div>
 
 			{isDashboardEligible ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed right-6 z-30 flex flex-col items-end gap-2"
-					style={{ top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px` }}
+					className="electrobun-webkit-app-region-no-drag fixed right-6 z-30 flex items-center"
+					style={{ top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`, height: `${SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT}px` }}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
-					<div
-						className={cn(
-							"rounded-[30px] border bg-white/78 p-1.5 shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl transition-[border-color,box-shadow,background-color] duration-200",
-							isDashboardPinned
-								? "border-[rgba(79,109,255,0.28)] bg-white/88 shadow-[0_12px_34px_rgba(79,109,255,0.22)]"
-								: "border-[var(--app-sidebar-border)]",
-						)}
-					>
-						<IconButton
-							label="Toggle dashboard"
-							aria-pressed={isDashboardPinned}
+					<div className="relative">
+						<div
 							className={cn(
-								"size-11 rounded-[22px] transition-[background-color,color,box-shadow,transform] duration-200 hover:bg-white/72",
+								"rounded-[30px] border bg-white/78 p-1.5 shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl transition-[border-color,box-shadow,background-color] duration-200",
 								isDashboardPinned
-									? "bg-[var(--app-selected-surface)] text-[var(--app-accent)] shadow-[inset_0_0_0_1px_rgba(79,109,255,0.18),0_8px_22px_rgba(79,109,255,0.16)]"
-									: "text-muted-foreground",
+									? "border-[rgba(79,109,255,0.28)] bg-white/88 shadow-[0_12px_34px_rgba(79,109,255,0.22)]"
+									: "border-[var(--app-sidebar-border)]",
 							)}
-							onClick={() => {
-								const shouldOpen = !isDashboardPinned;
-								setIsDashboardPinned(shouldOpen);
-								if (shouldOpen) {
-									void refreshProjectGitStatus(projectFolder);
-								}
-							}}
 						>
-							<LayoutDashboard className="size-5" strokeWidth={1.9} />
-						</IconButton>
+							<IconButton
+								label="Toggle dashboard"
+								aria-pressed={isDashboardPinned}
+								className={cn(
+									"size-11 rounded-[22px] transition-[background-color,color,box-shadow,transform] duration-200 hover:bg-white/72",
+									isDashboardPinned
+										? "bg-[var(--app-selected-surface)] text-[var(--app-accent)] shadow-[inset_0_0_0_1px_rgba(79,109,255,0.18),0_8px_22px_rgba(79,109,255,0.16)]"
+										: "text-muted-foreground",
+								)}
+								onClick={() => {
+									const shouldOpen = !isDashboardPinned;
+									setIsDashboardPinned(shouldOpen);
+									if (shouldOpen) {
+										void refreshProjectGitStatus(projectFolder);
+									}
+								}}
+							>
+								<LayoutDashboard className="size-5" strokeWidth={1.9} />
+							</IconButton>
+						</div>
+
+						{isDashboardPinned ? (
+							<section
+								aria-label="Session dashboard"
+								className="absolute right-0 top-full mt-2 w-[21rem] max-w-[calc(100vw-3rem)] rounded-[1.5rem] border border-[var(--app-sidebar-border)] bg-white/88 p-4 text-foreground shadow-[0_24px_70px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+								onPointerDown={(event) => event.stopPropagation()}
+							>
+								<div className="flex items-center gap-3">
+									<div className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-[var(--app-selected-surface)] text-[var(--app-accent)]">
+										<LayoutDashboard className="size-5" strokeWidth={1.8} />
+									</div>
+									<div className="min-w-0 flex-1">
+										<div className="truncate text-[15px] font-semibold">Dashboard</div>
+										<div className="truncate text-[12px] font-medium text-muted-foreground">{topBarTitle}</div>
+									</div>
+									<IconButton
+										label="Refresh dashboard"
+										className="size-9 rounded-2xl hover:bg-muted/70"
+										disabled={isGitStatusRefreshing}
+										onClick={() => void refreshProjectGitStatus(projectFolder)}
+									>
+										<RefreshCw className={cn("size-4", isGitStatusRefreshing ? "animate-spin" : "")} strokeWidth={1.8} />
+									</IconButton>
+								</div>
+
+								<div className="mt-4 grid gap-2">
+									<DashboardRow label="Changes" value={gitStatusSummary(gitStatus)} />
+									<DashboardRow
+										label="Branch"
+										value={gitBranchSummary(gitStatus)}
+										icon={<GitBranch className="size-3.5" strokeWidth={1.8} />}
+									/>
+									<DashboardRow label="Plan" value={planSummary(transcriptItems)} />
+									<DashboardRow
+										label="Sources"
+										value={attachmentSummary(attachments.length, lastSubmittedAttachmentCount)}
+									/>
+								</div>
+							</section>
+						) : null}
 					</div>
-
-					{isDashboardPinned ? (
-						<section
-							aria-label="Session dashboard"
-							className="w-[21rem] max-w-[calc(100vw-3rem)] rounded-[1.5rem] border border-[var(--app-sidebar-border)] bg-white/88 p-4 text-foreground shadow-[0_24px_70px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
-							onPointerDown={(event) => event.stopPropagation()}
-						>
-							<div className="flex items-center gap-3">
-								<div className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-[var(--app-selected-surface)] text-[var(--app-accent)]">
-									<LayoutDashboard className="size-5" strokeWidth={1.8} />
-								</div>
-								<div className="min-w-0 flex-1">
-									<div className="truncate text-[15px] font-semibold">Dashboard</div>
-									<div className="truncate text-[12px] font-medium text-muted-foreground">{topBarTitle}</div>
-								</div>
-								<IconButton
-									label="Refresh dashboard"
-									className="size-9 rounded-2xl hover:bg-muted/70"
-									disabled={isGitStatusRefreshing}
-									onClick={() => void refreshProjectGitStatus(projectFolder)}
-								>
-									<RefreshCw className={cn("size-4", isGitStatusRefreshing ? "animate-spin" : "")} strokeWidth={1.8} />
-								</IconButton>
-							</div>
-
-							<div className="mt-4 grid gap-2">
-								<DashboardRow label="Changes" value={gitStatusSummary(gitStatus)} />
-								<DashboardRow
-									label="Branch"
-									value={gitBranchSummary(gitStatus)}
-									icon={<GitBranch className="size-3.5" strokeWidth={1.8} />}
-								/>
-								<DashboardRow label="Plan" value={planSummary(transcriptItems)} />
-								<DashboardRow
-									label="Sources"
-									value={attachmentSummary(attachments.length, lastSubmittedAttachmentCount)}
-								/>
-							</div>
-						</section>
-					) : null}
 				</div>
 			) : null}
 

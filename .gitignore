@@ -5,3 +5,6 @@ build/
 artifacts/
 .mock-acp-state.json
 acp-mock-server/.mock-acp-state.json
+app/*.xcodeproj/
+app/.build/
+app/DerivedData/

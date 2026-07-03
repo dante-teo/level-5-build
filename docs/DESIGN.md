@@ -42,7 +42,7 @@ The reference direction is a quiet macOS-style workspace: soft translucent surfa
 
 ## 3. Color Tokens
 
-Use the existing Tailwind v4 CSS token system in `app/src/mainview/index.css`. Do not introduce one-off colors in components.
+The retired Electrobun proof of concept keeps its Tailwind v4 CSS token system in `legacy/electrobun-app/src/mainview/index.css`. Native macOS design tokens are deferred to the native design follow-up; until then, use semantic SwiftUI colors/materials in `app/` rather than inventing one-off fixed colors.
 
 Core tokens:
 
@@ -65,11 +65,11 @@ Accent:
 
 ## 4. Typography
 
-Primary font: Barlow.
+Primary product font direction: Barlow.
 
 Monospace font: Departure Mono.
 
-The webview bundles these fonts from `app/src/mainview/assets/fonts/`; do not rely on system-installed fonts for the shipped app.
+The legacy webview bundles these fonts from `legacy/electrobun-app/src/mainview/assets/fonts/`. Native font packaging is deferred to the native design follow-up; do not assume the scaffold has bundled custom fonts yet.
 
 Type scale:
 
@@ -419,23 +419,23 @@ Implementation is accepted only if:
 - No arbitrary styles are introduced.
 - The result feels native, calm, precise, and fast.
 
-## 27. Current App Foundation
+## 27. Legacy Electrobun App Foundation
 
-The app currently renders a code-native full-bleed white gradient background (`.app-gradient-background`) with soft blue, violet, and pink light fields. Future screens should build from this design system rather than continuing as a blank canvas.
+The retired Electrobun proof of concept renders a code-native full-bleed white gradient background (`.app-gradient-background`) with soft blue, violet, and pink light fields. Native macOS token and component implementation is deferred to the native design follow-up.
 
-## 28. shadcn/ui Foundation
+## 28. Legacy shadcn/ui Foundation
 
-A shadcn/ui foundation is set up for future component work, configured manually because Electrobun's Bun + Vite setup is not one of `shadcn init`'s recognized presets.
+A shadcn/ui foundation exists only in the legacy Electrobun app, configured manually because Electrobun's Bun + Vite setup is not one of `shadcn init`'s recognized presets.
 
-- Config: `app/components.json`
+- Config: `legacy/electrobun-app/components.json`
 - Style: `new-york`
 - Base color: `neutral`
 - CSS variables: enabled
 - Icon library: `lucide`
-- Component output: `app/src/mainview/components/ui/`
-- Utility: `cn()` in `app/src/mainview/lib/utils.ts`
+- Component output: `legacy/electrobun-app/src/mainview/components/ui/`
+- Utility: `cn()` in `legacy/electrobun-app/src/mainview/lib/utils.ts`
 
-Add components from within `app/`:
+Add components from within `legacy/electrobun-app/` only when explicitly working on the legacy reference app:
 
 ```bash
 bunx shadcn@latest add <component>
@@ -443,18 +443,18 @@ bunx shadcn@latest add <component>
 
 Double check generated imports resolve correctly against this project's aliases. Auto-detection may guess wrong because the bundler setup is non-standard.
 
-## 29. Path Aliases
+## 29. Legacy Path Aliases
 
-Aliases are configured identically in `app/vite.config.ts` and `app/tsconfig.json`. Update both together when adding new aliases.
+Aliases are configured identically in `legacy/electrobun-app/vite.config.ts` and `legacy/electrobun-app/tsconfig.json`. Update both together when adding new aliases.
 
-- `@/*` -> `app/src/mainview/*`
-- `@shared/*` -> `app/src/shared/*`
+- `@/*` -> `legacy/electrobun-app/src/mainview/*`
+- `@shared/*` -> `legacy/electrobun-app/src/shared/*`
 
-## 30. Styling Implementation
+## 30. Legacy Styling Implementation
 
 Tailwind CSS v4 is CSS-first in this project. There is no `tailwind.config.js`.
 
-Theme tokens and the dark-mode variant live in `app/src/mainview/index.css` as CSS custom properties plus an `@theme inline` block, following shadcn's standard v4 token set. Keep the design tokens in this document aligned with those CSS variables.
+Theme tokens and the dark-mode variant live in `legacy/electrobun-app/src/mainview/index.css` as CSS custom properties plus an `@theme inline` block, following shadcn's standard v4 token set. Native macOS token primitives will live in the native app after the design-token follow-up lands.
 
 ## 31. Window Chrome
 

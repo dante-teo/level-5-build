@@ -213,6 +213,8 @@ Rules:
 - Send is the only primary action in the composer group.
 - In the empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
 - Once a chat has visible transcript content, hide the project footer; project context moves to the top capsule when applicable.
+- The `+` icon button opens the composer's "Add to prompt" menu, a single popover with three stacked groups: an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group, then a `Skills` group, both sourced live from the connected agent. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
+- Slash-command and skill tokens typed or inserted into the composer (e.g. `/plan`, `/workspace-search`) are highlighted using the single accent color, keeping the rest of the typed text at its normal style — do not introduce a second highlight color for this.
 
 ## 13. Chat
 

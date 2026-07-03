@@ -43,7 +43,9 @@ The app's current agent workflow is mock-only, and the mock ACP server is bundle
 
 The sidebar's `All chats` list is backed by app-side in-memory session summaries. A row appears as soon as `session/new` succeeds for the first prompt. The app also keeps an in-memory transcript cache for each known mock session so selecting a previous chat restores message, plan, and tool cards. The mock server still persists protocol session state, but the app-side full transcript cache is reset when the Electrobun main process exits; restart the main process after changing Bun-side RPC handlers or cache behavior.
 
-The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history. Try prompts such as `/plan`, `/fix`, `/test`, `permission`, `fail`, `refuse`, or `max tokens` to exercise different mock UI states.
+The mock server is useful for exercising agent-facing UI before a real agent backend exists: session creation, streamed message chunks, plans, tool calls, diffs, usage updates, slash commands, model selection, permission prompts, cancellation, and session history. Try prompts such as `/plan`, `/fix`, `/test`, `/skills`, `permission`, `fail`, `refuse`, or `max tokens` to exercise different mock UI states.
+
+The composer's `+` ("Add to prompt") menu offers file/folder attachments (sent to the mock server as `resource_link` content blocks — see `docs/ARCHITECTURE.md`), plus browsable "Slash commands" and "Skills" groups sourced live from the mock server's `_mock/list_slash_commands` / `_mock/list_skills` extension methods. Picking a slash command inserts its exact command name (which the mock server's keyword matching understands), but picking an individual skill inserts `/<skill-id>`, which mostly does **not** trigger the mock server's dedicated skills scenario (that needs `/skills` or text containing "skill") — see `docs/ARCHITECTURE.md` for the known mismatch.
 
 For protocol-level testing, spawn the mock directly with:
 

@@ -4,7 +4,7 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is an early Electrobun desktop app shell with a mock-agent chat workflow: a frameless window with a native-feeling React workspace, a light translucent sidebar with mock session management, New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC.
+`app/` is an early Electrobun desktop app shell with a mock-agent chat workflow: a frameless window with a native-feeling React workspace, a light translucent sidebar with mock session management, New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC. The composer's `+` menu lets a user attach a file/folder path, and browse/insert slash commands and skills sourced from the mock agent, so this UI surface can be exercised before real attachment/skill handling exists.
 
 The first shipped agent path is intentionally local and mock-only. On app open, the workspace shows a centered prompt composer and initializes the bundled `acp-mock-server/` only far enough to list persisted sessions; it does not create a new ACP session until the first valid Send. Sending a prompt creates or resumes a mock ACP session and renders streamed mock messages, plans, tool calls, permission requests, errors, and stop reasons.
 
@@ -50,4 +50,4 @@ The app should make code review and agent state easy to scan without turning the
 - A full IDE replacement with editor ownership as the primary interaction.
 - Decorative dashboards that do not help task execution or review.
 - Multiple competing visual languages or per-feature style systems.
-- Real non-mock ACP/provider integration, durable production-grade session history, attachments, mic input, and production approval policy.
+- Real non-mock ACP/provider integration, durable production-grade session history, production-grade attachment handling (the composer can reference a local file/folder path as a mock ACP resource link today, but does not read, embed, or upload file contents), mic input, and production approval policy.

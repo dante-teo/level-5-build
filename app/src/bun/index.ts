@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
+import { ApplicationMenu, BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
 import type {
 	AppRPC,
 	ApprovalModeId,
@@ -16,7 +16,10 @@ import type {
 	MockModelId,
 	MockPermissionRequest,
 	MockPlanItem,
+	MockPromptAttachment,
 	MockSessionSummary,
+	MockSkill,
+	MockSlashCommand,
 	MockToolCall,
 	RespondToMockPermissionParams,
 	StartMockPromptParams,
@@ -205,7 +208,7 @@ class MockAcpClient {
 			const result = asObject(
 				await this.request("session/prompt", {
 					sessionId: this.sessionId,
-					prompt: [{ type: "text", text: params.prompt }],
+					prompt: buildPromptContent(params.prompt, params.attachments),
 				}),
 			);
 			const existingSession = this.sessions.get(this.sessionId);
@@ -254,6 +257,22 @@ class MockAcpClient {
 		} while (cursor);
 
 		return this.sortedSessions();
+	}
+
+	async listSlashCommands(): Promise<MockSlashCommand[]> {
+		await this.ensureProcess();
+		await this.ensureInitialized();
+		const result = asObject(await this.request("_mock/list_slash_commands"));
+		const commands = Array.isArray(result.availableCommands) ? result.availableCommands : [];
+		return commands.map(normalizeSlashCommand);
+	}
+
+	async listSkills(): Promise<MockSkill[]> {
+		await this.ensureProcess();
+		await this.ensureInitialized();
+		const result = asObject(await this.request("_mock/list_skills"));
+		const skills = Array.isArray(result.skills) ? result.skills : [];
+		return skills.map(normalizeSkill);
 	}
 
 	async loadSession({ sessionId }: LoadMockSessionParams): Promise<LoadMockSessionResponse> {
@@ -774,6 +793,38 @@ function normalizeToolCall(value: JsonValue | undefined): MockToolCall {
 	};
 }
 
+function buildPromptContent(prompt: string, attachments: MockPromptAttachment[] | undefined): JsonValue[] {
+	const content: JsonValue[] = [{ type: "text", text: prompt }];
+	for (const attachment of attachments ?? []) {
+		content.push({
+			type: "resource_link",
+			uri: `file://${attachment.path}`,
+			name: attachment.name,
+			...(attachment.type === "directory" ? { description: "Directory" } : {}),
+		});
+	}
+	return content;
+}
+
+function normalizeSlashCommand(value: JsonValue): MockSlashCommand {
+	const object = asObject(value);
+	const input = asObject(object.input);
+	return {
+		name: asString(object.name),
+		description: asString(object.description),
+		hint: asOptionalString(input.hint),
+	};
+}
+
+function normalizeSkill(value: JsonValue): MockSkill {
+	const object = asObject(value);
+	return {
+		id: asString(object.id),
+		name: asString(object.name),
+		description: asString(object.description),
+	};
+}
+
 function normalizeSessionSummary(value: JsonValue | undefined): MockSessionSummary {
 	const object = asObject(value);
 	const meta = asObject(object._meta);
@@ -812,6 +863,26 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 				});
 				return folder && folder.trim().length > 0 ? folder : null;
 			},
+			selectAttachmentFile: async () => {
+				const [file] = await Utils.openFileDialog({
+					startingFolder: homedir(),
+					allowedFileTypes: "*",
+					canChooseFiles: true,
+					canChooseDirectory: false,
+					allowsMultipleSelection: false,
+				});
+				return file && file.trim().length > 0 ? file : null;
+			},
+			selectAttachmentFolder: async () => {
+				const [folder] = await Utils.openFileDialog({
+					startingFolder: homedir(),
+					allowedFileTypes: "*",
+					canChooseFiles: false,
+					canChooseDirectory: true,
+					allowsMultipleSelection: false,
+				});
+				return folder && folder.trim().length > 0 ? folder : null;
+			},
 			startMockPrompt: (params: StartMockPromptParams): StartMockPromptResponse => {
 				const prompt = params.prompt.trim();
 				if (!prompt) {
@@ -830,6 +901,14 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 			listMockSessions: async () => {
 				mockClient ??= new MockAcpClient(sendMockUpdate);
 				return mockClient.listSessions();
+			},
+			listMockSlashCommands: async () => {
+				mockClient ??= new MockAcpClient(sendMockUpdate);
+				return mockClient.listSlashCommands();
+			},
+			listMockSkills: async () => {
+				mockClient ??= new MockAcpClient(sendMockUpdate);
+				return mockClient.listSkills();
 			},
 			loadMockSession: async (params: LoadMockSessionParams) => {
 				if (!mockClient) {
@@ -858,6 +937,29 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 		messages: {},
 	},
 });
+
+// Electrobun's webview doesn't wire up standard text-editing keyboard shortcuts
+// (cmd+a/cmd+c/cmd+v/cmd+x/cmd+z) on its own; they only work once the app
+// registers a native Edit menu with the corresponding roles.
+ApplicationMenu.setApplicationMenu([
+	{
+		submenu: [{ label: "Quit", role: "quit" }],
+	},
+	{
+		label: "Edit",
+		submenu: [
+			{ role: "undo" },
+			{ role: "redo" },
+			{ type: "separator" },
+			{ role: "cut" },
+			{ role: "copy" },
+			{ role: "paste" },
+			{ role: "pasteAndMatchStyle" },
+			{ role: "delete" },
+			{ role: "selectAll" },
+		],
+	},
+]);
 
 mainWindow = new BrowserWindow({
 	title: "Level5 Build",

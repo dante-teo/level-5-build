@@ -31,3 +31,4 @@ Avoid actually launching the GUI (`bun run start` / `electrobun dev`) unless ask
 - Electrobun is not Electron — don't assume Electron APIs/patterns apply.
 - Electrobun's window drag doesn't support native OS window tiling/snap (see `docs/ARCHITECTURE.md`); don't be surprised this doesn't "just work" like a normal window.
 - Tailwind is v4 (CSS-based config in `app/src/mainview/index.css`) — there is no `tailwind.config.js`.
+- Electrobun's webview doesn't wire up standard text-editing shortcuts (cmd+a/c/v/x/z) on its own; they only work because `app/src/bun/index.ts` registers a native `ApplicationMenu` Edit menu with the corresponding roles (see `docs/ARCHITECTURE.md`). Any new text-editing shortcut needs a role/accelerator added there too.

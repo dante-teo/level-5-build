@@ -60,6 +60,26 @@ export type MockSessionSummary = {
 	messageCount: number;
 };
 
+export type MockSlashCommand = {
+	name: string;
+	description: string;
+	hint?: string;
+};
+
+export type MockSkill = {
+	id: string;
+	name: string;
+	description: string;
+};
+
+export type MockPromptAttachmentType = "file" | "directory";
+
+export type MockPromptAttachment = {
+	type: MockPromptAttachmentType;
+	path: string;
+	name: string;
+};
+
 export type MockAgentUpdate =
 	| { kind: "status"; status: MockRunStatus; sessionId?: string; cwd?: string }
 	| MockMessageUpdate
@@ -76,6 +96,7 @@ export type StartMockPromptParams = {
 	cwd?: string | null;
 	model?: MockModelId | string;
 	approvalMode?: ApprovalModeId | string;
+	attachments?: MockPromptAttachment[];
 };
 
 export type StartMockPromptResponse = {
@@ -118,6 +139,14 @@ export type AppRPC = {
 				params: void;
 				response: string | null;
 			};
+			selectAttachmentFile: {
+				params: void;
+				response: string | null;
+			};
+			selectAttachmentFolder: {
+				params: void;
+				response: string | null;
+			};
 			startMockPrompt: {
 				params: StartMockPromptParams;
 				response: StartMockPromptResponse;
@@ -129,6 +158,14 @@ export type AppRPC = {
 			listMockSessions: {
 				params: void;
 				response: MockSessionSummary[];
+			};
+			listMockSlashCommands: {
+				params: void;
+				response: MockSlashCommand[];
+			};
+			listMockSkills: {
+				params: void;
+				response: MockSkill[];
 			};
 			loadMockSession: {
 				params: LoadMockSessionParams;

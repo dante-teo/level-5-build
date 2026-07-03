@@ -4,6 +4,7 @@ import {
 	type MouseEvent,
 	type PointerEvent,
 	type ReactNode,
+	type UIEvent,
 	useEffect,
 	useMemo,
 	useRef,
@@ -16,9 +17,11 @@ import {
 	ChevronDown,
 	Circle,
 	Folder,
+	ListTodo,
 	LoaderCircle,
 	MessageSquarePlus,
 	MoreHorizontal,
+	Paperclip,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
@@ -44,8 +47,12 @@ import type {
 	MockModelId,
 	MockPermissionRequest,
 	MockPlanItem,
+	MockPromptAttachment,
+	MockPromptAttachmentType,
 	MockRunStatus,
 	MockSessionSummary,
+	MockSkill,
+	MockSlashCommand,
 	MockToolCall,
 } from "@shared/rpc";
 
@@ -88,6 +95,8 @@ type RecentProject = {
 	path: string;
 	name: string;
 };
+
+type AttachmentItem = MockPromptAttachment & { id: string };
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 	return (
@@ -180,6 +189,23 @@ function isFolderlessProjectPath(path: string) {
 	return normalized === "~" || normalized === "~/";
 }
 
+const SLASH_TOKEN_PATTERN = /^\/[a-zA-Z0-9_-]+$/;
+
+function renderComposerPreview(text: string): ReactNode {
+	if (!text) {
+		return null;
+	}
+	return text.split(/(\s+)/).map((part, index) =>
+		SLASH_TOKEN_PATTERN.test(part) ? (
+			<span key={index} className="font-semibold text-[var(--app-accent)]">
+				{part}
+			</span>
+		) : (
+			<span key={index}>{part}</span>
+		),
+	);
+}
+
 function sessionProjectFolder(session: MockSessionSummary | undefined) {
 	if (!session || session.isNoProject || isFolderlessProjectPath(session.cwd)) {
 		return null;
@@ -251,10 +277,16 @@ function App() {
 	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 	const [runStatus, setRunStatus] = useState<MockRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
+	const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+	const [slashCommands, setSlashCommands] = useState<MockSlashCommand[]>([]);
+	const [skills, setSkills] = useState<MockSkill[]>([]);
+	const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+	const promptOverlayRef = useRef<HTMLDivElement | null>(null);
 	const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 	const projectMenuRef = useRef<HTMLDivElement | null>(null);
 	const projectSearchRef = useRef<HTMLInputElement | null>(null);
+	const plusMenuRef = useRef<HTMLDivElement | null>(null);
 	const optimisticUserTextRef = useRef<string | null>(null);
 	const pendingPromptProjectFolderRef = useRef<string | null | undefined>(undefined);
 	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
@@ -370,6 +402,7 @@ function App() {
 
 	useEffect(() => {
 		void refreshMockSessions({ reportErrors: false });
+		void refreshComposerMenuData();
 	}, []);
 
 	useEffect(() => {
@@ -432,6 +465,42 @@ function App() {
 			closeProjectMenu();
 		}
 	}, [hasConversation, isRunning, isProjectMenuOpen]);
+
+	useEffect(() => {
+		if (!isPlusMenuOpen) {
+			return;
+		}
+
+		function closeMenu() {
+			setIsPlusMenuOpen(false);
+		}
+
+		function handlePointerDown(event: globalThis.PointerEvent) {
+			if (plusMenuRef.current?.contains(event.target as Node)) {
+				return;
+			}
+			closeMenu();
+		}
+
+		function handleKeyDown(event: globalThis.KeyboardEvent) {
+			if (event.key === "Escape") {
+				closeMenu();
+			}
+		}
+
+		document.addEventListener("pointerdown", handlePointerDown);
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [isPlusMenuOpen]);
+
+	useEffect(() => {
+		if (isRunning && isPlusMenuOpen) {
+			setIsPlusMenuOpen(false);
+		}
+	}, [isRunning, isPlusMenuOpen]);
 
 	useEffect(() => {
 		if (contextMenu && !sessions.some((session) => session.sessionId === contextMenu.sessionId)) {
@@ -544,10 +613,31 @@ function App() {
 		}
 	}
 
+	async function refreshComposerMenuData() {
+		try {
+			const [nextSlashCommands, nextSkills] = await Promise.all([
+				electroview.rpc?.request.listMockSlashCommands() ?? Promise.resolve(undefined),
+				electroview.rpc?.request.listMockSkills() ?? Promise.resolve(undefined),
+			]);
+			if (nextSlashCommands) {
+				setSlashCommands(nextSlashCommands);
+			}
+			if (nextSkills) {
+				setSkills(nextSkills);
+			}
+		} catch (error) {
+			if (isMissingRpcHandlerError(error, "listMockSlashCommands") || isMissingRpcHandlerError(error, "listMockSkills")) {
+				return;
+			}
+			// Non-fatal: the plus menu simply shows empty slash command/skill groups.
+		}
+	}
+
 	function resetConversationPane() {
 		optimisticUserTextRef.current = null;
 		setPrompt("");
 		setTranscriptItems([]);
+		setAttachments([]);
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setStopReason(null);
 	}
@@ -555,6 +645,63 @@ function App() {
 	function closeProjectMenu() {
 		setIsProjectMenuOpen(false);
 		setProjectSearch("");
+	}
+
+	function closePlusMenu() {
+		setIsPlusMenuOpen(false);
+	}
+
+	function addAttachment(type: MockPromptAttachmentType, path: string) {
+		const name = folderDisplayName(path);
+		setAttachments((current) => {
+			if (current.some((attachment) => attachment.type === type && attachment.path === path)) {
+				return current;
+			}
+			return [...current, { id: `${type}-${path}`, type, path, name }];
+		});
+	}
+
+	function removeAttachment(id: string) {
+		setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+	}
+
+	async function handleUploadFile() {
+		closePlusMenu();
+		const file = await electroview.rpc?.request.selectAttachmentFile();
+		if (file) {
+			addAttachment("file", file);
+		}
+	}
+
+	async function handleUploadFolder() {
+		closePlusMenu();
+		const folder = await electroview.rpc?.request.selectAttachmentFolder();
+		if (folder) {
+			addAttachment("directory", folder);
+		}
+	}
+
+	function insertComposerToken(token: string) {
+		const insertion = token.endsWith(" ") ? token : `${token} `;
+		const textarea = textareaRef.current;
+		setPrompt((current) => {
+			if (!textarea) {
+				return `${current}${insertion}`;
+			}
+			const start = textarea.selectionStart ?? current.length;
+			const end = textarea.selectionEnd ?? current.length;
+			return `${current.slice(0, start)}${insertion}${current.slice(end)}`;
+		});
+		closePlusMenu();
+		requestAnimationFrame(() => textarea?.focus());
+	}
+
+	function handleSelectSlashCommand(command: MockSlashCommand) {
+		insertComposerToken(`/${command.name}`);
+	}
+
+	function handleSelectSkill(skill: MockSkill) {
+		insertComposerToken(`/${skill.id}`);
 	}
 
 	function handleResizePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -656,6 +803,7 @@ function App() {
 			cwd: projectFolder,
 			model,
 			approvalMode,
+			attachments: attachments.map(({ type, path, name }) => ({ type, path, name })),
 		});
 		if (!response?.accepted) {
 			pendingPromptProjectFolderRef.current = undefined;
@@ -664,6 +812,7 @@ function App() {
 			setTranscriptItems((current) => upsertErrorItem(current, "The mock agent is already running or the prompt was empty."));
 			return;
 		}
+		setAttachments([]);
 		if (response.sessionId) {
 			setActiveSessionId(response.sessionId);
 			void refreshMockSessions();
@@ -676,6 +825,12 @@ function App() {
 		}
 		event.preventDefault();
 		void handleSend();
+	}
+
+	function handleComposerScroll(event: UIEvent<HTMLTextAreaElement>) {
+		if (promptOverlayRef.current) {
+			promptOverlayRef.current.scrollTop = event.currentTarget.scrollTop;
+		}
 	}
 
 	async function handlePermission(requestId: number | string, optionId: string) {
@@ -953,23 +1108,119 @@ function App() {
 
 						<div className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-visible rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}>
 							<div className="px-6 pt-4">
-								<textarea
-									ref={textareaRef}
-									value={prompt}
-									placeholder="Do anything"
-									aria-label="Message the mock agent"
-									className="block w-full resize-none bg-transparent text-[22px] font-medium leading-6 text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
-									style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
-									onChange={(event) => setPrompt(event.target.value)}
-									onKeyDown={handleComposerKeyDown}
-									disabled={isRunning}
-								/>
+								{attachments.length > 0 ? (
+									<div className="mb-3 flex flex-wrap gap-2">
+										{attachments.map((attachment) => (
+											<AttachmentChip key={attachment.id} attachment={attachment} onRemove={removeAttachment} />
+										))}
+									</div>
+								) : null}
+								<div className="relative">
+									<div
+										ref={promptOverlayRef}
+										aria-hidden="true"
+										className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-[22px] font-medium leading-6 text-foreground"
+									>
+										{renderComposerPreview(prompt)}
+									</div>
+									<textarea
+										ref={textareaRef}
+										value={prompt}
+										placeholder="Do anything"
+										aria-label="Message the mock agent"
+										className="relative block w-full resize-none bg-transparent text-[22px] font-medium leading-6 text-transparent caret-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+										style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
+										onChange={(event) => setPrompt(event.target.value)}
+										onKeyDown={handleComposerKeyDown}
+										onScroll={handleComposerScroll}
+										disabled={isRunning}
+									/>
+								</div>
 							</div>
 
 							<div className="flex items-center gap-3 px-5 pb-3 pt-1">
-								<IconButton label="Add attachment">
-									<Plus className="size-5" strokeWidth={1.9} />
-								</IconButton>
+								<div ref={plusMenuRef} className="relative">
+									<IconButton
+										label="Add to prompt"
+										disabled={isRunning}
+										aria-haspopup="menu"
+										aria-expanded={isPlusMenuOpen}
+										onClick={() => setIsPlusMenuOpen((value) => !value)}
+									>
+										<Plus className="size-5" strokeWidth={1.9} />
+									</IconButton>
+
+									{isPlusMenuOpen ? (
+										<div
+											role="menu"
+											aria-label="Add to prompt"
+											className="electrobun-webkit-app-region-no-drag app-scrollbar-transparent absolute bottom-[calc(100%+8px)] left-0 z-30 max-h-[420px] w-[320px] overflow-y-auto rounded-[24px] border border-[var(--app-sidebar-border)] bg-white/92 p-2 text-foreground shadow-[0_18px_46px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+											onDoubleClick={(event) => event.stopPropagation()}
+											onPointerDown={(event) => event.stopPropagation()}
+										>
+											<div className="flex flex-col gap-1">
+												<ComposerMenuItem
+													icon={<Paperclip className="size-4" strokeWidth={1.8} />}
+													label="Upload file"
+													onClick={() => void handleUploadFile()}
+												/>
+												<ComposerMenuItem
+													icon={<Folder className="size-4" strokeWidth={1.8} />}
+													label="Upload folder"
+													onClick={() => void handleUploadFolder()}
+												/>
+												<ComposerMenuItem
+													icon={<ListTodo className="size-4" strokeWidth={1.8} />}
+													label="Plan mode"
+													description="Coming soon"
+													disabled
+												/>
+											</div>
+
+											<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
+												<div className="px-2 pb-1 text-[12px] font-semibold text-muted-foreground">Slash commands</div>
+												{slashCommands.length === 0 ? (
+													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
+														No slash commands available
+													</div>
+												) : (
+													<div className="flex flex-col gap-1">
+														{slashCommands.map((command) => (
+															<ComposerMenuItem
+																key={command.name}
+																icon={<span className="font-mono text-[13px]">/</span>}
+																label={command.name}
+																description={command.description}
+																onClick={() => handleSelectSlashCommand(command)}
+															/>
+														))}
+													</div>
+												)}
+											</div>
+
+											<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
+												<div className="px-2 pb-1 text-[12px] font-semibold text-muted-foreground">Skills</div>
+												{skills.length === 0 ? (
+													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
+														No skills available
+													</div>
+												) : (
+													<div className="flex flex-col gap-1">
+														{skills.map((skill) => (
+															<ComposerMenuItem
+																key={skill.id}
+																icon={<Sparkles className="size-4" strokeWidth={1.8} />}
+																label={skill.name}
+																description={skill.description}
+																onClick={() => handleSelectSkill(skill)}
+															/>
+														))}
+													</div>
+												)}
+											</div>
+										</div>
+									) : null}
+								</div>
 								<SelectControl
 									icon={<ShieldCheck className="size-4 text-[var(--app-accent)]" strokeWidth={1.8} />}
 									label="Approval mode"
@@ -1177,17 +1428,73 @@ function App() {
 	);
 }
 
-function IconButton({ children, label, disabled = false }: { children: ReactNode; label: string; disabled?: boolean }) {
+type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> & {
+	children: ReactNode;
+	label: string;
+};
+
+function IconButton({ children, label, className, ...props }: IconButtonProps) {
 	return (
 		<button
 			type="button"
 			aria-label={label}
 			title={label}
-			disabled={disabled}
-			className="flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-white/65 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
+			className={cn(
+				"flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-white/65 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45",
+				className,
+			)}
+			{...props}
 		>
 			{children}
 		</button>
+	);
+}
+
+function ComposerMenuItem({
+	icon,
+	label,
+	description,
+	disabled = false,
+	onClick,
+}: {
+	icon: ReactNode;
+	label: string;
+	description?: string;
+	disabled?: boolean;
+	onClick?: () => void;
+}) {
+	return (
+		<button
+			type="button"
+			role="menuitem"
+			disabled={disabled}
+			onClick={onClick}
+			className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-[14px] font-semibold text-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35"
+		>
+			<span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
+			<span className="min-w-0 flex-1 truncate">{label}</span>
+			{description ? (
+				<span className="max-w-[45%] shrink-0 truncate text-[13px] font-normal text-muted-foreground">{description}</span>
+			) : null}
+		</button>
+	);
+}
+
+function AttachmentChip({ attachment, onRemove }: { attachment: AttachmentItem; onRemove: (id: string) => void }) {
+	const Icon = attachment.type === "directory" ? Folder : Paperclip;
+	return (
+		<span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-muted/70 px-3 py-1.5 text-[13px] font-medium text-foreground">
+			<Icon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+			<span className="max-w-48 truncate">{attachment.name}</span>
+			<button
+				type="button"
+				aria-label={`Remove ${attachment.name}`}
+				className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/70 hover:text-foreground"
+				onClick={() => onRemove(attachment.id)}
+			>
+				<X className="size-3" strokeWidth={2} />
+			</button>
+		</span>
 	);
 }
 

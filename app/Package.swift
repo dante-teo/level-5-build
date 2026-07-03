@@ -15,13 +15,27 @@ let package = Package(
         .library(
             name: "Level5Core",
             targets: ["Level5Core"]
+        ),
+        .library(
+            name: "Level5Design",
+            targets: ["Level5Design"]
         )
     ],
     targets: [
         .executableTarget(
             name: "Level5BuildApp",
-            dependencies: ["Level5Core"],
-            path: "Sources/Level5BuildApp"
+            dependencies: ["Level5Core", "Level5Design"],
+            path: "Sources/Level5BuildApp",
+            resources: [
+                .process("Resources")
+            ]
+        ),
+        .target(
+            name: "Level5Design",
+            path: "Sources/Level5Design",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .target(
             name: "Level5Core",
@@ -36,6 +50,11 @@ let package = Package(
             name: "Level5BuildAppTests",
             dependencies: ["Level5BuildApp"],
             path: "Tests/Level5BuildAppTests"
+        ),
+        .testTarget(
+            name: "Level5DesignTests",
+            dependencies: ["Level5Design"],
+            path: "Tests/Level5DesignTests"
         )
     ]
 )

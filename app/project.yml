@@ -30,6 +30,36 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.anvia.level5.build.core
+  Level5Design:
+    type: framework
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/Level5Design
+        excludes:
+          - Resources
+      - path: Sources/Level5Design/Resources/Fonts/Barlow-Regular.otf
+        buildPhase: resources
+      - path: Sources/Level5Design/Resources/Fonts/Barlow-Medium.otf
+        buildPhase: resources
+      - path: Sources/Level5Design/Resources/Fonts/Barlow-SemiBold.otf
+        buildPhase: resources
+      - path: Sources/Level5Design/Resources/Fonts/Barlow-Bold.otf
+        buildPhase: resources
+      - path: Sources/Level5Design/Resources/Fonts/DepartureMono-Regular.otf
+        buildPhase: resources
+      - path: Sources/Level5Design/Resources/Assets/Level5Mark.png
+        buildPhase: resources
+    info:
+      path: Generated/Level5Design-Info.plist
+      properties:
+        CFBundleName: Level5Design
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleIdentifier: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.anvia.level5.build.design
   Level5BuildApp:
     type: application
     platform: macOS
@@ -37,9 +67,14 @@ targets:
     productName: Level5 Build
     sources:
       - path: Sources/Level5BuildApp
+        excludes:
+          - Resources
+      - path: Sources/Level5BuildApp/Resources/WindowBackground.jpeg
+        buildPhase: resources
       - path: Resources/Assets.xcassets
     dependencies:
       - target: Level5Core
+      - target: Level5Design
     info:
       path: Generated/Info.plist
       properties:
@@ -83,14 +118,27 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.anvia.level5.build.app.tests
+  Level5DesignTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/Level5DesignTests
+    dependencies:
+      - target: Level5Design
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.anvia.level5.build.design.tests
 schemes:
   Level5 Build:
     build:
       targets:
         Level5BuildApp: all
         Level5Core: all
+        Level5Design: all
         Level5CoreTests: [test]
         Level5BuildAppTests: [test]
+        Level5DesignTests: [test]
     run:
       config: Debug
     test:
@@ -98,5 +146,6 @@ schemes:
       targets:
         - Level5CoreTests
         - Level5BuildAppTests
+        - Level5DesignTests
     archive:
       config: Release

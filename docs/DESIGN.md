@@ -40,9 +40,31 @@ Avoid:
 
 The reference direction is a quiet macOS-style workspace: soft translucent surfaces, crisp type, subtle shadows, generous breathing room, and a restrained blue-violet accent used only for state and primary action.
 
-## 3. Color Tokens
+## 3. Native Design Primitives
 
-The retired Electrobun proof of concept keeps its Tailwind v4 CSS token system in `legacy/electrobun-app/src/mainview/index.css`. Native macOS design tokens are deferred to the native design follow-up; until then, use semantic SwiftUI colors/materials in `app/` rather than inventing one-off fixed colors.
+Native SwiftUI design primitives live in `app/Sources/Level5Design/`. App views should import `Level5Design` and consume typed `L5` APIs instead of hardcoding one-off colors, font sizes, radii, spacing, shadows, materials, or resource names.
+
+The module owns:
+
+- `L5Color`: adaptive semantic color tokens that preserve the Level5 light-mode direction and provide dark-mode-safe variants.
+- `L5Font`: display, heading, body, caption, and monospace helpers backed by bundled Barlow and Departure Mono font resources.
+- `L5Spacing`, `L5Radius`, and `L5Elevation`: documented token scales for layout rhythm, corner treatment, and quiet depth.
+- `L5Asset`: typed access to in-app identity artwork such as the Level5 mark.
+- `L5ButtonStyle` and `l5Surface`, `l5InputSurface`, `l5CompactControl` modifiers for primitive controls and glass/material surfaces.
+
+`Level5BuildApp` calls `Level5DesignResources.registerFonts()` during startup. The app target still owns the bundle app icon in `app/Resources/Assets.xcassets/AppIcon.appiconset`; `Level5Design` owns only reusable in-app identity resources.
+
+App icon artwork is owned by the app target, not by `Level5Design`. The source image is `app/Resources/AppIconSource.png`; generated icon sizes live in `app/Resources/Assets.xcassets/AppIcon.appiconset`. Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
+
+The retired Electrobun proof of concept remains useful for product direction, but native SwiftUI should not clone its Tailwind gradients or CSS implementation. Prefer system-adaptive macOS materials and standard controls. Where current SDKs expose Liquid Glass APIs, use them behind availability checks for custom app-specific surfaces; on the macOS 14 deployment target, fall back to SwiftUI materials such as `.regularMaterial` and `.thinMaterial`.
+
+Issue #5 should use these primitives to build the real sidebar, workspace, composer, and window shell. This design module intentionally stops at reusable primitives.
+
+The current `ContentView` uses `app/Sources/Level5BuildApp/Resources/WindowBackground.jpeg` only as a temporary visual aid for checking the glass/material treatment. Do not treat that image as product design direction or a reusable design-system asset.
+
+## 4. Color Tokens
+
+The retired Electrobun proof of concept keeps its Tailwind v4 CSS token system in `legacy/electrobun-app/src/mainview/index.css`. Native macOS design tokens are implemented in `Level5Design`; use those typed tokens and semantic SwiftUI materials rather than inventing one-off fixed colors.
 
 Core tokens:
 
@@ -63,13 +85,13 @@ Accent:
 - Accent coverage should never exceed roughly 5% of the viewport.
 - Use accent for selected navigation, focused controls, primary actions, active tabs, and small state indicators.
 
-## 4. Typography
+## 5. Typography
 
 Primary product font direction: Barlow.
 
 Monospace font: Departure Mono.
 
-The legacy webview bundles these fonts from `legacy/electrobun-app/src/mainview/assets/fonts/`. Native font packaging is deferred to the native design follow-up; do not assume the scaffold has bundled custom fonts yet.
+Native packaging now bundles these fonts in `app/Sources/Level5Design/Resources/Fonts/`. Use `L5Font` from `Level5Design` rather than constructing arbitrary `Font.custom` calls in app views.
 
 Type scale:
 
@@ -82,7 +104,7 @@ Type scale:
 
 Never introduce arbitrary font sizes. Match display text to its container: use compact text inside sidebars, panels, cards, buttons, and toolbars.
 
-## 5. Spacing Scale
+## 6. Spacing Scale
 
 Only use these spacing values:
 
@@ -99,7 +121,7 @@ Only use these spacing values:
 
 No arbitrary spacing values. Layout rhythm should feel calm and readable, not loose or web-hero-like.
 
-## 6. Radius
+## 7. Radius
 
 Use only these radius values:
 
@@ -112,7 +134,7 @@ Use only these radius values:
 
 Do not invent new radius values.
 
-## 7. Shadow
+## 8. Shadow
 
 Use only four elevations:
 
@@ -123,7 +145,7 @@ Use only four elevations:
 
 Never stack heavy shadows. Shadows should create quiet depth, not a floating-card collage.
 
-## 8. App Layout
+## 9. App Layout
 
 The primary layout is:
 
@@ -142,7 +164,7 @@ Rules:
 
 The first screen should feel like a real app workspace, not a landing page.
 
-## 9. Sidebar
+## 10. Sidebar
 
 Width: user-resizable from `260px` to `420px`; collapsed width is `0px`.
 
@@ -166,7 +188,7 @@ Rules:
 - Bottom account/settings areas may use a quiet divider.
 - The floating app capsule sits just outside the sidebar edge. Only the collapse/expand icon inside the capsule is clickable; app logo/name text are display-only.
 
-## 10. Workspace
+## 11. Workspace
 
 The workspace is the primary content area.
 
@@ -178,7 +200,7 @@ Rules:
 - Preserve open space when the conversation is empty.
 - Let the bottom composer anchor the interaction model.
 
-## 11. Top Bar
+## 12. Top Bar
 
 Height: `56`.
 
@@ -204,7 +226,7 @@ Rules:
 - The dashboard should reserve workspace width only when the remaining conversation pane can stay readable. On narrower windows it remains an overlay popover instead of forcing the chat column below its useful width.
 - Dashboard layout thresholds should be defined in design units such as rem or component/token sizes, not arbitrary pixel breakpoints.
 
-## 12. Prompt Composer
+## 13. Prompt Composer
 
 The composer is docked near the bottom of the workspace.
 
@@ -225,7 +247,7 @@ Rules:
 - When a permission request is pending (approval mode `ask`, or any request the client couldn't auto-resolve), the approval prompt takes over the composer's input/toolbar area entirely, inside the same rounded container — it does not appear as a separate transcript card, and the prompt textarea/toolbar are inaccessible until it's answered. It shows a question, an optional muted code/detail block (collapsible past ~220 characters via an `Expand`/`Collapse` toggle), a numbered list of the request's options (arrow keys to move the highlight, Enter or click to choose), and a closing "tell the agent what to do differently" row that expands into a text field with `Skip`/`Submit`; submitting text there answers with a reject-kind option and hands the typed text to the composer as the next draft.
 - The approval prompt has no separate cancel/dismiss control — the only way out is answering it (or its own "tell the agent what to do differently" path). Because of that, if responding fails for any reason (a stale request, a dropped RPC call), the composer must still give control back: it clears the pending prompt and shows an error card rather than leaving the takeover stuck with no way to type or send again.
 
-## 13. Chat
+## 14. Chat
 
 Assistant messages:
 
@@ -247,7 +269,7 @@ Rules:
 - Native transcript scrollbars should stay hidden; scrolling must still work.
 - Because the composer visually overlays the tail of the scroll layer, the transcript reserves matching space via a real spacer element sized to the composer's live height (tracked with `ResizeObserver`), not a static padding guess, and uses `use-stick-to-bottom` to stay pinned to the true bottom as content streams in or the composer resizes (e.g. an approval prompt collapsing back to the normal composer). Do not swap this for `scrollIntoView()`/`Element.scrollIntoView` on an end-of-list sentinel — it aligns to the viewport edge, not past the reserved spacer, and silently leaves the latest content tucked behind the composer.
 
-## 14. Review Panel
+## 15. Review Panel
 
 The review experience may appear in two modes:
 

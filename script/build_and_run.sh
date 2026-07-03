@@ -16,16 +16,34 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+ASSET_CATALOG="$APP_DIR/Resources/Assets.xcassets"
+ASSET_INFO_PLIST="$APP_CONTENTS/assetcatalog_generated_info.plist"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 swift build --package-path "$APP_DIR" --product "$PRODUCT_NAME"
 BUILD_BINARY="$(swift build --package-path "$APP_DIR" --show-bin-path)/$PRODUCT_NAME"
+BUILD_BIN_DIR="$(dirname "$BUILD_BINARY")"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 chmod +x "$APP_BINARY"
+
+if [[ -d "$ASSET_CATALOG" ]]; then
+  xcrun actool "$ASSET_CATALOG" \
+    --compile "$APP_RESOURCES" \
+    --platform macosx \
+    --minimum-deployment-target "$MIN_SYSTEM_VERSION" \
+    --app-icon AppIcon \
+    --output-partial-info-plist "$ASSET_INFO_PLIST" >/dev/null
+fi
+
+for resource_bundle in "$BUILD_BIN_DIR"/Level5Build_*.bundle; do
+  if [[ -d "$resource_bundle" ]]; then
+    cp -R "$resource_bundle" "$APP_BUNDLE/"
+  fi
+done
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -38,6 +56,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIconName</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

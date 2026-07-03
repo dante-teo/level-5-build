@@ -2,6 +2,12 @@
 
 A standalone ACP v1 mock agent for testing clients. It speaks newline-delimited JSON-RPC over stdio and keeps stdout protocol-clean.
 
+## Native 1.0 role
+
+This package is active shared test infrastructure, not Electrobun POC code. The native macOS 1.0 plan keeps `acp-mock-server/` at the repository root so native runtime and UI tests can run without Devin authentication. See `../docs/adr/0001-native-macos-client.md`.
+
+Do not move this package into `legacy/` when the Electrobun app moves to `legacy/electrobun-app/`.
+
 ## Run
 
 ```bash

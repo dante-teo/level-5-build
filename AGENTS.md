@@ -1,6 +1,6 @@
 # Agent notes
 
-This repo hosts `app/`, an Electrobun (Bun + native OS webview) desktop app using React, Tailwind CSS v4, and a manually-configured shadcn/ui foundation. See `docs/ARCHITECTURE.md` for the technical architecture and `docs/DESIGN.md` for styling/component conventions.
+This repo currently hosts `app/`, an Electrobun (Bun + native OS webview) desktop app using React, Tailwind CSS v4, and a manually-configured shadcn/ui foundation. The accepted native macOS 1.0 direction is documented in `docs/adr/0001-native-macos-client.md`: during scaffold work, the Electrobun POC moves to `legacy/electrobun-app/`, the native app takes over `app/`, and `acp-mock-server/` remains active shared test infrastructure. See `docs/ARCHITECTURE.md` for the technical architecture and `docs/DESIGN.md` for styling/component conventions.
 
 ## Setup & running
 

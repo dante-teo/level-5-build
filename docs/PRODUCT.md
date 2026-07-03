@@ -14,6 +14,12 @@ The sidebar shows an `All chats` section backed by startup ACP `session/list` pl
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
 
+## Native 1.0 Direction
+
+The accepted 1.0 direction is a native macOS client, recorded in [ADR 0001](adr/0001-native-macos-client.md). The native app will take over `app/`; the current Electrobun proof of concept will move to `legacy/electrobun-app/` during scaffold work and remain reference-only.
+
+The product target stays the same: a calm desktop AI coding agent centered on chat, transparent agent progress, permissions, review diffs, commit, and revert. `acp-mock-server/` remains active shared test infrastructure for native development and CI.
+
 ## Product Direction
 
 The target product is a calm desktop AI coding agent with these core surfaces:

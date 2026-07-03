@@ -4,11 +4,18 @@ Level5 Build is an Electrobun desktop app: Bun + a native OS webview (no bundled
 
 Currently the app is an early desktop AI coding agent shell: a single frameless window with a code-native white gradient backdrop, light translucent chrome, a composer-first agent workspace, and the runtime, RPC, styling, and component foundation in place for the product workspace.
 
+## Native 1.0 transition
+
+This directory currently contains the Electrobun proof of concept. The accepted 1.0 direction is a native macOS client; see `../docs/adr/0001-native-macos-client.md`.
+
+During native scaffold work, this Electrobun app will move to `../legacy/electrobun-app/` for reference, and the new native macOS app will take over `app/`. Until that scaffold lands, the commands below remain the current way to run and verify the POC.
+
 See also:
 
 - `../docs/PRODUCT.md` for product direction
 - `../docs/ARCHITECTURE.md` for runtime architecture
 - `../docs/DESIGN.md` for visual and interaction rules
+- `../docs/adr/0001-native-macos-client.md` for the native macOS 1.0 decision
 
 ## Getting Started
 

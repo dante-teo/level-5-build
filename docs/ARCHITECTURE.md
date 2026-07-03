@@ -1,5 +1,11 @@
 # Architecture
 
+## Native macOS 1.0 direction
+
+[ADR 0001: Native macOS Client for 1.0](adr/0001-native-macos-client.md) defines the accepted migration direction. The native macOS client will take over `app/`, and the current Electrobun proof of concept will move to `legacy/electrobun-app/` during scaffold work.
+
+`acp-mock-server/` remains active shared test infrastructure for the native client and future clients. It must not move into `legacy/` with the Electrobun proof of concept.
+
 ## Repo layout
 
 This repo currently hosts:

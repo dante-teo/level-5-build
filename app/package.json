@@ -19,6 +19,7 @@
 		"release:cask": "bun scripts/emit-homebrew-cask.ts"
 	},
 	"dependencies": {
+		"ajv": "^8.20.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"electrobun": "1.18.1",

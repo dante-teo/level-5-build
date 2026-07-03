@@ -134,19 +134,27 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 
 ### Mock ACP client flow
 
-`app/src/bun/index.ts` contains a small stdio JSON-RPC client for local mock-agent development. It:
+The app-side mock workflow is split between a reusable ACP protocol core in `app/src/bun/acp/` and the mock-session adapter in `app/src/bun/index.ts`.
+
+`app/src/bun/acp/` owns the newline-delimited JSON-RPC transport, vendored ACP `v0.11.3` schema validation, typed lifecycle errors, request timeouts, buffered notifications, and the turn idle watchdog. The core is intentionally provider-agnostic enough to reuse later, but it is currently wired only to the local mock server.
+
+`app/src/bun/index.ts` contains the local mock-agent adapter. It:
 
 - resolves bundled `acp-mock-server/src/index.ts` lazily when sessions are first listed or a prompt is first sent, by searching upward from the running process cwd and bundled main file location;
 - spawns the mock server with the app's Bun runtime, with protocol stdout/stderr kept separate;
 - stores mock server state under `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set;
 - sends `initialize`, then `session/new`, then a mock config update for the model, then `session/prompt`;
 - when the mock server sends `session/request_permission`, auto-responds with an "allow" option and emits an informational note if the current approval mode is `auto` or `full-access`; otherwise surfaces the request to the webview as before;
+- rejects timed-out or failed ACP requests through the shared transport cleanup path, so pending requests do not stay live after reset, process exit, or timeout;
+- watches active prompt turns for inbound ACP activity. If a turn goes silent past the configured idle budget, the adapter sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, rejects local pending requests, and resets the mock subprocess so stale turn output cannot leak into the next prompt;
 - reuses the current mock session for subsequent prompts in the same cwd;
 - closes and recreates the mock session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
 - keeps an app-side in-memory map of session summaries so the sidebar can show a newly created session immediately after `session/new`;
 - keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, and tool calls, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
 - normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
+
+The default prompt idle timeout is 120 seconds and can be overridden for local testing with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS`.
 
 The sidebar session list is populated on app open from ACP `session/list`. This startup list pass is background hydration: failures should not create transcript content or force the workspace out of its empty-chat state. Full transcript caches are still in memory and are reset when the main process exits; persisted sessions loaded after relaunch replay through ACP.
 

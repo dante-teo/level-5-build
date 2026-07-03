@@ -3,6 +3,18 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApplicationMenu, BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
+import { AcpClient } from "./acp/client";
+import { AcpError } from "./acp/errors";
+import { CLIENT_METHODS } from "./acp/schema";
+import {
+	AcpJsonRpcTransport,
+	type AcpNotification,
+	type AcpServerRequest,
+	type JsonObject,
+	type JsonValue,
+	type RpcId,
+} from "./acp/transport";
+import { startAcpTurnIdleWatchdog, type AcpTurnIdleWatchdog } from "./acp/watchdog";
 import { APPROVAL_MODE_LABELS } from "../shared/rpc";
 import type {
 	AppRPC,
@@ -26,7 +38,7 @@ import type {
 	RespondToMockPermissionParams,
 	StartMockPromptParams,
 	StartMockPromptResponse,
-} from "@shared/rpc";
+} from "../shared/rpc";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -35,31 +47,9 @@ const MOCK_APPROVAL_MODES = new Set<ApprovalModeId>(["ask", "auto", "full-access
 const DEFAULT_MODEL: MockModelId = "mock-pro";
 const DEFAULT_APPROVAL_MODE: ApprovalModeId = "ask";
 
-type JsonPrimitive = string | number | boolean | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-type JsonObject = { [key: string]: JsonValue };
-type RpcId = string | number | null;
-type RpcRequest = {
-	jsonrpc: "2.0";
-	id: RpcId;
-	method: string;
-	params?: JsonValue;
-};
-type RpcNotification = {
-	jsonrpc: "2.0";
-	method: string;
-	params?: JsonValue;
-};
-type RpcResponse =
-	| { jsonrpc: "2.0"; id: RpcId; result: JsonValue }
-	| { jsonrpc: "2.0"; id: RpcId; error: { code: number; message: string; data?: JsonValue } };
-type RpcMessage = RpcRequest | RpcNotification | RpcResponse;
-type PendingRequest = {
-	resolve: (value: JsonValue) => void;
-	reject: (error: Error) => void;
-};
-
 const bundledMainDir = dirname(fileURLToPath(import.meta.url));
+const ACP_TURN_IDLE_TIMEOUT_MS = Number(process.env.LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS ?? "120000");
+const ACP_TURN_IDLE_CHECK_INTERVAL_MS = 2_000;
 
 // Check if Vite dev server is running for HMR
 async function getMainViewUrl(): Promise<string> {
@@ -140,34 +130,34 @@ function resolveCwd(cwd: string | null | undefined): string {
 	return cwd;
 }
 
-function asObject(value: JsonValue | undefined): JsonObject {
+function asObject(value: unknown): JsonObject {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		return {};
 	}
 	return value as JsonObject;
 }
 
-function asString(value: JsonValue | undefined, fallback = ""): string {
+function asString(value: unknown, fallback = ""): string {
 	return typeof value === "string" ? value : fallback;
 }
 
-function asOptionalString(value: JsonValue | undefined): string | undefined {
+function asOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-function asNumber(value: JsonValue | undefined, fallback = 0): number {
+function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 class MockAcpClient {
 	private process: Bun.PipedSubprocess | null = null;
 	private stdin: Bun.PipedSubprocess["stdin"] | null = null;
-	private nextId = 1;
-	private stdoutBuffer = "";
-	private readonly pending = new Map<RpcId, PendingRequest>();
+	private transport: AcpJsonRpcTransport | null = null;
+	private acp: AcpClient | null = null;
 	private readonly permissionRequests = new Map<RpcId, MockPermissionRequest>();
 	private readonly sessions = new Map<string, MockSessionSummary>();
 	private readonly transcripts = new Map<string, MockAgentUpdate[]>();
+	private turnWatchdog: AcpTurnIdleWatchdog | null = null;
 	private initialized = false;
 	private sessionId: string | null = null;
 	private currentCwd: string | null = null;
@@ -200,15 +190,16 @@ class MockAcpClient {
 				throw new Error("Mock ACP session was not created.");
 			}
 
-			await this.request("session/set_config_option", {
+			await this.requireAcp().setConfigOption({
 				sessionId: this.sessionId,
 				configId: "model",
 				value: model,
 			});
 
 			this.emit({ kind: "status", status: "running", cwd, sessionId: this.sessionId });
+			this.startTurnWatchdog();
 			const result = asObject(
-				await this.request("session/prompt", {
+				await this.requireAcp().prompt({
 					sessionId: this.sessionId,
 					prompt: buildPromptContent(params.prompt, params.attachments),
 				}),
@@ -230,6 +221,7 @@ class MockAcpClient {
 			});
 			this.emit({ kind: "status", status: "error", cwd, sessionId: this.sessionId ?? undefined });
 		} finally {
+			this.stopTurnWatchdog();
 			this.running = false;
 		}
 	}
@@ -239,7 +231,9 @@ class MockAcpClient {
 			return false;
 		}
 		this.permissionRequests.delete(requestId);
-		this.writeMessage({ jsonrpc: "2.0", id: requestId, result: { outcome: { optionId } } });
+		this.turnWatchdog?.setAwaitingHuman(false);
+		this.turnWatchdog?.touch();
+		this.requireAcp().respondSuccess(requestId, { outcome: { optionId } });
 		return true;
 	}
 
@@ -249,7 +243,7 @@ class MockAcpClient {
 		let cursor: string | undefined;
 		do {
 			const result = asObject(
-				await this.request("session/list", cursor ? { cursor } : {}),
+				await this.requireAcp().listSessions(cursor ? { cursor } : undefined),
 			);
 			const sessionValues = Array.isArray(result.sessions) ? result.sessions : [];
 			for (const sessionValue of sessionValues) {
@@ -264,7 +258,7 @@ class MockAcpClient {
 	async listSlashCommands(): Promise<MockSlashCommand[]> {
 		await this.ensureProcess();
 		await this.ensureInitialized();
-		const result = asObject(await this.request("_mock/list_slash_commands"));
+		const result = asObject(await this.requireAcp().requestExtension("_mock/list_slash_commands"));
 		const commands = Array.isArray(result.availableCommands) ? result.availableCommands : [];
 		return commands.map(normalizeSlashCommand);
 	}
@@ -272,7 +266,7 @@ class MockAcpClient {
 	async listSkills(): Promise<MockSkill[]> {
 		await this.ensureProcess();
 		await this.ensureInitialized();
-		const result = asObject(await this.request("_mock/list_skills"));
+		const result = asObject(await this.requireAcp().requestExtension("_mock/list_skills"));
 		const skills = Array.isArray(result.skills) ? result.skills : [];
 		return skills.map(normalizeSkill);
 	}
@@ -295,12 +289,14 @@ class MockAcpClient {
 			await this.ensureInitialized();
 			this.permissionRequests.clear();
 			const cachedTranscript = this.transcripts.get(sessionId);
+			const acp = this.requireAcp();
+			const sessionParams = {
+				sessionId,
+				cwd: session.cwd,
+				mcpServers: [],
+			};
 			const result = asObject(
-				await this.request(cachedTranscript ? "session/resume" : "session/load", {
-					sessionId,
-					cwd: session.cwd,
-					mcpServers: [],
-				}),
+				await (cachedTranscript ? acp.resumeSession(sessionParams) : acp.loadSession(sessionParams)),
 			);
 			this.sessionId = sessionId;
 			this.currentCwd = session.cwd;
@@ -327,7 +323,7 @@ class MockAcpClient {
 		try {
 			await this.ensureProcess();
 			await this.ensureInitialized();
-			await this.request("session/delete", { sessionId });
+			await this.requireAcp().deleteSession({ sessionId });
 			this.permissionRequests.clear();
 			this.sessions.delete(sessionId);
 			this.transcripts.delete(sessionId);
@@ -348,7 +344,7 @@ class MockAcpClient {
 		}
 		this.permissionRequests.clear();
 		if (this.sessionId) {
-			await this.request("session/close", { sessionId: this.sessionId }).catch(() => undefined);
+			await this.requireAcp().closeSession({ sessionId: this.sessionId }).catch(() => undefined);
 		}
 		this.sessionId = null;
 		this.currentCwd = null;
@@ -358,15 +354,15 @@ class MockAcpClient {
 
 	async reset(): Promise<void> {
 		this.running = false;
-		for (const [, pending] of this.pending) {
-			pending.reject(new Error("Mock ACP client reset."));
-		}
-		this.pending.clear();
+		this.stopTurnWatchdog();
+		this.transport?.failAll(new AcpError("transport_failure", "Mock ACP client reset."));
 		this.permissionRequests.clear();
 		this.stdin?.end();
 		this.stdin = null;
 		this.process?.kill();
 		this.process = null;
+		this.transport = null;
+		this.acp = null;
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
@@ -396,6 +392,23 @@ class MockAcpClient {
 		});
 		this.process = subprocess;
 		this.stdin = subprocess.stdin;
+		this.transport = new AcpJsonRpcTransport({
+			writeLine: (line) => {
+				if (!this.stdin) {
+					throw new AcpError("transport_failure", "Mock ACP server is not running.");
+				}
+				this.stdin.write(`${line}\n`);
+			},
+			onServerRequest: (request) => this.handleServerRequest(request),
+			onNotification: (notification) => this.handleNotification(notification),
+			onDiagnostic: ({ error }) => {
+				if (error.code === "transport_failure") {
+					this.emit({ kind: "error", message: error.message });
+				}
+			},
+			onActivity: () => this.turnWatchdog?.touch(),
+		});
+		this.acp = new AcpClient(this.transport);
 		void this.readStdout(subprocess.stdout);
 		void this.readStderr(subprocess.stderr);
 		void this.watchExit(subprocess);
@@ -406,7 +419,7 @@ class MockAcpClient {
 			return;
 		}
 
-		await this.request("initialize", {
+		await this.requireAcp().initialize({
 			protocolVersion: 1,
 			clientInfo: { name: "level5-build", version: "0.0.0" },
 			clientCapabilities: {
@@ -422,13 +435,13 @@ class MockAcpClient {
 			return;
 		}
 		if (this.sessionId && this.currentCwd !== cwd) {
-			await this.request("session/close", { sessionId: this.sessionId }).catch(() => undefined);
+			await this.requireAcp().closeSession({ sessionId: this.sessionId }).catch(() => undefined);
 			this.sessionId = null;
 			this.currentCwd = null;
 		}
 
 		const result = asObject(
-			await this.request("session/new", {
+			await this.requireAcp().createSession({
 				cwd,
 				mcpServers: [],
 			}),
@@ -494,19 +507,60 @@ class MockAcpClient {
 		}
 	}
 
-	private request(method: string, params?: JsonValue): Promise<JsonValue> {
-		const id = this.nextId++;
-		this.writeMessage({ jsonrpc: "2.0", id, method, params });
-		return new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+	private startTurnWatchdog(): void {
+		this.stopTurnWatchdog();
+		this.turnWatchdog = startAcpTurnIdleWatchdog({
+			idleTimeoutMs: Number.isFinite(ACP_TURN_IDLE_TIMEOUT_MS) && ACP_TURN_IDLE_TIMEOUT_MS > 0 ? ACP_TURN_IDLE_TIMEOUT_MS : 120_000,
+			checkIntervalMs: ACP_TURN_IDLE_CHECK_INTERVAL_MS,
+			isTurnActive: () => this.running,
+			onIdleTimeout: (idleMs) => {
+				const error = new AcpError("request_timeout", `Mock ACP turn went silent for ${Math.round(idleMs / 1000)}s.`);
+				this.forceStopActiveTurn(error);
+			},
 		});
 	}
 
-	private writeMessage(message: RpcMessage): void {
-		if (!this.stdin) {
-			throw new Error("Mock ACP server is not running.");
+	private stopTurnWatchdog(): void {
+		this.turnWatchdog?.stop();
+		this.turnWatchdog = null;
+	}
+
+	private requireAcp(): AcpClient {
+		if (!this.acp) {
+			throw new AcpError("transport_failure", "Mock ACP server is not running.");
 		}
-		this.stdin.write(`${JSON.stringify(message)}\n`);
+		return this.acp;
+	}
+
+	private forceStopActiveTurn(error: AcpError): void {
+		const sessionId = this.sessionId;
+		if (sessionId) {
+			try {
+				this.acp?.cancel({ sessionId });
+			} catch {
+				// The timeout path is already failing the transport; best-effort cancel only.
+			}
+		}
+		for (const requestId of this.permissionRequests.keys()) {
+			try {
+				this.acp?.respondSuccess(requestId, { outcome: { outcome: "cancelled" } });
+			} catch {
+				// The process may already be wedged or gone; reset below fences off stale work.
+			}
+		}
+		this.permissionRequests.clear();
+		this.transport?.failAll(error);
+		this.stopTurnWatchdog();
+		this.running = false;
+		this.initialized = false;
+		this.sessionId = null;
+		this.currentCwd = null;
+		this.acp = null;
+		this.stdin?.end();
+		this.stdin = null;
+		this.process?.kill();
+		this.process = null;
+		this.transport = null;
 	}
 
 	private async readStdout(stdout: ReadableStream<Uint8Array>): Promise<void> {
@@ -516,8 +570,7 @@ class MockAcpClient {
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
-				this.stdoutBuffer += decoder.decode(value, { stream: true });
-				this.flushStdoutLines();
+				this.transport?.receiveChunk(decoder.decode(value, { stream: true }));
 			}
 		} catch (error) {
 			this.emit({
@@ -525,65 +578,16 @@ class MockAcpClient {
 				message: error instanceof Error ? error.message : "Failed to read mock ACP stdout.",
 			});
 		} finally {
-			this.stdoutBuffer += decoder.decode();
-			this.flushStdoutLines();
-		}
-	}
-
-	private flushStdoutLines(): void {
-		let newlineIndex = this.stdoutBuffer.indexOf("\n");
-		while (newlineIndex >= 0) {
-			const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
-			this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
-			if (line) {
-				this.handleLine(line);
+			const rest = decoder.decode();
+			if (rest) {
+				this.transport?.receiveChunk(rest);
 			}
-			newlineIndex = this.stdoutBuffer.indexOf("\n");
 		}
 	}
 
-	private handleLine(line: string): void {
-		let message: RpcMessage;
-		try {
-			message = JSON.parse(line) as RpcMessage;
-		} catch {
-			this.emit({ kind: "error", message: `Malformed mock ACP JSON: ${line.slice(0, 120)}` });
-			return;
-		}
-
-		if ("id" in message && ("result" in message || "error" in message)) {
-			this.handleResponse(message);
-			return;
-		}
-		if ("method" in message && "id" in message) {
-			this.handleServerRequest(message);
-			return;
-		}
-		if ("method" in message) {
-			this.handleNotification(message);
-		}
-	}
-
-	private handleResponse(message: RpcResponse): void {
-		const pending = this.pending.get(message.id);
-		if (!pending) {
-			return;
-		}
-		this.pending.delete(message.id);
-		if ("error" in message) {
-			pending.reject(new Error(message.error.message));
-			return;
-		}
-		pending.resolve(message.result);
-	}
-
-	private handleServerRequest(message: RpcRequest): void {
-		if (message.method !== "session/request_permission") {
-			this.writeMessage({
-				jsonrpc: "2.0",
-				id: message.id,
-				error: { code: -32601, message: `Unsupported client request: ${message.method}` },
-			});
+	private handleServerRequest(message: AcpServerRequest): void {
+		if (!AcpClient.isPermissionRequest(message)) {
+			this.requireAcp().respondMethodNotFound(message);
 			return;
 		}
 
@@ -603,7 +607,7 @@ class MockAcpClient {
 		if (this.approvalMode !== "ask") {
 			const autoOptionId = pickAutoApproveOptionId(options);
 			if (autoOptionId) {
-				this.writeMessage({ jsonrpc: "2.0", id: message.id, result: { outcome: { optionId: autoOptionId } } });
+				this.requireAcp().respondSuccess(message.id, { outcome: { optionId: autoOptionId } });
 				this.emit({
 					kind: "info",
 					id: String(message.id),
@@ -620,11 +624,12 @@ class MockAcpClient {
 			options,
 		};
 		this.permissionRequests.set(message.id, request);
+		this.turnWatchdog?.setAwaitingHuman(true);
 		this.emit({ kind: "permission", request });
 	}
 
-	private handleNotification(message: RpcNotification): void {
-		if (message.method !== "session/update") {
+	private handleNotification(message: AcpNotification): void {
+		if (message.method !== CLIENT_METHODS.session_update) {
 			return;
 		}
 		const params = asObject(message.params);
@@ -720,14 +725,14 @@ class MockAcpClient {
 		}
 		this.process = null;
 		this.stdin = null;
+		this.acp = null;
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
 		this.running = false;
-		for (const [, pending] of this.pending) {
-			pending.reject(new Error(`Mock ACP server exited with code ${exitCode}.`));
-		}
-		this.pending.clear();
+		this.stopTurnWatchdog();
+		this.transport?.failAll(new AcpError("process_exit", `Mock ACP server exited with code ${exitCode}.`));
+		this.transport = null;
 		if (exitCode !== 0) {
 			this.emit({ kind: "error", message: `Mock ACP server exited with code ${exitCode}.` });
 		}

@@ -35,11 +35,18 @@ bun run build:stable
 bun run lint
 bun run test
 bun run build:web
+
+# Full app bundle check without launching the GUI
+bun run build
 ```
 
 ## ACP Mock Backend
 
 The app's current agent workflow is mock-only, and the mock ACP server is bundled into the Electrobun app resources. Opening the app shows the composer and does not start ACP. The first valid Send lazily starts the app-side mock ACP client, spawns the bundled mock server with the app's Bun runtime, creates a mock session, and streams normalized updates into the webview transcript. Folder selection is optional; if no folder is selected, the mock session uses the user's home directory as cwd without presenting it as the selected project. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
+
+The app-side ACP code is split into a reusable protocol core under `src/bun/acp/` and a mock-session adapter in `src/bun/index.ts`. The core handles NDJSON JSON-RPC transport, vendored ACP `v0.11.3` schema validation, request timeouts, pending-request cleanup, buffered notifications, extension request handling, and the idle-turn watchdog.
+
+If a prompt turn goes silent for too long, the adapter sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, rejects local pending requests, and resets the mock subprocess so stale output from the timed-out turn cannot leak into a later prompt. The default idle timeout is 120 seconds and can be overridden with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS` for local testing.
 
 The sidebar's `All chats` list is backed by app-side in-memory session summaries. A row appears as soon as `session/new` succeeds for the first prompt. The app also keeps an in-memory transcript cache for each known mock session so selecting a previous chat restores message, plan, and tool cards. The mock server still persists protocol session state, but the app-side full transcript cache is reset when the Electrobun main process exits; restart the main process after changing Bun-side RPC handlers or cache behavior.
 
@@ -77,6 +84,7 @@ When you run `bun run dev` (without HMR):
 ```
 ├── src/
 │   ├── bun/
+│   │   ├── acp/              # ACP transport, schema validation, timeouts, and watchdog utilities
 │   │   └── index.ts          # Main process: creates the BrowserWindow, defines the bun-side RPC handlers
 │   ├── mainview/              # Webview UI (React), Vite root
 │   │   ├── App.tsx            # React app component
@@ -107,7 +115,8 @@ When you run `bun run dev` (without HMR):
 - **App metadata**: edit `electrobun.config.ts`
 - **Release version**: push tags like `v0.0.0`; CI syncs `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`
 - **Main process ⇄ webview calls**: add methods to the `AppRPC` type in `src/shared/rpc.ts`, implement the handler in `src/bun/index.ts`, call it from the webview via `electroview.rpc.request.<method>()`
-- **Mock ACP UI/client flow**: edit `src/bun/index.ts` for the stdio mock client, `../acp-mock-server/src/` for mock server behavior, and `src/mainview/App.tsx` for the composer/transcript rendering. Keep mock ACP startup lazy so app open does not touch ACP.
+- **ACP protocol core**: edit `src/bun/acp/` for JSON-RPC transport, ACP schema validation, timeout, cancellation, and watchdog behavior. Keep this layer UI-agnostic.
+- **Mock ACP UI/client flow**: edit `src/bun/index.ts` for mock-session adapter behavior, `../acp-mock-server/src/` for mock server behavior, and `src/mainview/App.tsx` for the composer/transcript rendering. Keep mock ACP startup lazy so app open does not touch ACP.
 
 ## CI and Releases
 

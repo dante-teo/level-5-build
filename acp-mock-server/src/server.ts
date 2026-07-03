@@ -479,7 +479,7 @@ export class AcpMockServer {
 		]);
 		await this.tool(session, "search", "Scanning workspace structure", "completed", "Found app/, docs/, and acp-mock-server/ roots.", turn);
 		await this.usage(session, 1840, 200000, 0.002);
-		await this.say(session, "I inspected the mock workspace context and I am ready to help. Try `/plan`, `/fix`, `/test`, `/review`, `/web`, `/skills`, `/mode code`, `permission`, `fail`, `refuse`, or `max tokens` to exercise specific ACP client states.");
+		await this.say(session, "I inspected the mock workspace context and I am ready to help. Try `/plan`, `/fix` (asks for permission before the simulated edit), `/test`, `/review`, `/web`, `/skills`, `/mode code`, `permission`, `fail`, `refuse`, or `max tokens` to exercise specific ACP client states.");
 	}
 
 	private async planScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
@@ -502,17 +502,54 @@ export class AcpMockServer {
 		await this.tool(session, "read", "Reading app/src/mainview/App.tsx", "completed", "Located the current shell component and UI state wiring.", turn, [
 			{ path: `${session.cwd}/app/src/mainview/App.tsx`, line: 1 }
 		]);
-		await this.tool(session, "edit", "Preparing mock UI patch", "completed", "Generated a safe diff preview. No files were actually changed by the mock server.", turn, [
-			{ path: `${session.cwd}/app/src/mainview/App.tsx`, line: 12 }
-		], [
-			{
-				type: "diff",
-				path: `${session.cwd}/app/src/mainview/App.tsx`,
-				oldText: "const title = \"Level5 Build\";\n",
-				newText: "const title = \"Level5 Build - ACP Ready\";\n"
-			}
-		]);
-		await this.say(session, "I simulated a code edit and attached a diff payload. Your client should show this like a real agent change preview while the repository remains untouched.");
+
+		const toolCallId = this.store.nextId("tool");
+		const editLocation = { path: `${session.cwd}/app/src/mainview/App.tsx`, line: 12 };
+		const editTitle = "Preparing mock UI patch";
+		this.sendSessionUpdate(session.sessionId, {
+			sessionUpdate: "tool_call",
+			toolCallId,
+			title: editTitle,
+			kind: "edit",
+			status: "pending",
+			locations: [editLocation]
+		});
+
+		const outcome = await this.requestPermissionOutcome(session, turn, {
+			toolCallId,
+			title: editTitle,
+			kind: "edit",
+			status: "pending",
+			content: [{ type: "content", content: { type: "text", text: "Apply a simulated one-line edit to App.tsx?" } }]
+		});
+
+		if (outcome === "cancelled") {
+			this.sendSessionUpdate(session.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
+			await this.say(session, "The permission request was cancelled, so I left the mock file untouched.");
+			return;
+		}
+		if (outcome === "rejected") {
+			this.sendSessionUpdate(session.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
+			await this.say(session, "You rejected the simulated edit, so I did not modify the mock file.");
+			return;
+		}
+
+		this.sendSessionUpdate(session.sessionId, {
+			sessionUpdate: "tool_call_update",
+			toolCallId,
+			status: "completed",
+			locations: [editLocation],
+			content: [
+				{ type: "content", content: { type: "text", text: "Generated a safe diff preview. No files were actually changed by the mock server." } },
+				{
+					type: "diff",
+					path: `${session.cwd}/app/src/mainview/App.tsx`,
+					oldText: "const title = \"Level5 Build\";\n",
+					newText: "const title = \"Level5 Build - ACP Ready\";\n"
+				}
+			]
+		});
+		await this.say(session, "Permission was granted, so I simulated a code edit and attached a diff payload. Your client should show this like a real agent change preview while the repository remains untouched.");
 	}
 
 	private async testScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
@@ -545,35 +582,30 @@ export class AcpMockServer {
 
 	private async permissionScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
 		const toolCallId = this.store.nextId("tool");
+		const title = "Applying protected mock edit";
 		this.sendSessionUpdate(session.sessionId, {
 			sessionUpdate: "tool_call",
 			toolCallId,
-			title: "Applying protected mock edit",
+			title,
 			kind: "edit",
 			status: "pending",
 			rawInput: { reason: "exercise permission UI" }
 		});
-		const response = await this.requestClient("session/request_permission", {
-			sessionId: session.sessionId,
-			toolCall: {
-				toolCallId,
-				title: "Applying protected mock edit",
-				kind: "edit",
-				status: "pending",
-				content: [{ type: "content", content: { type: "text", text: "This is a simulated protected action." } }]
-			},
-			options: [
-				{ optionId: "allow-once", name: "Allow once", kind: "allow_once" },
-				{ optionId: "allow-always", name: "Always allow mock edits", kind: "allow_always" },
-				{ optionId: "reject-once", name: "Reject", kind: "reject_once" }
-			]
-		}, turn).catch((error) => ({ error: error.message }));
-		if (turn.cancelled || selectedOutcome(response) === "cancelled") {
+
+		const outcome = await this.requestPermissionOutcome(session, turn, {
+			toolCallId,
+			title,
+			kind: "edit",
+			status: "pending",
+			content: [{ type: "content", content: { type: "text", text: "This is a simulated protected action." } }]
+		});
+
+		if (outcome === "cancelled") {
 			this.sendSessionUpdate(session.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
 			await this.say(session, "The permission request was cancelled, so I stopped the turn cleanly.");
 			return;
 		}
-		if (selectedOutcome(response) === "reject-once") {
+		if (outcome === "rejected") {
 			this.sendSessionUpdate(session.sessionId, { sessionUpdate: "tool_call_update", toolCallId, status: "failed" });
 			await this.say(session, "The client rejected the simulated action. I preserved the session and did not continue the edit path.");
 			return;
@@ -585,6 +617,26 @@ export class AcpMockServer {
 			content: [{ type: "content", content: { type: "text", text: "Permission granted; simulated edit completed." } }]
 		});
 		await this.say(session, "Permission was granted. I completed the protected mock edit and returned a normal end-turn response.");
+	}
+
+	private async requestPermissionOutcome(
+		session: SessionRecord,
+		turn: ActiveTurn,
+		toolCall: JsonObject
+	): Promise<"approved" | "rejected" | "cancelled"> {
+		const response = await this.requestClient("session/request_permission", {
+			sessionId: session.sessionId,
+			toolCall,
+			options: [
+				{ optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+				{ optionId: "allow-always", name: "Always allow mock edits", kind: "allow_always" },
+				{ optionId: "reject-once", name: "Reject", kind: "reject_once" }
+			]
+		}, turn).catch((error) => ({ error: error.message }));
+
+		if (turn.cancelled || selectedOutcome(response) === "cancelled") return "cancelled";
+		if (selectedOutcome(response) === "reject-once") return "rejected";
+		return "approved";
 	}
 
 	private async tool(
@@ -800,7 +852,15 @@ export async function runServer(server: AcpMockServer): Promise<void> {
 			const index = buffer.indexOf("\n");
 			const line = buffer.slice(0, index).trim();
 			buffer = buffer.slice(index + 1);
-			if (line.length > 0) await server.handleLine(line);
+			if (line.length > 0) {
+				// Dispatch without awaiting: a long-running request (e.g. a prompt turn
+				// that calls back into the client with session/request_permission) must
+				// not block reading of subsequent stdin lines, or the client's response
+				// to that very callback could never be read, deadlocking the turn.
+				void server.handleLine(line).catch((error) => {
+					process.stderr.write(`[acp-mock] unhandled error while handling a line: ${error instanceof Error ? error.message : String(error)}\n`);
+				});
+			}
 		}
 	}
 	if (process.env.ACP_MOCK_KEEPALIVE === "1") {

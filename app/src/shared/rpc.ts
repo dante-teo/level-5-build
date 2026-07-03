@@ -1,8 +1,14 @@
 import type { RPCSchema } from "electrobun";
 
 export type MockModelId = "mock-fast" | "mock-pro" | "mock-deep";
-export type ApprovalModeId = "ask" | "architect" | "code" | "auto";
+export type ApprovalModeId = "ask" | "auto" | "full-access";
 export type MockRunStatus = "idle" | "starting" | "running" | "completed" | "error";
+
+export const APPROVAL_MODE_LABELS: Record<ApprovalModeId, string> = {
+	ask: "Ask for approval",
+	auto: "Approve for me",
+	"full-access": "Full access",
+};
 
 export type MockContentBlock =
 	| { type: "text"; text: string }
@@ -89,7 +95,8 @@ export type MockAgentUpdate =
 	| { kind: "config"; options: MockConfigOption[] }
 	| { kind: "session"; session: MockSessionSummary }
 	| { kind: "stop"; stopReason: string }
-	| { kind: "error"; message: string };
+	| { kind: "error"; message: string }
+	| { kind: "info"; id: string; message: string };
 
 export type StartMockPromptParams = {
 	prompt: string;

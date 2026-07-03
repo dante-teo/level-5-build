@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApplicationMenu, BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
+import { APPROVAL_MODE_LABELS } from "../shared/rpc";
 import type {
 	AppRPC,
 	ApprovalModeId,
@@ -14,6 +15,7 @@ import type {
 	MockConfigOption,
 	MockContentBlock,
 	MockModelId,
+	MockPermissionOption,
 	MockPermissionRequest,
 	MockPlanItem,
 	MockPromptAttachment,
@@ -29,9 +31,9 @@ import type {
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
 const MOCK_MODELS = new Set<MockModelId>(["mock-fast", "mock-pro", "mock-deep"]);
-const MOCK_MODES = new Set<ApprovalModeId>(["ask", "architect", "code", "auto"]);
+const MOCK_APPROVAL_MODES = new Set<ApprovalModeId>(["ask", "auto", "full-access"]);
 const DEFAULT_MODEL: MockModelId = "mock-pro";
-const DEFAULT_MODE: ApprovalModeId = "ask";
+const DEFAULT_APPROVAL_MODE: ApprovalModeId = "ask";
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -94,8 +96,12 @@ function normalizeModel(model: string | undefined): MockModelId {
 	return MOCK_MODELS.has(model as MockModelId) ? (model as MockModelId) : DEFAULT_MODEL;
 }
 
-function normalizeMode(mode: string | undefined): ApprovalModeId {
-	return MOCK_MODES.has(mode as ApprovalModeId) ? (mode as ApprovalModeId) : DEFAULT_MODE;
+function normalizeApprovalMode(mode: string | undefined): ApprovalModeId {
+	return MOCK_APPROVAL_MODES.has(mode as ApprovalModeId) ? (mode as ApprovalModeId) : DEFAULT_APPROVAL_MODE;
+}
+
+function pickAutoApproveOptionId(options: MockPermissionOption[]): string | undefined {
+	return options.find((option) => option.kind?.startsWith("allow"))?.optionId ?? options[0]?.optionId;
 }
 
 function findMockServerPaths(): { mockServerDir: string; mockServerEntrypoint: string } {
@@ -166,6 +172,7 @@ class MockAcpClient {
 	private sessionId: string | null = null;
 	private currentCwd: string | null = null;
 	private running = false;
+	private approvalMode: ApprovalModeId = DEFAULT_APPROVAL_MODE;
 
 	constructor(private readonly emit: (update: MockAgentUpdate) => void) {}
 
@@ -182,7 +189,7 @@ class MockAcpClient {
 		this.running = true;
 		const cwd = resolveCwd(params.cwd);
 		const model = normalizeModel(params.model);
-		const approvalMode = normalizeMode(params.approvalMode);
+		this.approvalMode = normalizeApprovalMode(params.approvalMode);
 		this.emit({ kind: "status", status: "starting", cwd, sessionId: this.sessionId ?? undefined });
 
 		try {
@@ -197,11 +204,6 @@ class MockAcpClient {
 				sessionId: this.sessionId,
 				configId: "model",
 				value: model,
-			});
-			await this.request("session/set_config_option", {
-				sessionId: this.sessionId,
-				configId: "mode",
-				value: approvalMode,
 			});
 
 			this.emit({ kind: "status", status: "running", cwd, sessionId: this.sessionId });
@@ -368,6 +370,7 @@ class MockAcpClient {
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
+		this.approvalMode = DEFAULT_APPROVAL_MODE;
 		this.sessions.clear();
 		this.transcripts.clear();
 		this.emit({ kind: "status", status: "idle" });
@@ -585,20 +588,36 @@ class MockAcpClient {
 		}
 
 		const params = asObject(message.params);
+		const options: MockPermissionOption[] = Array.isArray(params.options)
+			? params.options.map((option) => {
+					const object = asObject(option);
+					return {
+						optionId: asString(object.optionId),
+						name: asString(object.name, asString(object.optionId)),
+						kind: asOptionalString(object.kind),
+					};
+				})
+			: [];
+		const toolCall = normalizeToolCall(params.toolCall);
+
+		if (this.approvalMode !== "ask") {
+			const autoOptionId = pickAutoApproveOptionId(options);
+			if (autoOptionId) {
+				this.writeMessage({ jsonrpc: "2.0", id: message.id, result: { outcome: { optionId: autoOptionId } } });
+				this.emit({
+					kind: "info",
+					id: String(message.id),
+					message: `Auto-approved "${toolCall.title}" (${APPROVAL_MODE_LABELS[this.approvalMode]} mode).`,
+				});
+				return;
+			}
+		}
+
 		const request: MockPermissionRequest = {
 			requestId: message.id ?? "",
 			sessionId: asString(params.sessionId, this.sessionId ?? ""),
-			toolCall: normalizeToolCall(params.toolCall),
-			options: Array.isArray(params.options)
-				? params.options.map((option) => {
-						const object = asObject(option);
-						return {
-							optionId: asString(object.optionId),
-							name: asString(object.name, asString(object.optionId)),
-							kind: asOptionalString(object.kind),
-						};
-					})
-				: [],
+			toolCall,
+			options,
 		};
 		this.permissionRequests.set(message.id, request);
 		this.emit({ kind: "permission", request });

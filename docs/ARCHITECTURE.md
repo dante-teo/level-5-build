@@ -21,10 +21,13 @@ The mock server remains usable as a standalone stdio ACP server, and the desktop
 - The server reads UTF-8 JSON-RPC messages from stdin and writes only JSON-RPC messages to stdout.
 - Logs go to stderr. Do not route diagnostic output to stdout; ACP clients expect stdout to be protocol-clean.
 - Session state persists to `.mock-acp-state.json` by default, ignored by git. Override with `ACP_MOCK_STATE_PATH`.
+- `runServer()`'s stdin loop dispatches each parsed line without awaiting the previous line's handler to finish. This is load-bearing, not stylistic: a request handler can call back into the client mid-flight (e.g. a prompt turn's `session/request_permission`), and that callback's answer can only ever arrive as a *later* stdin line — if the loop awaited each line to completion before reading the next one, the server would block forever waiting on its own unread response. In-process tests that call `AcpMockServer.handleLine()` directly (`tests/server.test.ts`) can't exercise this class of bug, since they never go through the loop; `tests/subprocess.test.ts` drives the real `bun src/index.ts` entrypoint over an actual stdio pipe specifically to catch it.
 
 ### Mocked ACP surface
 
 The mock supports initialization, auth/logout, session lifecycle (`new`, `load`, `resume`, `close`, `list`, `delete`), prompt turns, cancellation, legacy modes, session config options, slash commands, permission requests, model discovery/switching, and mock extension methods under `_mock/*`.
+
+Permission requests aren't just a standalone demo path: the edit scenario (triggered by `/fix`, or a prompt containing "edit"/"fix"/"refactor") sends a `session/request_permission` for its simulated diff before applying it, so approval-mode UI can be exercised without needing the literal word "permission"/"approve" in the prompt. A dedicated scenario triggered by those exact words (`permissionScenario`) still exists for direct testing.
 
 The server emits realistic `session/update` notifications for:
 
@@ -67,7 +70,7 @@ Use `./start.sh` for ACP stdio smoke tests instead of `bun run`; some Bun script
 
 ## `app/` — Electrobun desktop app
 
-Stack: [Bun](https://bun.sh) (runtime + main process), [Electrobun](https://blackboard.sh/electrobun) (desktop app shell using the OS's native webview — WKWebView on macOS, WebView2 on Windows, webkit2gtk on Linux — not a bundled Chromium/CEF; `bundleCEF` is explicitly disabled for all platforms), React 18, Jotai for webview UI state, Vite 6 (bundles the webview UI), Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
+Stack: [Bun](https://bun.sh) (runtime + main process), [Electrobun](https://blackboard.sh/electrobun) (desktop app shell using the OS's native webview — WKWebView on macOS, WebView2 on Windows, webkit2gtk on Linux — not a bundled Chromium/CEF; `bundleCEF` is explicitly disabled for all platforms), React 18, Jotai for webview UI state, [`use-stick-to-bottom`](https://github.com/stackblitz-labs/use-stick-to-bottom) for the transcript's auto-scroll/stick-to-bottom behavior, Vite 6 (bundles the webview UI), Tailwind CSS v4, and a manually-configured shadcn/ui foundation.
 
 Electrobun is not Electron — it has a different architecture and API surface. Don't assume Electron APIs/patterns apply.
 
@@ -117,15 +120,15 @@ Current app RPC includes the mock-agent development surface:
 
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `selectAttachmentFile()` / `selectAttachmentFolder()`: open single-selection file/directory pickers for the composer's "Add to prompt" menu, independent of the project-folder picker above.
-- `startMockPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running. `attachments` (file/directory paths chosen via the composer menu) are sent as `resource_link` content blocks alongside the text block.
-- `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests.
+- `startMockPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running. `attachments` (file/directory paths chosen via the composer menu) are sent as `resource_link` content blocks alongside the text block. `approvalMode` (`ApprovalModeId`: `ask` / `auto` / `full-access`) is tracked client-side for the duration of the turn and governs how the mock client answers `session/request_permission` (see below) — it is not sent to the mock server as an ACP config option and is unrelated to the ACP legacy "mode" testing feature (still exercised via the `/mode <id>` slash command).
+- `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests that were surfaced to the user (i.e. approval mode `ask`, or a request the client couldn't auto-resolve). The webview's approval prompt has no separate cancel control, so it treats a falsy/failed response here (a stale request id, a dropped RPC call) the same as any other terminal outcome: clear the pending prompt and surface an error, rather than leaving the composer takeover stuck.
 - `listMockSessions()`: initializes the mock ACP client if needed, calls `session/list`, and returns known mock session summaries.
 - `listMockSlashCommands()` / `listMockSkills()`: initialize the mock ACP client if needed and call the mock server's `_mock/list_slash_commands` / `_mock/list_skills` extension methods (no session required) to populate the composer's plus-menu groups. Note: picking a slash command inserts `/<command.name>`, which matches the mock server's own command names, but picking a skill inserts `/<skill.id>` (e.g. `/workspace-search`); the mock server's dedicated skills scenario only triggers on `/skills` or text containing "skill", so most individual skill picks currently fall through to whatever other keyword-matched scenario their id happens to contain (e.g. `/web-fetch` triggers the web scenario) rather than a skills-specific response.
 - `loadMockSession({ sessionId })`: loads or resumes a known mock session and replays the cached transcript into the webview.
 - `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
 - `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
 - `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
-- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, session summaries, errors, and stop reasons.
+- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, permission requests, session summaries, errors, informational notes (e.g. auto-approval), and stop reasons.
 
 The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.
 
@@ -136,7 +139,8 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 - resolves bundled `acp-mock-server/src/index.ts` lazily when sessions are first listed or a prompt is first sent, by searching upward from the running process cwd and bundled main file location;
 - spawns the mock server with the app's Bun runtime, with protocol stdout/stderr kept separate;
 - stores mock server state under `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set;
-- sends `initialize`, then `session/new`, then mock config updates for model and mode, then `session/prompt`;
+- sends `initialize`, then `session/new`, then a mock config update for the model, then `session/prompt`;
+- when the mock server sends `session/request_permission`, auto-responds with an "allow" option and emits an informational note if the current approval mode is `auto` or `full-access`; otherwise surfaces the request to the webview as before;
 - reuses the current mock session for subsequent prompts in the same cwd;
 - closes and recreates the mock session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;

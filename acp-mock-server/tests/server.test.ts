@@ -84,16 +84,52 @@ describe("ACP mock server", () => {
 		await initialize(server);
 		const sessionId = await createSession(server);
 
-		await send(server, {
+		const prompt = send(server, {
 			jsonrpc: "2.0",
 			id: 5,
 			method: "session/prompt",
 			params: { sessionId, prompt: [{ type: "text", text: "/fix a layout bug" }] }
 		});
+
+		await Bun.sleep(5);
+		const permissionRequest = messages().find(
+			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
+		) as Record<string, JsonValue>;
+		expect(permissionRequest).toBeTruthy();
+		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "allow-once" } } });
+		await prompt;
+
 		const all = JSON.stringify(messages());
 		expect(all).toContain("plan");
 		expect(all).toContain("tool_call");
+		expect(all).toContain("session/request_permission");
 		expect(all).toContain("diff");
+		expect(all).toContain("\"stopReason\":\"end_turn\"");
+	});
+
+	test("rejecting the edit permission request stops without a diff", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+
+		const prompt = send(server, {
+			jsonrpc: "2.0",
+			id: 5,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "/fix a layout bug" }] }
+		});
+
+		await Bun.sleep(5);
+		const permissionRequest = messages().find(
+			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
+		) as Record<string, JsonValue>;
+		expect(permissionRequest).toBeTruthy();
+		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "reject-once" } } });
+		await prompt;
+
+		const all = JSON.stringify(messages());
+		expect(all).toContain("\"status\":\"failed\"");
+		expect(all).not.toContain("\"type\":\"diff\"");
 		expect(all).toContain("\"stopReason\":\"end_turn\"");
 	});
 

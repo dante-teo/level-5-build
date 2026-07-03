@@ -11,23 +11,28 @@ import {
 	useState,
 } from "react";
 import { useAtom } from "jotai";
+import { useStickToBottom } from "use-stick-to-bottom";
 import {
 	Bot,
 	Check,
 	ChevronDown,
 	Circle,
 	Folder,
+	Hand,
 	ListTodo,
 	LoaderCircle,
+	type LucideIcon,
 	MessageSquarePlus,
 	MoreHorizontal,
 	Paperclip,
 	PanelLeftClose,
 	PanelLeftOpen,
+	Pencil,
 	Plus,
 	Search,
 	Send,
 	Settings,
+	ShieldAlert,
 	ShieldCheck,
 	Sparkles,
 	SquareTerminal,
@@ -39,21 +44,22 @@ import appIcon from "@/assets/app-icon.png";
 import { electroview } from "@/lib/electrobun";
 import { cn } from "@/lib/utils";
 import { isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
-import type {
-	ApprovalModeId,
-	MockAgentUpdate,
-	MockContentBlock,
-	MockMessageUpdate,
-	MockModelId,
-	MockPermissionRequest,
-	MockPlanItem,
-	MockPromptAttachment,
-	MockPromptAttachmentType,
-	MockRunStatus,
-	MockSessionSummary,
-	MockSkill,
-	MockSlashCommand,
-	MockToolCall,
+import {
+	APPROVAL_MODE_LABELS,
+	type ApprovalModeId,
+	type MockAgentUpdate,
+	type MockContentBlock,
+	type MockMessageUpdate,
+	type MockModelId,
+	type MockPermissionRequest,
+	type MockPlanItem,
+	type MockPromptAttachment,
+	type MockPromptAttachmentType,
+	type MockRunStatus,
+	type MockSessionSummary,
+	type MockSkill,
+	type MockSlashCommand,
+	type MockToolCall,
 } from "@shared/rpc";
 
 const SIDEBAR_MIN_WIDTH = 260;
@@ -63,6 +69,34 @@ const SIDEBAR_FLOATING_TOGGLE_GAP = 8;
 const SIDEBAR_FLOATING_TOGGLE_TOP = 30;
 const COMPOSER_MIN_HEIGHT = 56;
 const COMPOSER_MAX_HEIGHT = 192;
+
+type ApprovalModeOption = {
+	value: ApprovalModeId;
+	label: string;
+	description: string;
+	icon: LucideIcon;
+};
+
+const APPROVAL_MODE_OPTIONS: ApprovalModeOption[] = [
+	{
+		value: "ask",
+		label: APPROVAL_MODE_LABELS.ask,
+		description: "Always ask before applying simulated edits or running mock tools.",
+		icon: Hand,
+	},
+	{
+		value: "auto",
+		label: APPROVAL_MODE_LABELS.auto,
+		description: "Only ask for actions detected as potentially unsafe.",
+		icon: ShieldCheck,
+	},
+	{
+		value: "full-access",
+		label: APPROVAL_MODE_LABELS["full-access"],
+		description: "Unrestricted access to any simulated file or mock tool.",
+		icon: ShieldAlert,
+	},
+];
 
 type SidebarButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 	children: ReactNode;
@@ -82,8 +116,8 @@ type TranscriptItem =
 	| { type: "message"; key: string; message: ChatMessage }
 	| { type: "plan"; key: string; items: MockPlanItem[] }
 	| { type: "tool"; key: string; tool: ToolCallView }
-	| { type: "permission"; key: string; request: MockPermissionRequest }
-	| { type: "error"; key: string; message: string };
+	| { type: "error"; key: string; message: string }
+	| { type: "info"; key: string; message: string };
 
 type SessionContextMenu = {
 	sessionId: string;
@@ -277,22 +311,29 @@ function App() {
 	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 	const [runStatus, setRunStatus] = useState<MockRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
+	const [pendingPermission, setPendingPermission] = useState<MockPermissionRequest | null>(null);
 	const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
+	const [isApprovalMenuOpen, setIsApprovalMenuOpen] = useState(false);
 	const [slashCommands, setSlashCommands] = useState<MockSlashCommand[]>([]);
 	const [skills, setSkills] = useState<MockSkill[]>([]);
 	const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+	const [composerHeight, setComposerHeight] = useState(224);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const promptOverlayRef = useRef<HTMLDivElement | null>(null);
-	const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+	const composerContainerRef = useRef<HTMLDivElement | null>(null);
+	const { scrollRef: transcriptScrollRef, contentRef: transcriptContentRef, scrollToBottom } = useStickToBottom();
 	const projectMenuRef = useRef<HTMLDivElement | null>(null);
 	const projectSearchRef = useRef<HTMLInputElement | null>(null);
 	const plusMenuRef = useRef<HTMLDivElement | null>(null);
+	const approvalMenuRef = useRef<HTMLDivElement | null>(null);
 	const optimisticUserTextRef = useRef<string | null>(null);
 	const pendingPromptProjectFolderRef = useRef<string | null | undefined>(undefined);
 	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
 	const currentPlanKeyRef = useRef("plan-initial");
 	const SidebarToggleIcon = isSidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
 	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
+	const currentApprovalOption =
+		APPROVAL_MODE_OPTIONS.find((option) => option.value === approvalMode) ?? APPROVAL_MODE_OPTIONS[0];
 	const isRunning = runStatus === "starting" || runStatus === "running";
 	const hasConversation = transcriptItems.length > 0;
 	const activeSessionStatus = activeSessionId ? runStatus : "idle";
@@ -367,7 +408,7 @@ function App() {
 				return;
 			}
 			if (update.kind === "permission") {
-				setTranscriptItems((current) => upsertPermissionItem(current, update.request));
+				setPendingPermission(update.request);
 				return;
 			}
 			if (update.kind === "session") {
@@ -392,6 +433,10 @@ function App() {
 				pendingPromptProjectFolderRef.current = undefined;
 				setTranscriptItems((current) => upsertErrorItem(current, update.message));
 				setRunStatus("error");
+				return;
+			}
+			if (update.kind === "info") {
+				setTranscriptItems((current) => appendInfoItem(current, update.id, update.message));
 			}
 		};
 
@@ -503,6 +548,42 @@ function App() {
 	}, [isRunning, isPlusMenuOpen]);
 
 	useEffect(() => {
+		if (!isApprovalMenuOpen) {
+			return;
+		}
+
+		function closeMenu() {
+			setIsApprovalMenuOpen(false);
+		}
+
+		function handlePointerDown(event: globalThis.PointerEvent) {
+			if (approvalMenuRef.current?.contains(event.target as Node)) {
+				return;
+			}
+			closeMenu();
+		}
+
+		function handleKeyDown(event: globalThis.KeyboardEvent) {
+			if (event.key === "Escape") {
+				closeMenu();
+			}
+		}
+
+		document.addEventListener("pointerdown", handlePointerDown);
+		document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [isApprovalMenuOpen]);
+
+	useEffect(() => {
+		if (isRunning && isApprovalMenuOpen) {
+			setIsApprovalMenuOpen(false);
+		}
+	}, [isRunning, isApprovalMenuOpen]);
+
+	useEffect(() => {
 		if (contextMenu && !sessions.some((session) => session.sessionId === contextMenu.sessionId)) {
 			setContextMenu(null);
 		}
@@ -522,8 +603,25 @@ function App() {
 	}, [prompt]);
 
 	useEffect(() => {
-		transcriptEndRef.current?.scrollIntoView({ block: "end" });
-	}, [transcriptItems]);
+		const node = composerContainerRef.current;
+		if (!node) {
+			return;
+		}
+		const observer = new ResizeObserver((entries) => {
+			const entry = entries[0];
+			if (entry) {
+				setComposerHeight(Math.ceil(entry.contentRect.height));
+			}
+		});
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, []);
+
+	useEffect(() => {
+		if (!pendingPermission) {
+			textareaRef.current?.focus();
+		}
+	}, [pendingPermission]);
 
 	function applyMessageUpdate(update: MockMessageUpdate) {
 		const text = contentText(update.content);
@@ -581,17 +679,16 @@ function App() {
 		);
 	}
 
-	function upsertPermissionItem(current: TranscriptItem[], request: MockPermissionRequest): TranscriptItem[] {
-		const key = `permission-${String(request.requestId)}`;
-		const index = current.findIndex((item) => item.key === key);
-		if (index < 0) {
-			return [...current, { type: "permission", key, request }];
-		}
-		return current.map((item, itemIndex) => (itemIndex === index ? { type: "permission", key, request } : item));
-	}
-
 	function upsertErrorItem(current: TranscriptItem[], message: string): TranscriptItem[] {
 		return [...current.filter((item) => item.type !== "error"), { type: "error", key: `error-${Date.now()}`, message }];
+	}
+
+	function appendInfoItem(current: TranscriptItem[], id: string, message: string): TranscriptItem[] {
+		const key = `info-${id}`;
+		if (current.some((item) => item.key === key)) {
+			return current;
+		}
+		return [...current, { type: "info", key, message }];
 	}
 
 	async function refreshMockSessions({ reportErrors = true }: { reportErrors?: boolean } = {}) {
@@ -640,6 +737,7 @@ function App() {
 		setAttachments([]);
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setStopReason(null);
+		setPendingPermission(null);
 	}
 
 	function closeProjectMenu() {
@@ -797,6 +895,7 @@ function App() {
 		setTranscriptItems((current) =>
 			upsertMessageItem(current, { id: `local-${Date.now()}`, role: "user", text: trimmedPrompt }),
 		);
+		void scrollToBottom();
 
 		const response = await electroview.rpc?.request.startMockPrompt({
 			prompt: trimmedPrompt,
@@ -834,11 +933,28 @@ function App() {
 	}
 
 	async function handlePermission(requestId: number | string, optionId: string) {
-		const accepted = await electroview.rpc?.request.respondToMockPermission({ requestId, optionId });
-		if (accepted) {
-			const key = `permission-${String(requestId)}`;
-			setTranscriptItems((current) => current.filter((item) => item.key !== key));
+		let accepted = false;
+		let failureMessage: string | null = null;
+		try {
+			accepted = (await electroview.rpc?.request.respondToMockPermission({ requestId, optionId })) ?? false;
+			if (!accepted) {
+				failureMessage = "Could not respond to the permission request. The mock agent turn may be stuck; try starting a new chat.";
+			}
+		} catch (error) {
+			failureMessage = error instanceof Error ? error.message : "Failed to respond to the permission request.";
 		}
+
+		// Always clear pendingPermission, whether this succeeded or failed:
+		// ApprovalPrompt has no cancel affordance of its own, so leaving it set
+		// on failure would permanently freeze the composer with no way out.
+		setPendingPermission((current) => (current?.requestId === requestId ? null : current));
+		if (failureMessage) {
+			setTranscriptItems((current) => upsertErrorItem(current, failureMessage));
+		}
+	}
+
+	function handleDraftFeedback(text: string) {
+		setPrompt(text);
 	}
 
 	async function handleNewChat() {
@@ -1082,10 +1198,11 @@ function App() {
 					<div className={cn("flex min-h-0 w-full flex-col", hasConversation ? "relative h-full" : "")}>
 						{hasConversation ? (
 							<div
-								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pb-56 pt-24"
+								ref={transcriptScrollRef}
+								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pt-24"
 								style={{ left: `${renderedSidebarWidth}px` }}
 							>
-								<div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+								<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-4">
 									{transcriptItems.map((item) => {
 										if (item.type === "message") {
 											return <MessageBubble key={item.key} message={item.message} />;
@@ -1096,17 +1213,28 @@ function App() {
 										if (item.type === "tool") {
 											return <ToolCallCard key={item.key} tool={item.tool} />;
 										}
-										if (item.type === "permission") {
-											return <PermissionCard key={item.key} request={item.request} onRespond={handlePermission} />;
+										if (item.type === "info") {
+											return <InfoCard key={item.key} message={item.message} />;
 										}
 										return <ErrorCard key={item.key} message={item.message} />;
 									})}
-									<div ref={transcriptEndRef} />
+									{/* Reserves space for the composer overlay, which sits on top of this
+									    scroll layer (see DESIGN.md §13). Lives inside the tracked content
+									    (not a padding style on the scroll container) so useStickToBottom's
+									    own resize observer reacts when the composer's height changes. */}
+									<div aria-hidden="true" style={{ height: `${composerHeight + 32}px` }} />
 								</div>
 							</div>
 						) : null}
 
-						<div className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-visible rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}>
+						<div
+							ref={composerContainerRef}
+							className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-visible rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}
+						>
+							{pendingPermission ? (
+								<ApprovalPrompt request={pendingPermission} onRespond={handlePermission} onDraftFeedback={handleDraftFeedback} />
+							) : (
+							<>
 							<div className="px-6 pt-4">
 								{attachments.length > 0 ? (
 									<div className="mb-3 flex flex-wrap gap-2">
@@ -1221,18 +1349,64 @@ function App() {
 										</div>
 									) : null}
 								</div>
-								<SelectControl
-									icon={<ShieldCheck className="size-4 text-[var(--app-accent)]" strokeWidth={1.8} />}
-									label="Approval mode"
-									value={approvalMode}
-									onChange={(value) => setApprovalMode(value as ApprovalModeId)}
-									options={[
-										{ value: "ask", label: "Approve for me" },
-										{ value: "architect", label: "Architect" },
-										{ value: "code", label: "Code" },
-										{ value: "auto", label: "Auto" },
-									]}
-								/>
+								<div ref={approvalMenuRef} className="relative">
+									<button
+										type="button"
+										aria-haspopup="menu"
+										aria-expanded={isApprovalMenuOpen}
+										aria-label="Approval mode"
+										disabled={isRunning}
+										className="flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-[14px] font-semibold text-foreground transition-colors hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-45"
+										onClick={() => setIsApprovalMenuOpen((value) => !value)}
+									>
+										<currentApprovalOption.icon className="size-4 text-[var(--app-accent)]" strokeWidth={1.8} />
+										<span>{currentApprovalOption.label}</span>
+										<ChevronDown className="size-4 text-muted-foreground" strokeWidth={1.8} />
+									</button>
+
+									{isApprovalMenuOpen ? (
+										<div
+											role="menu"
+											aria-label="Approval mode"
+											className="electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[320px] rounded-[24px] border border-[var(--app-sidebar-border)] bg-white/92 p-3 text-foreground shadow-[0_18px_46px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+											onDoubleClick={(event) => event.stopPropagation()}
+											onPointerDown={(event) => event.stopPropagation()}
+										>
+											<div className="px-1 pb-2 text-[13px] font-semibold text-muted-foreground">
+												How should mock actions be approved?
+											</div>
+											<div className="flex flex-col gap-0.5">
+												{APPROVAL_MODE_OPTIONS.map((option) => {
+													const isSelected = option.value === approvalMode;
+													return (
+														<button
+															key={option.value}
+															type="button"
+															role="menuitemradio"
+															aria-checked={isSelected}
+															onClick={() => {
+																setApprovalMode(option.value);
+																setIsApprovalMenuOpen(false);
+															}}
+															className="flex w-full items-start gap-3 rounded-2xl px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35"
+														>
+															<option.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+															<span className="min-w-0 flex-1">
+																<span className="block text-[14px] font-semibold text-foreground">{option.label}</span>
+																<span className="mt-0.5 block text-[12px] leading-4 text-muted-foreground">
+																	{option.description}
+																</span>
+															</span>
+															{isSelected ? (
+																<Check className="mt-0.5 size-4 shrink-0 text-foreground" strokeWidth={2} />
+															) : null}
+														</button>
+													);
+												})}
+											</div>
+										</div>
+									) : null}
+								</div>
 
 								<div className="min-w-0 flex-1" />
 
@@ -1367,6 +1541,8 @@ function App() {
 									<span>{statusLabel(runStatus, stopReason)}</span>
 								</div>
 							</footer>
+							)}
+							</>
 							)}
 						</div>
 					</div>
@@ -1592,35 +1768,191 @@ function ToolCallCard({ tool }: { tool: ToolCallView }) {
 	);
 }
 
-function PermissionCard({
+const APPROVAL_DETAILS_PREVIEW_LENGTH = 220;
+
+function approvalQuestion(request: MockPermissionRequest): string {
+	const title = request.toolCall?.title;
+	return title ? `Do you want me to go ahead with "${title}"?` : "Do you want me to proceed?";
+}
+
+function ApprovalPrompt({
 	request,
 	onRespond,
+	onDraftFeedback,
 }: {
 	request: MockPermissionRequest;
 	onRespond: (requestId: number | string, optionId: string) => Promise<void>;
+	onDraftFeedback: (text: string) => void;
 }) {
+	const [highlightedIndex, setHighlightedIndex] = useState(0);
+	const [isWritingFeedback, setIsWritingFeedback] = useState(false);
+	const [feedbackText, setFeedbackText] = useState("");
+	const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const feedbackInputRef = useRef<HTMLInputElement | null>(null);
+
+	const details = toolContentText(request.toolCall?.content);
+	const isDetailsLong = (details?.length ?? 0) > APPROVAL_DETAILS_PREVIEW_LENGTH;
+	const visibleDetails = details && isDetailsLong && !isDetailsExpanded ? `${details.slice(0, APPROVAL_DETAILS_PREVIEW_LENGTH).trim()}…` : details;
+
+	useEffect(() => {
+		setHighlightedIndex(0);
+		setIsWritingFeedback(false);
+		setFeedbackText("");
+		setIsDetailsExpanded(false);
+		setIsSubmitting(false);
+	}, [request.requestId]);
+
+	useEffect(() => {
+		if (isWritingFeedback) {
+			feedbackInputRef.current?.focus();
+		}
+	}, [isWritingFeedback]);
+
+	useEffect(() => {
+		if (isWritingFeedback || isSubmitting) {
+			return;
+		}
+
+		function handleKeyDown(event: globalThis.KeyboardEvent) {
+			if (event.key === "ArrowDown") {
+				event.preventDefault();
+				setHighlightedIndex((index) => Math.min(index + 1, request.options.length - 1));
+			} else if (event.key === "ArrowUp") {
+				event.preventDefault();
+				setHighlightedIndex((index) => Math.max(index - 1, 0));
+			} else if (event.key === "Enter") {
+				event.preventDefault();
+				const option = request.options[highlightedIndex];
+				if (option) {
+					void submitOption(option.optionId);
+				}
+			}
+		}
+
+		document.addEventListener("keydown", handleKeyDown);
+		return () => document.removeEventListener("keydown", handleKeyDown);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isWritingFeedback, isSubmitting, highlightedIndex, request.options]);
+
+	async function submitOption(optionId: string) {
+		setIsSubmitting(true);
+		await onRespond(request.requestId, optionId);
+	}
+
+	function submitFeedback() {
+		if (isSubmitting) {
+			return;
+		}
+		const rejectOption =
+			request.options.find((option) => option.kind?.startsWith("reject")) ?? request.options[request.options.length - 1];
+		if (feedbackText.trim()) {
+			onDraftFeedback(feedbackText.trim());
+		}
+		if (rejectOption) {
+			void submitOption(rejectOption.optionId);
+		}
+	}
+
 	return (
-		<section className="w-full max-w-3xl rounded-[20px] border border-[rgba(79,109,255,0.24)] bg-white/78 p-4 shadow-[0_16px_36px_rgba(79,109,255,0.12)]">
-			<div className="flex items-start gap-3">
-				<ShieldCheck className="mt-0.5 size-5 text-[var(--app-accent)]" strokeWidth={1.9} />
-				<div className="min-w-0 flex-1">
-					<div className="text-[14px] font-semibold">{request.toolCall?.title ?? "Permission requested"}</div>
-					<div className="mt-1 text-[13px] leading-5 text-muted-foreground">The mock server is waiting for a permission response.</div>
+		<div className="px-6 py-5">
+			<div className="text-[16px] font-semibold leading-6 text-foreground">{approvalQuestion(request)}</div>
+
+			{visibleDetails ? (
+				<div className="mt-3 rounded-2xl bg-muted/70 p-3">
+					<pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">
+						{visibleDetails}
+					</pre>
+					{isDetailsLong ? (
+						<button
+							type="button"
+							className="mt-1 text-[12px] font-semibold text-muted-foreground hover:text-foreground hover:underline"
+							onClick={() => setIsDetailsExpanded((value) => !value)}
+						>
+							{isDetailsExpanded ? "Collapse" : "Expand"}
+						</button>
+					) : null}
 				</div>
-			</div>
-			<div className="mt-4 flex flex-wrap gap-2">
-				{request.options.map((option) => (
+			) : null}
+
+			<div className="mt-4 flex flex-col gap-1">
+				{request.options.map((option, index) => (
 					<button
 						key={option.optionId}
 						type="button"
-						className="rounded-2xl bg-foreground px-3 py-2 text-[13px] font-semibold text-background transition-colors hover:bg-foreground/90"
-						onClick={() => void onRespond(request.requestId, option.optionId)}
+						disabled={isSubmitting}
+						className={cn(
+							"flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-[14px] font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+							index === highlightedIndex ? "bg-muted/80" : "hover:bg-muted/50",
+						)}
+						onMouseEnter={() => setHighlightedIndex(index)}
+						onClick={() => void submitOption(option.optionId)}
 					>
-						{option.name}
+						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-[12px] font-semibold text-muted-foreground shadow-sm">
+							{index + 1}
+						</span>
+						<span className="min-w-0 flex-1 truncate">{option.name}</span>
 					</button>
 				))}
 			</div>
-		</section>
+
+			<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
+				{isWritingFeedback ? (
+					<div className="flex items-center gap-2 px-1">
+						<Pencil className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+						<input
+							ref={feedbackInputRef}
+							type="text"
+							value={feedbackText}
+							placeholder="Tell the agent what to do differently"
+							aria-label="Tell the agent what to do differently"
+							className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none"
+							disabled={isSubmitting}
+							onChange={(event) => setFeedbackText(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									submitFeedback();
+								} else if (event.key === "Escape") {
+									event.preventDefault();
+									setIsWritingFeedback(false);
+									setFeedbackText("");
+								}
+							}}
+						/>
+						<button
+							type="button"
+							disabled={isSubmitting}
+							className="shrink-0 rounded-xl px-2 py-1 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-60"
+							onClick={() => {
+								setIsWritingFeedback(false);
+								setFeedbackText("");
+							}}
+						>
+							Skip
+						</button>
+						<button
+							type="button"
+							disabled={isSubmitting}
+							className="shrink-0 rounded-xl bg-foreground px-3 py-1.5 text-[13px] font-semibold text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-60"
+							onClick={submitFeedback}
+						>
+							Submit
+						</button>
+					</div>
+				) : (
+					<button
+						type="button"
+						disabled={isSubmitting}
+						className="flex items-center gap-2 rounded-2xl px-3 py-2 text-left text-[14px] font-medium text-muted-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60"
+						onClick={() => setIsWritingFeedback(true)}
+					>
+						<Pencil className="size-4 shrink-0" strokeWidth={1.8} />
+						<span>No, and tell the agent what to do differently</span>
+					</button>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -1628,6 +1960,15 @@ function ErrorCard({ message }: { message: string }) {
 	return (
 		<div className="flex w-full max-w-3xl items-center gap-3 rounded-[20px] border border-red-500/20 bg-red-50/80 p-4 text-[14px] font-medium text-red-700 shadow-[0_12px_32px_rgba(127,29,29,0.08)]">
 			<X className="size-4 shrink-0" strokeWidth={2} />
+			<span>{message}</span>
+		</div>
+	);
+}
+
+function InfoCard({ message }: { message: string }) {
+	return (
+		<div className="flex w-full max-w-3xl items-center gap-3 rounded-[20px] border border-[rgba(0,0,0,0.08)] bg-white/68 p-4 text-[14px] font-medium text-muted-foreground shadow-[0_12px_32px_rgba(17,24,39,0.07)]">
+			<ShieldCheck className="size-4 shrink-0 text-[var(--app-accent)]" strokeWidth={1.9} />
 			<span>{message}</span>
 		</div>
 	);

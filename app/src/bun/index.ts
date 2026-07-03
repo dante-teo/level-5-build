@@ -239,6 +239,20 @@ class MockAcpClient {
 	}
 
 	async listSessions(): Promise<MockSessionSummary[]> {
+		await this.ensureProcess();
+		await this.ensureInitialized();
+		let cursor: string | undefined;
+		do {
+			const result = asObject(
+				await this.request("session/list", cursor ? { cursor } : {}),
+			);
+			const sessionValues = Array.isArray(result.sessions) ? result.sessions : [];
+			for (const sessionValue of sessionValues) {
+				this.rememberSession(normalizeSessionSummary(sessionValue), false);
+			}
+			cursor = asOptionalString(result.nextCursor);
+		} while (cursor);
+
 		return this.sortedSessions();
 	}
 
@@ -414,7 +428,7 @@ class MockAcpClient {
 		this.emitConfig(result.configOptions);
 	}
 
-	private rememberSession(session: MockSessionSummary): MockSessionSummary {
+	private rememberSession(session: MockSessionSummary, shouldEmit = true): MockSessionSummary {
 		const existing = this.sessions.get(session.sessionId);
 		const nextSession = {
 			...existing,
@@ -425,7 +439,9 @@ class MockAcpClient {
 			messageCount: session.messageCount || existing?.messageCount || 0,
 		};
 		this.sessions.set(session.sessionId, nextSession);
-		this.emit({ kind: "session", session: nextSession });
+		if (shouldEmit) {
+			this.emit({ kind: "session", session: nextSession });
+		}
 		return nextSession;
 	}
 
@@ -763,10 +779,12 @@ function normalizeSessionSummary(value: JsonValue | undefined): MockSessionSumma
 	const meta = asObject(object._meta);
 	const title = asString(object.title).trim();
 	const displayTitle = title === "New mock agent session" ? "" : title;
+	const cwd = asString(object.cwd);
 	return {
 		sessionId: asString(object.sessionId),
 		title: displayTitle || "New chat",
-		cwd: asString(object.cwd),
+		cwd,
+		isNoProject: resolveCwd(cwd) === homedir(),
 		updatedAt: asString(object.updatedAt, new Date(0).toISOString()),
 		messageCount: asNumber(meta.messageCount),
 	};
@@ -810,9 +828,7 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 				return mockClient?.respondToPermission(params) ?? false;
 			},
 			listMockSessions: async () => {
-				if (!mockClient) {
-					return [];
-				}
+				mockClient ??= new MockAcpClient(sendMockUpdate);
 				return mockClient.listSessions();
 			},
 			loadMockSession: async (params: LoadMockSessionParams) => {

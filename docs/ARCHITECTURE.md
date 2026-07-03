@@ -45,7 +45,7 @@ Model selection is exposed through the ACP-native `configOptions` response (`con
 
 ### Manual testing with the app
 
-The app has a built-in mock ACP client path for the current composer workflow. The main process lazily spawns the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime only after the user sends the first prompt; simply opening the app must not start ACP, initialize a session, or list sessions. This keeps the empty workspace cheap and avoids protocol side effects before user intent is clear.
+The app has a built-in mock ACP client path for the current composer workflow. On app open, the webview asks the main process to list mock sessions, which lazily spawns and initializes the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime and calls `session/list` so persisted sessions can populate the sidebar before the first prompt. It does not create a new ACP session until the user sends a prompt.
 
 ### Verification
 
@@ -118,7 +118,7 @@ Current app RPC includes the mock-agent development surface:
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `startMockPrompt({ prompt, cwd, model, approvalMode })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running.
 - `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests.
-- `listMockSessions()`: returns the app-side mock session summaries currently known to the main process.
+- `listMockSessions()`: initializes the mock ACP client if needed, calls `session/list`, and returns known mock session summaries.
 - `loadMockSession({ sessionId })`: loads or resumes a known mock session and replays the cached transcript into the webview.
 - `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
 - `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
@@ -131,7 +131,7 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 
 `app/src/bun/index.ts` contains a small stdio JSON-RPC client for local mock-agent development. It:
 
-- resolves bundled `acp-mock-server/src/index.ts` lazily when the first prompt is sent, by searching upward from the running process cwd and bundled main file location;
+- resolves bundled `acp-mock-server/src/index.ts` lazily when sessions are first listed or a prompt is first sent, by searching upward from the running process cwd and bundled main file location;
 - spawns the mock server with the app's Bun runtime, with protocol stdout/stderr kept separate;
 - stores mock server state under `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set;
 - sends `initialize`, then `session/new`, then mock config updates for model and mode, then `session/prompt`;
@@ -142,12 +142,12 @@ The webview should treat `startMockPrompt` as an acceptance call, not as the who
 - keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, and tool calls, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
 - normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
 
-The sidebar session list is intentionally not populated on app open. It begins empty, then reflects sessions created or loaded during the current main-process lifetime. The underlying mock server still persists ACP session state for protocol testing, but the app-side full transcript cache is in memory and is reset when the main process exits.
+The sidebar session list is populated on app open from ACP `session/list`. This startup list pass is background hydration: failures should not create transcript content or force the workspace out of its empty-chat state. Full transcript caches are still in memory and are reset when the main process exits; persisted sessions loaded after relaunch replay through ACP.
 
 Keep this mock client local-development oriented. Real provider/client architecture should be introduced separately rather than growing production assumptions into this mock path.
 
 ### Window chrome
 
-The window is frameless: `titleBarStyle: "hiddenInset"` (native traffic lights, no visible title bar strip, `FullSizeContentView` so the webview covers the whole window). Because the webview covers the title bar area, window dragging has to be opted into explicitly via the `electrobun-webkit-app-region-drag` CSS class (Electrobun's equivalent of Electron's `-webkit-app-region: drag`); any future interactive controls placed over a draggable region need `electrobun-webkit-app-region-no-drag` to stay clickable.
+The window is frameless: `titleBarStyle: "hiddenInset"` (native traffic lights, no visible title bar strip, `FullSizeContentView` so the webview covers the whole window). Because the webview covers the title bar area, window dragging has to be opted into explicitly via the `electrobun-webkit-app-region-drag` CSS class (Electrobun's equivalent of Electron's `-webkit-app-region: drag`); any future interactive controls placed over a draggable region need `electrobun-webkit-app-region-no-drag` to stay clickable. The current draggable strip starts to the right of the native macOS traffic lights so close/minimize/zoom remain clickable.
 
 **Known upstream limitation:** Electrobun's window drag is implemented as a custom mouse-tracking move (not the OS's native window-drag/move loop), so dragging to the screen edges or top does not trigger native window tiling/snap the way a normal window would (tracked upstream: [blackboardsh/electrobun#395](https://github.com/blackboardsh/electrobun/issues/395), [#406](https://github.com/blackboardsh/electrobun/pull/406), [#417](https://github.com/blackboardsh/electrobun/pull/417)). As a stand-in, double-clicking the window background calls the `toggleMaximizeWindow` RPC method to fill/restore the screen, mirroring the native "double-click title bar to zoom" convention.

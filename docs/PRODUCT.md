@@ -6,9 +6,11 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 `app/` is an early Electrobun desktop app shell with a mock-agent chat workflow: a frameless window with a native-feeling React workspace, a light translucent sidebar with mock session management, New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC.
 
-The first shipped agent path is intentionally local and mock-only. On app open, the workspace shows a centered prompt composer and does not start or initialize ACP. The first valid Send lazily spawns the bundled `acp-mock-server/`, creates a mock ACP session, sends the prompt, and renders streamed mock messages, plans, tool calls, permission requests, errors, and stop reasons. Folder selection is optional; when unset, the mock ACP session uses the user's home directory as its cwd behind the scenes.
+The first shipped agent path is intentionally local and mock-only. On app open, the workspace shows a centered prompt composer and initializes the bundled `acp-mock-server/` only far enough to list persisted sessions; it does not create a new ACP session until the first valid Send. Sending a prompt creates or resumes a mock ACP session and renders streamed mock messages, plans, tool calls, permission requests, errors, and stop reasons.
 
-The sidebar shows an `All chats` section for mock sessions created during the current main-process lifetime. A chat appears after the first prompt creates an ACP session. Selecting a chat restores the cached mock transcript, including plan and tool cards; right-clicking a chat exposes delete with confirmation. This is a local development affordance, not the final production session store.
+Folder selection is optional. The empty composer footer exposes a searchable `Choose project` menu built from current mock sessions plus the selected folder, with actions to choose a folder or leave project context unset. When no project is selected, the mock ACP session still uses the user's home directory as its cwd behind the scenes so the local mock agent can operate globally, but that home-directory fallback is not presented as a recent project.
+
+The sidebar shows an `All chats` section populated from ACP `session/list` on app open and updated as chats are created, loaded, or deleted. Selecting a chat restores the cached mock transcript when available, or reloads persisted messages from ACP after relaunch; right-clicking a chat exposes delete with confirmation. This is a local development affordance, not the final production session store.
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
 

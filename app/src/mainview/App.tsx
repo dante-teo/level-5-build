@@ -5,6 +5,7 @@ import {
 	type PointerEvent,
 	type ReactNode,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -15,14 +16,13 @@ import {
 	ChevronDown,
 	Circle,
 	Folder,
-	GitBranch,
-	Laptop,
 	LoaderCircle,
 	MessageSquarePlus,
 	MoreHorizontal,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Plus,
+	Search,
 	Send,
 	Settings,
 	ShieldCheck,
@@ -82,6 +82,11 @@ type SessionContextMenu = {
 	sessionId: string;
 	x: number;
 	y: number;
+};
+
+type RecentProject = {
+	path: string;
+	name: string;
 };
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
@@ -153,10 +158,33 @@ function statusDotClass(status: string) {
 	return "text-muted-foreground";
 }
 
-function shortFolderName(path: string | null) {
-	if (!path) return "Select folder";
+function folderDisplayName(path: string) {
 	const parts = path.split("/").filter(Boolean);
 	return parts.length > 0 ? parts[parts.length - 1] : path;
+}
+
+function projectLabel(path: string | null) {
+	return path ? folderDisplayName(path) : "Choose project";
+}
+
+function compactTitle(text: string) {
+	const normalized = text.trim().replace(/\s+/g, " ");
+	if (normalized.length <= 48) {
+		return normalized;
+	}
+	return `${normalized.slice(0, 47).trim()}...`;
+}
+
+function isFolderlessProjectPath(path: string) {
+	const normalized = path.trim();
+	return normalized === "~" || normalized === "~/";
+}
+
+function sessionProjectFolder(session: MockSessionSummary | undefined) {
+	if (!session || session.isNoProject || isFolderlessProjectPath(session.cwd)) {
+		return null;
+	}
+	return session.cwd.trim() || null;
 }
 
 function sessionTitle(session: MockSessionSummary | undefined) {
@@ -212,6 +240,8 @@ function App() {
 	const [sidebarWidth, setSidebarWidth] = useAtom(sidebarWidthAtom);
 	const [prompt, setPrompt] = useState("");
 	const [projectFolder, setProjectFolder] = useState<string | null>(null);
+	const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+	const [projectSearch, setProjectSearch] = useState("");
 	const [model, setModel] = useState<MockModelId>("mock-pro");
 	const [approvalMode, setApprovalMode] = useState<ApprovalModeId>("ask");
 	const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
@@ -223,15 +253,61 @@ function App() {
 	const [stopReason, setStopReason] = useState<string | null>(null);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+	const projectMenuRef = useRef<HTMLDivElement | null>(null);
+	const projectSearchRef = useRef<HTMLInputElement | null>(null);
 	const optimisticUserTextRef = useRef<string | null>(null);
+	const pendingPromptProjectFolderRef = useRef<string | null | undefined>(undefined);
+	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
 	const currentPlanKeyRef = useRef("plan-initial");
 	const SidebarToggleIcon = isSidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
 	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
 	const isRunning = runStatus === "starting" || runStatus === "running";
 	const hasConversation = transcriptItems.length > 0;
 	const activeSessionStatus = activeSessionId ? runStatus : "idle";
+	const activeSession = activeSessionId ? sessions.find((session) => session.sessionId === activeSessionId) : undefined;
 	const deleteTarget = deleteTargetId ? sessions.find((session) => session.sessionId === deleteTargetId) : undefined;
 	const menuSession = contextMenu ? sessions.find((session) => session.sessionId === contextMenu.sessionId) : undefined;
+	const firstUserMessage = transcriptItems.find(
+		(item): item is Extract<TranscriptItem, { type: "message" }> =>
+			item.type === "message" && item.message.role === "user",
+	);
+	const activeSessionTitle = sessionTitle(activeSession);
+	const shouldShowSessionContext = hasConversation && Boolean(projectFolder);
+	const topBarTitle =
+		shouldShowSessionContext && activeSessionTitle === "New chat" && firstUserMessage
+			? compactTitle(firstUserMessage.message.text)
+			: shouldShowSessionContext
+				? activeSessionTitle
+				: "Level5";
+	const topBarSubtitle = projectFolder ? folderDisplayName(projectFolder) : null;
+	const recentProjects = useMemo<RecentProject[]>(() => {
+		const seen = new Set<string>();
+		const projects: RecentProject[] = [];
+
+		for (const session of sortSessions(sessions)) {
+			const path = sessionProjectFolder(session);
+			if (!path || seen.has(path)) {
+				continue;
+			}
+			seen.add(path);
+			projects.push({ path, name: folderDisplayName(path) });
+		}
+
+		if (projectFolder && !seen.has(projectFolder)) {
+			projects.unshift({ path: projectFolder, name: folderDisplayName(projectFolder) });
+		}
+
+		return projects;
+	}, [projectFolder, sessions]);
+	const filteredProjects = useMemo(() => {
+		const search = projectSearch.trim().toLowerCase();
+		if (!search) {
+			return recentProjects;
+		}
+		return recentProjects.filter(
+			(project) => project.name.toLowerCase().includes(search) || project.path.toLowerCase().includes(search),
+		);
+	}, [projectSearch, recentProjects]);
 
 	useEffect(() => {
 		const handler = (update: MockAgentUpdate) => {
@@ -239,6 +315,9 @@ function App() {
 				setRunStatus(update.status);
 				if (update.sessionId) {
 					setActiveSessionId(update.sessionId);
+					if (pendingPromptProjectFolderRef.current !== undefined) {
+						sessionProjectFoldersRef.current.set(update.sessionId, pendingPromptProjectFolderRef.current);
+					}
 					void refreshMockSessions();
 				}
 				return;
@@ -263,17 +342,22 @@ function App() {
 				setSessions((current) => upsertSession(current, update.session));
 				if (update.session.sessionId) {
 					setActiveSessionId(update.session.sessionId);
+					if (pendingPromptProjectFolderRef.current !== undefined) {
+						sessionProjectFoldersRef.current.set(update.session.sessionId, pendingPromptProjectFolderRef.current);
+					}
 				}
 				void refreshMockSessions();
 				return;
 			}
 			if (update.kind === "stop") {
+				pendingPromptProjectFolderRef.current = undefined;
 				setStopReason(update.stopReason);
 				setRunStatus("completed");
 				void refreshMockSessions();
 				return;
 			}
 			if (update.kind === "error") {
+				pendingPromptProjectFolderRef.current = undefined;
 				setTranscriptItems((current) => upsertErrorItem(current, update.message));
 				setRunStatus("error");
 			}
@@ -282,6 +366,10 @@ function App() {
 		const rpc = electroview.rpc;
 		rpc?.addMessageListener("mockAgentUpdate", handler);
 		return () => rpc?.removeMessageListener("mockAgentUpdate", handler);
+	}, []);
+
+	useEffect(() => {
+		void refreshMockSessions({ reportErrors: false });
 	}, []);
 
 	useEffect(() => {
@@ -306,6 +394,44 @@ function App() {
 			document.removeEventListener("keydown", handleKeyDown);
 		};
 	}, [contextMenu]);
+
+	useEffect(() => {
+		if (!isProjectMenuOpen) {
+			return;
+		}
+
+		function closeMenu() {
+			setIsProjectMenuOpen(false);
+			setProjectSearch("");
+		}
+
+		function handlePointerDown(event: globalThis.PointerEvent) {
+			if (projectMenuRef.current?.contains(event.target as Node)) {
+				return;
+			}
+			closeMenu();
+		}
+
+		function handleKeyDown(event: globalThis.KeyboardEvent) {
+			if (event.key === "Escape") {
+				closeMenu();
+			}
+		}
+
+		document.addEventListener("pointerdown", handlePointerDown);
+		document.addEventListener("keydown", handleKeyDown);
+		projectSearchRef.current?.focus();
+		return () => {
+			document.removeEventListener("pointerdown", handlePointerDown);
+			document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [isProjectMenuOpen]);
+
+	useEffect(() => {
+		if ((isRunning || hasConversation) && isProjectMenuOpen) {
+			closeProjectMenu();
+		}
+	}, [hasConversation, isRunning, isProjectMenuOpen]);
 
 	useEffect(() => {
 		if (contextMenu && !sessions.some((session) => session.sessionId === contextMenu.sessionId)) {
@@ -399,7 +525,7 @@ function App() {
 		return [...current.filter((item) => item.type !== "error"), { type: "error", key: `error-${Date.now()}`, message }];
 	}
 
-	async function refreshMockSessions() {
+	async function refreshMockSessions({ reportErrors = true }: { reportErrors?: boolean } = {}) {
 		try {
 			const nextSessions = await electroview.rpc?.request.listMockSessions();
 			if (nextSessions) {
@@ -407,6 +533,9 @@ function App() {
 			}
 		} catch (error) {
 			if (isMissingRpcHandlerError(error, "listMockSessions")) {
+				return;
+			}
+			if (!reportErrors) {
 				return;
 			}
 			setTranscriptItems((current) =>
@@ -421,6 +550,11 @@ function App() {
 		setTranscriptItems([]);
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setStopReason(null);
+	}
+
+	function closeProjectMenu() {
+		setIsProjectMenuOpen(false);
+		setProjectSearch("");
 	}
 
 	function handleResizePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -441,11 +575,64 @@ function App() {
 		setSidebarWidth(clampSidebarWidth(event.clientX));
 	}
 
+	async function handleChooseProject(folder: string) {
+		if (isRunning) {
+			return;
+		}
+		if (folder === projectFolder) {
+			closeProjectMenu();
+			return;
+		}
+
+		const started = await electroview.rpc?.request.startNewMockChat();
+		if (started === false) {
+			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before switching projects."));
+			return;
+		}
+
+		resetConversationPane();
+		setActiveSessionId(null);
+		setContextMenu(null);
+		setDeleteTargetId(null);
+		setRunStatus("idle");
+		setProjectFolder(folder);
+		closeProjectMenu();
+	}
+
+	async function handleClearProject() {
+		if (isRunning) {
+			return;
+		}
+		if (!projectFolder) {
+			closeProjectMenu();
+			return;
+		}
+
+		const started = await electroview.rpc?.request.startNewMockChat();
+		if (started === false) {
+			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before leaving this project."));
+			return;
+		}
+
+		resetConversationPane();
+		setActiveSessionId(null);
+		setContextMenu(null);
+		setDeleteTargetId(null);
+		setRunStatus("idle");
+		setProjectFolder(null);
+		closeProjectMenu();
+	}
+
 	async function handleSelectFolder() {
+		if (isRunning) {
+			return;
+		}
 		const folder = await electroview.rpc?.request.selectProjectFolder();
 		if (folder) {
-			setProjectFolder(folder);
+			await handleChooseProject(folder);
+			return;
 		}
+		closeProjectMenu();
 	}
 
 	async function handleSend() {
@@ -457,6 +644,7 @@ function App() {
 		setStopReason(null);
 		setPrompt("");
 		setRunStatus("starting");
+		pendingPromptProjectFolderRef.current = projectFolder;
 		optimisticUserTextRef.current = trimmedPrompt;
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setTranscriptItems((current) =>
@@ -470,6 +658,7 @@ function App() {
 			approvalMode,
 		});
 		if (!response?.accepted) {
+			pendingPromptProjectFolderRef.current = undefined;
 			optimisticUserTextRef.current = null;
 			setRunStatus("idle");
 			setTranscriptItems((current) => upsertErrorItem(current, "The mock agent is already running or the prompt was empty."));
@@ -526,7 +715,12 @@ function App() {
 			setSessions((current) => current.filter((session) => session.sessionId !== sessionId));
 			setActiveSessionId(null);
 			setTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to load chat."));
+			return;
 		}
+		const loadedSession = sessions.find((session) => session.sessionId === sessionId);
+		setProjectFolder(
+			sessionProjectFoldersRef.current.get(sessionId) ?? sessionProjectFolder(loadedSession),
+		);
 		void refreshMockSessions();
 	}
 
@@ -565,9 +759,17 @@ function App() {
 
 	return (
 		<div
-			className="app-gradient-background electrobun-webkit-app-region-drag fixed inset-0 flex h-screen w-screen overflow-hidden text-foreground"
+			className="app-gradient-background fixed inset-0 flex h-screen w-screen overflow-hidden text-foreground"
 			onDoubleClick={() => electroview.rpc?.request.toggleMaximizeWindow()}
 		>
+			<div
+				className="electrobun-webkit-app-region-drag fixed left-24 right-0 top-0 z-50 h-8"
+				aria-hidden="true"
+				onDoubleClick={(event) => {
+					event.stopPropagation();
+					void electroview.rpc?.request.toggleMaximizeWindow();
+				}}
+			/>
 			<aside
 				className={cn(
 					"relative flex h-full shrink-0 flex-col overflow-hidden bg-[var(--app-sidebar-surface)] backdrop-blur-2xl transition-[width] duration-200 ease-out",
@@ -682,7 +884,12 @@ function App() {
 			) : null}
 
 			<div
-				className="electrobun-webkit-app-region-no-drag fixed z-10 inline-flex h-11 w-auto items-center gap-2 rounded-full border border-[var(--app-sidebar-border)] bg-white/80 py-1 pr-4 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl"
+				className={cn(
+					"electrobun-webkit-app-region-no-drag fixed z-10 inline-flex w-auto items-center gap-2 border border-[var(--app-sidebar-border)] bg-white/80 py-1 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl",
+					shouldShowSessionContext
+						? "min-h-14 max-w-[520px] rounded-[22px] pr-3"
+						: "h-11 rounded-full pr-4",
+				)}
 				style={{
 					left: `${renderedSidebarWidth + SIDEBAR_FLOATING_TOGGLE_GAP}px`,
 					top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`,
@@ -697,8 +904,22 @@ function App() {
 				>
 					<SidebarToggleIcon className="size-5 shrink-0" strokeWidth={1.8} />
 				</SidebarButton>
-				<img src={appIcon} alt="" className="size-6 shrink-0 rounded-full" />
-				<span className="shrink-0 text-[14px] font-semibold text-foreground">Level5</span>
+				{shouldShowSessionContext ? (
+					<div className="min-w-0 py-1">
+						<div className="flex min-w-0 items-center gap-2">
+							<span className="min-w-0 truncate text-[14px] font-semibold leading-5 text-foreground">{topBarTitle}</span>
+							<MoreHorizontal className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+						</div>
+						{topBarSubtitle ? (
+							<div className="truncate text-[12px] font-medium leading-4 text-muted-foreground">{topBarSubtitle}</div>
+						) : null}
+					</div>
+				) : (
+					<>
+						<img src={appIcon} alt="" className="size-6 shrink-0 rounded-full" />
+						<span className="shrink-0 text-[14px] font-semibold text-foreground">{topBarTitle}</span>
+					</>
+				)}
 			</div>
 
 			<main className="electrobun-webkit-app-region-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-20" aria-label="Workspace">
@@ -730,7 +951,7 @@ function App() {
 							</div>
 						) : null}
 
-						<div className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-hidden rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}>
+						<div className={cn("mx-auto w-full max-w-3xl shrink-0 overflow-visible rounded-[24px] border border-[rgba(0,0,0,0.1)] bg-[rgba(255,255,255,0.72)] shadow-[0_24px_70px_rgba(17,24,39,0.13)] backdrop-blur-2xl", hasConversation ? "relative z-10 mt-auto" : "")}>
 							<div className="px-6 pt-4">
 								<textarea
 									ref={textareaRef}
@@ -790,33 +1011,112 @@ function App() {
 								</button>
 							</div>
 
+							{hasConversation ? null : (
 							<footer className="flex h-12 items-center justify-between bg-white/25 px-6 text-[14px] font-medium text-muted-foreground">
-								<div className="flex min-w-0 items-center gap-4">
+								<div ref={projectMenuRef} className="relative flex min-w-0 items-center">
 									<button
 										type="button"
-										className="flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors hover:bg-white/60"
-										onClick={() => void handleSelectFolder()}
-										title={projectFolder ?? "Select folder"}
+										aria-haspopup="dialog"
+										aria-expanded={isProjectMenuOpen}
+										aria-label={projectFolder ? `Choose project, current project ${projectLabel(projectFolder)}` : "Choose project"}
+										disabled={isRunning}
+										className={cn(
+											"flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors hover:bg-white/60",
+											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35",
+											isRunning ? "cursor-not-allowed opacity-45" : "",
+										)}
+										onClick={() => {
+											if (isRunning) {
+												return;
+											}
+											setIsProjectMenuOpen((value) => !value);
+										}}
+										title={projectFolder ?? "Choose project"}
 									>
 										<Folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-										<span className="truncate">{shortFolderName(projectFolder)}</span>
+										<span className="max-w-48 truncate">{projectLabel(projectFolder)}</span>
 									</button>
-									<div className="hidden items-center gap-2 md:flex">
-										<Laptop className="size-4" strokeWidth={1.8} />
-										<span>Work locally</span>
-										<ChevronDown className="size-4" strokeWidth={1.8} />
-									</div>
-									<div className="hidden items-center gap-2 md:flex">
-										<GitBranch className="size-4" strokeWidth={1.8} />
-										<span>main</span>
-										<ChevronDown className="size-4" strokeWidth={1.8} />
-									</div>
+
+									{isProjectMenuOpen ? (
+										<div
+											role="dialog"
+											aria-label="Choose project"
+											className="electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[336px] rounded-[24px] border border-[var(--app-sidebar-border)] bg-white/92 p-3 text-foreground shadow-[0_18px_46px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+											onDoubleClick={(event) => event.stopPropagation()}
+											onPointerDown={(event) => event.stopPropagation()}
+										>
+											<label className="flex h-10 items-center gap-2 rounded-[18px] px-2 text-muted-foreground">
+												<Search className="size-4 shrink-0" strokeWidth={1.8} />
+												<input
+													ref={projectSearchRef}
+													type="search"
+													value={projectSearch}
+													placeholder="Search projects"
+													aria-label="Search projects"
+													className="min-w-0 flex-1 bg-transparent text-[14px] font-medium text-foreground placeholder:text-muted-foreground focus:outline-none"
+													onChange={(event) => setProjectSearch(event.target.value)}
+												/>
+											</label>
+
+											<div className="app-scrollbar-transparent mt-2 max-h-56 overflow-y-auto pr-1">
+												{filteredProjects.length === 0 ? (
+													<div className="flex h-10 items-center rounded-2xl px-2 text-[14px] font-semibold text-muted-foreground">
+														No matching projects
+													</div>
+												) : (
+													<div className="flex flex-col gap-1">
+														{filteredProjects.map((project) => {
+															const isSelected = project.path === projectFolder;
+															return (
+																<button
+																	key={project.path}
+																	type="button"
+																	title={project.path}
+																	className={cn(
+																		"flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-[14px] font-semibold transition-colors",
+																		"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35",
+																		isSelected
+																			? "bg-[var(--app-selected-surface)] text-foreground"
+																			: "text-foreground hover:bg-muted/70",
+																	)}
+																	onClick={() => void handleChooseProject(project.path)}
+																>
+																	<Folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+																	<span className="min-w-0 flex-1 truncate">{project.name}</span>
+																</button>
+															);
+														})}
+													</div>
+												)}
+											</div>
+
+											<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
+												<button
+													type="button"
+													className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-[14px] font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35"
+													onClick={() => void handleSelectFolder()}
+												>
+													<Plus className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+													<span className="min-w-0 flex-1 truncate">New project</span>
+												</button>
+												<button
+													type="button"
+													className="mt-1 flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-[14px] font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--app-accent)]/35"
+													onClick={() => void handleClearProject()}
+												>
+													<X className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+													<span className="min-w-0 flex-1 truncate">Don't work in a project</span>
+												</button>
+											</div>
+										</div>
+									) : null}
 								</div>
 								<div className="flex shrink-0 items-center gap-2 text-[12px]">
 									<Circle className={cn("size-2 fill-current", statusDotClass(runStatus))} strokeWidth={0} />
 									<span>{statusLabel(runStatus, stopReason)}</span>
 								</div>
 							</footer>
+							)}
 						</div>
 					</div>
 				</div>

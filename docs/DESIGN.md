@@ -184,7 +184,7 @@ Height: `56`.
 
 Contains:
 
-- Project title
+- Floating app/session capsule
 - Branch or context metadata
 - Quick actions
 - Active tool tabs when applicable
@@ -192,6 +192,9 @@ Contains:
 Rules:
 
 - Top bar controls align right.
+- The floating capsule stays just outside the sidebar edge and always contains the sidebar collapse/expand button.
+- When no project-backed chat is active, the capsule shows the app icon and `Level5`.
+- When a project-backed chat is active, the capsule may replace the app identity with a compact session title and muted project subtitle.
 - Use icon buttons for compact actions.
 - Use visible labels only for navigation tabs or commands that require clarity.
 - Interactive controls inside draggable regions must opt out of drag behavior.
@@ -208,6 +211,8 @@ Rules:
 - Maximum height is 8 text lines before internal scrolling.
 - Placeholder text is muted and concise.
 - Send is the only primary action in the composer group.
+- In the empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
+- Once a chat has visible transcript content, hide the project footer; project context moves to the top capsule when applicable.
 
 ## 13. Chat
 
@@ -451,4 +456,5 @@ If a custom top bar or draggable region is added:
 
 - Mark draggable background strips with `electrobun-webkit-app-region-drag`.
 - Mark interactive controls inside a draggable region with `electrobun-webkit-app-region-no-drag`.
+- Keep draggable strips clear of macOS traffic lights. The current strip starts to the right of the native controls instead of covering the full window.
 - Double-clicking the current draggable background toggles maximize/fill-screen. See `docs/ARCHITECTURE.md` for why this exists in place of native drag-to-tile.

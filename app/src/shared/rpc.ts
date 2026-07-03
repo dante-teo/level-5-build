@@ -55,6 +55,7 @@ export type MockSessionSummary = {
 	sessionId: string;
 	title: string;
 	cwd: string;
+	isNoProject?: boolean;
 	updatedAt: string;
 	messageCount: number;
 };

@@ -45,7 +45,7 @@ bun run build
 
 ## ACP Agent Runtime
 
-The app's production agent workflow uses Devin ACP. Opening the app shows the composer and does not start ACP. Selecting a project warms up the app-side ACP client for that cwd, spawns `devin --permission-mode <mode> acp`, creates an ACP session, and lets the composer receive model choices and slash commands before the first prompt. If no project is selected, the first valid Send lazily starts Devin using the user's home directory as cwd without presenting it as the selected project.
+The app's production agent workflow uses Devin ACP. Opening the app shows the composer and connects to the selected ACP backend once to initialize it and call `session/list`, so the sidebar can show persisted chats immediately. This launch-time connection does not create a new chat session. Selecting a project warms up the app-side ACP client for that cwd, spawns or reuses `devin --permission-mode <mode> acp`, creates an ACP session, and lets the composer receive model choices and slash commands before the first prompt. If no project is selected, the first valid Send lazily starts or reuses Devin using the user's home directory as cwd without presenting it as the selected project.
 
 The app-side ACP code is split into a reusable protocol core under `src/bun/acp/`, runtime helpers under `src/bun/agent/`, and the session adapter in `src/bun/index.ts`. The core handles NDJSON JSON-RPC transport, vendored ACP `v0.11.3` schema validation, request timeouts, pending-request cleanup, buffered notifications, extension request handling, and the idle-turn watchdog.
 
@@ -57,13 +57,13 @@ For local manual testing without Devin, run the app against the bundled mock ACP
 bun run dev:mock
 ```
 
-This sets `LEVEL5_USE_ACP_MOCK=1`, skips Devin CLI detection, and lazily spawns the bundled or repo-local `acp-mock-server/src/index.ts` over stdio when a project is prepared or the first prompt is sent. Mock app state defaults to `~/.level5-build/acp-mock-state.json`; override the state path with `ACP_MOCK_STATE_PATH` or the mock entrypoint with `LEVEL5_ACP_MOCK_INDEX_PATH` when testing a custom mock checkout.
+This sets `LEVEL5_USE_ACP_MOCK=1`, skips Devin CLI detection, and uses the bundled or repo-local `acp-mock-server/src/index.ts` over stdio. In mock mode, startup session listing spawns the mock backend immediately so `session/list` can populate the sidebar from persisted mock state; preparing a project or sending the first prompt then creates or loads the actual chat session. Mock app state defaults to `~/.level5-build/acp-mock-state.json`; override the state path with `ACP_MOCK_STATE_PATH` or the mock entrypoint with `LEVEL5_ACP_MOCK_INDEX_PATH` when testing a custom mock checkout.
 
 Approval modes map to Devin permission modes conservatively: `ask` and `auto` spawn Devin with `--permission-mode normal`; `full-access` spawns Devin with `--permission-mode bypass`. In `auto`, ACP permission requests are answered with the first allow-like option when available. In v1 the app does not advertise ACP filesystem or terminal client capabilities.
 
 While a prompt turn is running, the composer send button becomes a stop button that sends ACP `session/cancel`. If a prompt turn goes silent for too long, the adapter also sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, rejects local pending requests, and resets the subprocess so stale output from the timed-out turn cannot leak into a later prompt. The default idle timeout is 120 seconds and can be overridden with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS` for local testing.
 
-The sidebar's `All chats` list is backed by app-side in-memory session summaries. A row appears as soon as `session/new` succeeds for the first prompt. The app also keeps an in-memory transcript cache for each known session so selecting a previous chat restores message, plan, tool, and context-usage cards. The app-side full transcript cache is reset when the Electrobun main process exits; restart the main process after changing Bun-side RPC handlers or cache behavior.
+The sidebar's `All chats` list is backed by ACP `session/list` on startup plus app-side in-memory session summaries created during the current run. A row appears as soon as `session/new` succeeds for the first prompt. The app also keeps an in-memory transcript cache for each known session so selecting a previous chat restores message, plan, tool, and context-usage cards. The app-side full transcript cache is reset when the Electrobun main process exits; restart the main process after changing Bun-side RPC handlers or cache behavior.
 
 The composer's `+` ("Add to prompt") menu offers file/folder attachments sent as `resource_link` content blocks. Slash commands populate from ACP `available_commands_update`; the Skills group is hidden unless a future agent surface advertises real skills.
 
@@ -129,7 +129,7 @@ When you run `bun run dev` (without HMR):
 - **Release version**: push tags like `v0.0.0`; CI syncs `package.json`, `electrobun.config.ts`, and `src/shared/version.ts`
 - **Main process ⇄ webview calls**: add methods to the `AppRPC` type in `src/shared/rpc.ts`, implement the handler in `src/bun/index.ts`, call it from the webview via `electroview.rpc.request.<method>()`
 - **ACP protocol core**: edit `src/bun/acp/` for JSON-RPC transport, ACP schema validation, timeout, cancellation, and watchdog behavior. Keep this layer UI-agnostic.
-- **Devin ACP runtime**: edit `src/bun/agent/` for Devin command/permission-mode helpers, `src/bun/index.ts` for session adapter behavior, and `src/mainview/App.tsx` for composer/transcript rendering. Keep app-open lazy so the main process does not spawn or auth-probe Devin until project warm-up or first prompt.
+- **Devin ACP runtime**: edit `src/bun/agent/` for Devin command/permission-mode helpers, `src/bun/index.ts` for session adapter behavior, and `src/mainview/App.tsx` for composer/transcript rendering. App open intentionally connects once for `initialize` + `session/list`, but should not create a new chat session until project warm-up, session load, or first prompt.
 
 ## CI and Releases
 

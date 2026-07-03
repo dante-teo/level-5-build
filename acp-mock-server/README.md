@@ -31,7 +31,7 @@ cd app
 bun run dev:mock
 ```
 
-This is equivalent to running the app with `LEVEL5_USE_ACP_MOCK=1`. The app still does not start ACP on launch. Selecting a project or sending the first prompt lazily spawns the bundled or repo-local `acp-mock-server/src/index.ts` over stdio. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_INDEX_PATH=/absolute/path/to/acp-mock-server/src/index.ts`.
+This is equivalent to running the app with `LEVEL5_USE_ACP_MOCK=1`. In mock mode, app launch starts the bundled or repo-local `acp-mock-server/src/index.ts` over stdio once so the app can initialize ACP and call `session/list` for the sidebar. That startup list call does not create a new chat session; selecting a project or sending the first prompt creates or loads the actual session. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_INDEX_PATH=/absolute/path/to/acp-mock-server/src/index.ts`.
 
 From the repo root, the same manual app flow is available as:
 

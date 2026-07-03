@@ -231,9 +231,7 @@ class AgentAcpClient {
 	}
 
 	async listSessions(): Promise<AgentSessionSummary[]> {
-		if (!this.process) {
-			return this.sortedSessions();
-		}
+		await this.ensureProcess(this.processCwd ?? this.currentCwd ?? homedir());
 		await this.ensureInitialized();
 		let cursor: string | undefined;
 		do {
@@ -992,7 +990,8 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 				return agentClient?.respondToPermission(params) ?? false;
 			},
 			listAgentSessions: async () => {
-				return agentClient?.listSessions() ?? [];
+				agentClient ??= new AgentAcpClient(sendAgentUpdate);
+				return agentClient.listSessions();
 			},
 			listAgentSlashCommands: async () => {
 				return agentClient?.listSlashCommands() ?? [];

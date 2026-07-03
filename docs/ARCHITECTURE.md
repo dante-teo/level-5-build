@@ -137,7 +137,7 @@ Current app RPC includes the agent runtime surface:
 - `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. For Devin, `approvalMode` maps to process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`.
 - `cancelAgentPrompt()`: sends ACP `session/cancel` for the active turn and answers pending permission requests with ACP's cancelled outcome. The composer send button becomes this stop control while a turn is active.
 - `respondToAgentPermission({ requestId, optionId })`: answers `session/request_permission` requests that were surfaced to the user (approval mode `ask`, or any request the client could not auto-resolve). Responses use ACP's selected-outcome shape: `{ outcome: { outcome: "selected", optionId } }`.
-- `listAgentSessions()`: returns cached known session summaries without spawning Devin. If Devin is already connected, it may call ACP `session/list` to refresh summaries; app open must not spawn or auth-probe the CLI.
+- `listAgentSessions()`: cold-starts the selected ACP backend once when the webview asks for startup chat history, initializes ACP, calls `session/list`, and returns normalized session summaries. It does not create a new ACP chat session. Later calls reuse the connected process and refresh summaries through ACP.
 - `listAgentSlashCommands()` / `listAgentSkills()`: return cached composer menu data. Slash commands come from ACP `available_commands_update`; the Skills group is hidden unless a future agent surface advertises real skills separately.
 - `loadAgentSession({ sessionId })`: loads or resumes a known session and replays the cached transcript into the webview.
 - `deleteAgentSession({ sessionId })`: deletes a session through ACP and removes the app-side session/transcript cache entry.
@@ -162,7 +162,7 @@ The app-side workflow is split between a reusable ACP protocol core in `app/src/
 - passes `process.env` through so Devin can use CLI login state or environment credentials such as `WINDSURF_API_KEY`;
 - initializes ACP with honest v1 client capabilities: no client-side filesystem or terminal capability is advertised;
 - sends `initialize`, then `session/new` or `session/load`, then optional `session/set_config_option` for model, then `session/prompt`;
-- treats app open as lazy: `listAgentSessions`, `listAgentSlashCommands`, and `listAgentSkills` return cached/empty data without spawning Devin;
+- treats app open as a session-list warm-up: the webview calls `listAgentSessions`, which starts the selected backend once, sends `initialize`, and then calls `session/list` so the sidebar can show persisted chats without waiting for project selection or first prompt. Composer metadata remains lazy: `listAgentSlashCommands` and `listAgentSkills` return cached/empty data until a session is prepared or loaded;
 - warms up Devin on project selection through `prepareAgentSession` so model config and slash commands are available before first send;
 - when Devin sends `session/request_permission`, `auto` chooses an allow-like option if one is available and emits an informational note; otherwise the request is surfaced to the webview;
 - preserves the selected approval mode across process restarts caused by cwd or permission-mode changes;

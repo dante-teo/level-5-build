@@ -9,7 +9,7 @@ This repo currently hosts:
 - `scripts/`, root-level helper scripts for workflows that span multiple packages.
 - `docs/`, shared architecture/product/design documentation.
 
-The mock server remains usable as a standalone stdio ACP server, and the desktop app now bundles the mock server runtime files into its Electrobun resources so the app can treat it as its local ACP backend while the UI surface is being built out.
+The mock server remains usable as a standalone stdio ACP server and protocol fixture. The desktop app's normal runtime path uses Devin ACP through the local `devin` CLI.
 
 ## `acp-mock-server/` — ACP test agent
 
@@ -42,7 +42,7 @@ The server emits realistic `session/update` notifications for:
 
 Initial session notifications are intentionally emitted after the `session/new` response so clients can create per-session UI state before handling updates.
 
-**Known simplification:** `usage_update`'s `size` (context window token limit) is currently hardcoded per scenario call site rather than derived from the session's selected model, even though `models()` already advertises distinct `contextWindow` values per model (`mock-fast` 64k, `mock-pro` 200k, `mock-deep` 1M). This was inert while the app ignored `usage_update`; now that the app renders a context-usage indicator from it (see `mockAgentUpdate` below and `docs/DESIGN.md` §12), switching to `mock-fast` or `mock-deep` will still show a percentage computed against the hardcoded value. Fix by threading the session's model `contextWindow` into the `usage()` call sites in `acp-mock-server/src/server.ts`.
+**Known simplification:** `usage_update`'s `size` (context window token limit) is currently hardcoded per scenario call site rather than derived from the session's selected model, even though `models()` already advertises distinct `contextWindow` values per model (`mock-fast` 64k, `mock-pro` 200k, `mock-deep` 1M). This matters only when running the mock server as a test fixture. Fix by threading the session's model `contextWindow` into the `usage()` call sites in `acp-mock-server/src/server.ts`.
 
 ### Model and command testing
 
@@ -50,7 +50,7 @@ Model selection is exposed through the ACP-native `configOptions` response (`con
 
 ### Manual testing with the app
 
-The app has a built-in mock ACP client path for the current composer workflow. On app open, the webview asks the main process to list mock sessions, which lazily spawns and initializes the bundled `acp-mock-server/src/index.ts` with the app's Bun runtime and calls `session/list` so persisted sessions can populate the sidebar before the first prompt. It does not create a new ACP session until the user sends a prompt.
+The desktop app does not use the mock server for normal chat/session work. Use `./start.sh` from `acp-mock-server/` when manually testing protocol behavior outside the app.
 
 ### Verification
 
@@ -84,7 +84,7 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 
 ### Build / dev flow
 
-- `bun run start`: `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process against the bundled assets. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` -> `views/mainview/index.html`, `dist/assets` -> `views/mainview/assets`, and the mock ACP server runtime files -> `acp-mock-server/`; the main process loads the webview from the `views://mainview/index.html` custom protocol.
+- `bun run start`: `vite build` bundles the webview into `app/dist`, then `electrobun dev` runs the main process against the bundled assets. `electrobun.config.ts`'s `build.copy` maps `dist/index.html` -> `views/mainview/index.html`, `dist/assets` -> `views/mainview/assets`, and fixture/runtime assets -> their app resource locations; the main process loads the webview from the `views://mainview/index.html` custom protocol.
 - `bun run dev`: runs `electrobun dev --watch` without rebuilding the Vite webview first. Use it only when bundled assets already exist or the change is limited to Electrobun-side files.
 - `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside `bun run start`. `app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
 - `bun run build`: production build (`vite build && electrobun build`).
@@ -118,50 +118,53 @@ The webview bundles product fonts from `app/src/mainview/assets/fonts/` and decl
 
 A typed RPC contract lives in `app/src/shared/rpc.ts` (`AppRPC`, built on Electrobun's `RPCSchema`). It's implemented on the main-process side via `BrowserView.defineRPC` (passed into the `BrowserWindow` constructor) in `app/src/bun/index.ts`, and consumed in the webview via `Electroview.defineRPC` in `app/src/mainview/lib/electrobun.ts` (exported as `electroview`). To add a new main-process capability: add the method to `AppRPC.bun.requests`, implement it in `src/bun/index.ts`'s handler object, and call it from the webview via `electroview.rpc.request.<method>()`.
 
-Current app RPC includes the mock-agent development surface:
+Current app RPC includes the agent runtime surface:
 
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `selectAttachmentFile()` / `selectAttachmentFolder()`: open single-selection file/directory pickers for the composer's "Add to prompt" menu, independent of the project-folder picker above.
-- `startMockPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the mock ACP flow if no turn is already running. `attachments` (file/directory paths chosen via the composer menu) are sent as `resource_link` content blocks alongside the text block. `approvalMode` (`ApprovalModeId`: `ask` / `auto` / `full-access`) is tracked client-side for the duration of the turn and governs how the mock client answers `session/request_permission` (see below) — it is not sent to the mock server as an ACP config option and is unrelated to the ACP legacy "mode" testing feature (still exercised via the `/mode <id>` slash command).
-- `respondToMockPermission({ requestId, optionId })`: answers mock `session/request_permission` requests that were surfaced to the user (i.e. approval mode `ask`, or a request the client couldn't auto-resolve). The webview's approval prompt has no separate cancel control, so it treats a falsy/failed response here (a stale request id, a dropped RPC call) the same as any other terminal outcome: clear the pending prompt and surface an error, rather than leaving the composer takeover stuck.
-- `listMockSessions()`: initializes the mock ACP client if needed, calls `session/list`, and returns known mock session summaries.
-- `listMockSlashCommands()` / `listMockSkills()`: initialize the mock ACP client if needed and call the mock server's `_mock/list_slash_commands` / `_mock/list_skills` extension methods (no session required) to populate the composer's plus-menu groups. Note: picking a slash command inserts `/<command.name>`, which matches the mock server's own command names, but picking a skill inserts `/<skill.id>` (e.g. `/workspace-search`); the mock server's dedicated skills scenario only triggers on `/skills` or text containing "skill", so most individual skill picks currently fall through to whatever other keyword-matched scenario their id happens to contain (e.g. `/web-fetch` triggers the web scenario) rather than a skills-specific response.
-- `loadMockSession({ sessionId })`: loads or resumes a known mock session and replays the cached transcript into the webview.
-- `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
-- `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
-- `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
+- `prepareAgentSession({ cwd, approvalMode })`: warms up Devin ACP for a selected project folder. It starts `devin --permission-mode <mode> acp`, initializes ACP, creates or reuses a session for the cwd, and lets ACP `configOptions` / `available_commands_update` populate composer controls before the first prompt.
+- `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the Devin ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. `approvalMode` maps to Devin process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`.
+- `cancelAgentPrompt()`: sends ACP `session/cancel` for the active turn and answers pending permission requests with ACP's cancelled outcome. The composer send button becomes this stop control while a turn is active.
+- `respondToAgentPermission({ requestId, optionId })`: answers `session/request_permission` requests that were surfaced to the user (approval mode `ask`, or any request the client could not auto-resolve). Responses use ACP's selected-outcome shape: `{ outcome: { outcome: "selected", optionId } }`.
+- `listAgentSessions()`: returns cached known session summaries without spawning Devin. If Devin is already connected, it may call ACP `session/list` to refresh summaries; app open must not spawn or auth-probe the CLI.
+- `listAgentSlashCommands()` / `listAgentSkills()`: return cached composer menu data. Slash commands come from ACP `available_commands_update`; the Skills group is hidden unless a future agent surface advertises real skills separately.
+- `loadAgentSession({ sessionId })`: loads or resumes a known session and replays the cached transcript into the webview.
+- `deleteAgentSession({ sessionId })`: deletes a session through ACP and removes the app-side session/transcript cache entry.
+- `startNewAgentChat()`: clears the active session selection without terminating the connected Devin process.
+- `resetAgentChat()`: clears the current chat and terminates the Devin process if one is running.
 - `getProjectGitStatus({ cwd })`: returns non-throwing git summary data for the selected project folder so the webview dashboard can show branch and change counts without spawning processes in React. The main process resolves the repository root with `git -C <cwd> rev-parse --show-toplevel`, reads branch/change state with `git status --porcelain=v1 --branch`, and sums tracked line counts with `git diff --numstat`. Untracked files count toward the changed-file total, but their contents are not read for line totals. Repositories before the first commit are valid: the helper detects missing `HEAD` and diffs against Git's empty tree hash instead of treating the folder as non-git.
-- `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, context/usage updates, permission requests, session summaries, errors, informational notes (e.g. auto-approval), and stop reasons.
+- `agentUpdate`: Bun-to-webview message stream used for normalized agent status, messages, plan updates, tool calls, context/usage updates, config options, slash commands, permission requests, session summaries, errors, informational notes, and stop reasons.
 
-The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.
+The webview should treat `startAgentPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `agentUpdate` messages.
 
-### Mock ACP client flow
+### Devin ACP client flow
 
-The app-side mock workflow is split between a reusable ACP protocol core in `app/src/bun/acp/` and the mock-session adapter in `app/src/bun/index.ts`.
+The app-side workflow is split between a reusable ACP protocol core in `app/src/bun/acp/`, Devin runtime helpers in `app/src/bun/agent/`, and the session adapter in `app/src/bun/index.ts`.
 
-`app/src/bun/acp/` owns the newline-delimited JSON-RPC transport, vendored ACP `v0.11.3` schema validation, typed lifecycle errors, request timeouts, buffered notifications, and the turn idle watchdog. The core is intentionally provider-agnostic enough to reuse later, but it is currently wired only to the local mock server.
+`app/src/bun/acp/` owns the newline-delimited JSON-RPC transport, vendored ACP `v0.11.3` schema validation, typed lifecycle errors, request timeouts, buffered notifications, and the turn idle watchdog. This layer stays provider-agnostic.
 
-`app/src/bun/index.ts` contains the local mock-agent adapter. It:
+`app/src/bun/agent/runtime.ts` owns Devin-specific process and permission-mode helpers. `app/src/bun/index.ts` contains the session adapter. It:
 
-- resolves bundled `acp-mock-server/src/index.ts` lazily when sessions are first listed or a prompt is first sent, by searching upward from the running process cwd and bundled main file location;
-- spawns the mock server with the app's Bun runtime, with protocol stdout/stderr kept separate;
-- stores mock server state under `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set;
-- sends `initialize`, then `session/new`, then a mock config update for the model, then `session/prompt`;
-- when the mock server sends `session/request_permission`, auto-responds with an "allow" option and emits an informational note if the current approval mode is `auto` or `full-access`; otherwise surfaces the request to the webview as before;
-- rejects timed-out or failed ACP requests through the shared transport cleanup path, so pending requests do not stay live after reset, process exit, or timeout;
-- watches active prompt turns for inbound ACP activity. If a turn goes silent past the configured idle budget, the adapter sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, rejects local pending requests, and resets the mock subprocess so stale turn output cannot leak into the next prompt;
-- reuses the current mock session for subsequent prompts in the same cwd;
-- closes and recreates the mock session if the selected folder changes;
+- detects `devin` on `PATH` and emits a clear install/login error if unavailable;
+- spawns Devin as `devin --permission-mode normal acp` for `ask` / `auto`, and `devin --permission-mode bypass acp` for `full-access`;
+- passes `process.env` through so Devin can use CLI login state or environment credentials such as `WINDSURF_API_KEY`;
+- initializes ACP with honest v1 client capabilities: no client-side filesystem or terminal capability is advertised;
+- sends `initialize`, then `session/new` or `session/load`, then optional `session/set_config_option` for model, then `session/prompt`;
+- treats app open as lazy: `listAgentSessions`, `listAgentSlashCommands`, and `listAgentSkills` return cached/empty data without spawning Devin;
+- warms up Devin on project selection through `prepareAgentSession` so model config and slash commands are available before first send;
+- when Devin sends `session/request_permission`, `auto` chooses an allow-like option if one is available and emits an informational note; otherwise the request is surfaced to the webview;
+- preserves the selected approval mode across process restarts caused by cwd or permission-mode changes;
+- watches active prompt turns for inbound ACP activity. If a turn goes silent past the configured idle budget, or if the user hits stop, the adapter sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, and rejects local pending requests;
+- reuses the current session for subsequent prompts in the same cwd;
+- closes and recreates the session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
 - keeps an app-side in-memory map of session summaries so the sidebar can show a newly created session immediately after `session/new`;
-- keeps an app-side in-memory transcript cache for each known mock session, including message chunks, plans, tool calls, and the latest usage/context-window update, because the mock server's persisted `session/load` stream currently replays only persisted user/agent messages;
-- normalizes ACP notifications into webview-friendly `MockAgentUpdate` messages.
+- keeps an app-side in-memory transcript cache for each known session, including message chunks, plans, tool calls, and the latest usage/context-window update;
+- normalizes ACP notifications into webview-friendly `AgentUpdate` messages.
 
 The default prompt idle timeout is 120 seconds and can be overridden for local testing with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS`.
 
-The sidebar session list is populated on app open from ACP `session/list`. This startup list pass is background hydration: failures should not create transcript content or force the workspace out of its empty-chat state. Full transcript caches are still in memory and are reset when the main process exits; persisted sessions loaded after relaunch replay through ACP.
-
-Keep this mock client local-development oriented. Real provider/client architecture should be introduced separately rather than growing production assumptions into this mock path.
+Full transcript caches are still in memory and are reset when the main process exits; persisted sessions loaded after relaunch replay through ACP.
 
 ### Window chrome
 

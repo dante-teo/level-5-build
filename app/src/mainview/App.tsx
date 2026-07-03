@@ -37,6 +37,7 @@ import {
 	ShieldAlert,
 	ShieldCheck,
 	Sparkles,
+	Square,
 	SquareTerminal,
 	Trash2,
 	X,
@@ -48,20 +49,21 @@ import { isDashboardPinnedAtom, isSidebarCollapsedAtom, sidebarWidthAtom } from 
 import {
 	APPROVAL_MODE_LABELS,
 	type ApprovalModeId,
-	type MockAgentUpdate,
-	type MockContentBlock,
-	type MockMessageUpdate,
-	type MockModelId,
-	type MockPermissionRequest,
-	type MockPlanItem,
-	type MockPromptAttachment,
-	type MockPromptAttachmentType,
-	type MockRunStatus,
-	type MockSessionSummary,
-	type MockSkill,
-	type MockSlashCommand,
-	type MockToolCall,
-	type MockUsage,
+	type AgentUpdate,
+	type AgentConfigOption,
+	type AgentContentBlock,
+	type AgentMessageUpdate,
+	type AgentModelId,
+	type AgentPermissionRequest,
+	type AgentPlanItem,
+	type AgentPromptAttachment,
+	type AgentPromptAttachmentType,
+	type AgentRunStatus,
+	type AgentSessionSummary,
+	type AgentSkill,
+	type AgentSlashCommand,
+	type AgentToolCall,
+	type AgentUsage,
 	type ProjectGitStatus,
 } from "@shared/rpc";
 
@@ -87,7 +89,7 @@ const APPROVAL_MODE_OPTIONS: ApprovalModeOption[] = [
 	{
 		value: "ask",
 		label: APPROVAL_MODE_LABELS.ask,
-		description: "Always ask before applying simulated edits or running mock tools.",
+		description: "Always ask before applying edits or running agent actions.",
 		icon: Hand,
 	},
 	{
@@ -99,7 +101,7 @@ const APPROVAL_MODE_OPTIONS: ApprovalModeOption[] = [
 	{
 		value: "full-access",
 		label: APPROVAL_MODE_LABELS["full-access"],
-		description: "Unrestricted access to any simulated file or mock tool.",
+		description: "Run with Devin bypass permissions for this chat.",
 		icon: ShieldAlert,
 	},
 ];
@@ -114,13 +116,13 @@ type ChatMessage = {
 	text: string;
 };
 
-type ToolCallView = MockToolCall & {
+type ToolCallView = AgentToolCall & {
 	text?: string;
 };
 
 type TranscriptItem =
 	| { type: "message"; key: string; message: ChatMessage }
-	| { type: "plan"; key: string; items: MockPlanItem[] }
+	| { type: "plan"; key: string; items: AgentPlanItem[] }
 	| { type: "tool"; key: string; tool: ToolCallView }
 	| { type: "error"; key: string; message: string }
 	| { type: "info"; key: string; message: string };
@@ -136,7 +138,7 @@ type RecentProject = {
 	name: string;
 };
 
-type AttachmentItem = MockPromptAttachment & { id: string };
+type AttachmentItem = AgentPromptAttachment & { id: string };
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 	return (
@@ -166,7 +168,7 @@ function remToPixels(rem: number) {
 	return rem * (Number.isFinite(rootFontSize) ? rootFontSize : 16);
 }
 
-function contentText(content: MockContentBlock): string {
+function contentText(content: AgentContentBlock): string {
 	if (content.type === "text" && typeof content.text === "string") {
 		return content.text;
 	}
@@ -200,10 +202,11 @@ function toolContentText(content: unknown[] | undefined): string | undefined {
 	return rendered || undefined;
 }
 
-function statusLabel(status: MockRunStatus, stopReason: string | null) {
-	if (status === "starting") return "Starting mock agent";
-	if (status === "running") return "Mock agent is working";
-	if (status === "error") return "Mock agent needs attention";
+function statusLabel(status: AgentRunStatus, stopReason: string | null) {
+	if (status === "starting") return "Starting agent";
+	if (status === "running") return "Agent is working";
+	if (status === "stopping") return "Stopping agent";
+	if (status === "error") return "Agent needs attention";
 	if (stopReason) return `Stopped: ${stopReason}`;
 	return "Ready";
 }
@@ -211,7 +214,7 @@ function statusLabel(status: MockRunStatus, stopReason: string | null) {
 function statusDotClass(status: string) {
 	if (status === "completed") return "text-emerald-600";
 	if (status === "failed" || status === "error") return "text-red-500";
-	if (status === "in_progress" || status === "running" || status === "starting") return "text-[var(--app-accent)]";
+	if (status === "in_progress" || status === "running" || status === "starting" || status === "stopping") return "text-[var(--app-accent)]";
 	return "text-muted-foreground";
 }
 
@@ -254,23 +257,35 @@ function renderComposerPreview(text: string): ReactNode {
 	);
 }
 
-function sessionProjectFolder(session: MockSessionSummary | undefined) {
+function sessionProjectFolder(session: AgentSessionSummary | undefined) {
 	if (!session || session.isNoProject || isFolderlessProjectPath(session.cwd)) {
 		return null;
 	}
 	return session.cwd.trim() || null;
 }
 
-function sessionTitle(session: MockSessionSummary | undefined) {
+function sessionTitle(session: AgentSessionSummary | undefined) {
 	const title = session?.title.trim();
 	return title || "New chat";
 }
 
-function sortSessions(sessions: MockSessionSummary[]) {
+function sortSessions(sessions: AgentSessionSummary[]) {
 	return [...sessions].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
-function upsertSession(sessions: MockSessionSummary[], nextSession: MockSessionSummary) {
+function dedupeSlashCommands(commands: AgentSlashCommand[]) {
+	const seen = new Set<string>();
+	return commands.filter((command) => {
+		const key = command.name.trim();
+		if (!key || seen.has(key)) {
+			return false;
+		}
+		seen.add(key);
+		return true;
+	});
+}
+
+function upsertSession(sessions: AgentSessionSummary[], nextSession: AgentSessionSummary) {
 	const withoutCurrent = sessions.filter((session) => session.sessionId !== nextSession.sessionId);
 	return sortSessions([...withoutCurrent, nextSession]);
 }
@@ -279,8 +294,9 @@ function isMissingRpcHandlerError(error: unknown, methodName: string) {
 	return error instanceof Error && error.message.includes("has no handler") && error.message.includes(methodName);
 }
 
-function sessionActivityLabel(status: MockRunStatus) {
+function sessionActivityLabel(status: AgentRunStatus) {
 	if (status === "starting" || status === "running") return "Chat is working";
+	if (status === "stopping") return "Chat is stopping";
 	if (status === "completed") return "Chat completed";
 	return undefined;
 }
@@ -327,7 +343,7 @@ function gitBranchSummary(status: ProjectGitStatus | null) {
 	return status.isDetached ? `Detached at ${status.branch}` : status.branch;
 }
 
-function shouldRefreshGitAfterTool(tool: MockToolCall) {
+function shouldRefreshGitAfterTool(tool: AgentToolCall) {
 	const kind = tool.kind.toLowerCase();
 	const title = tool.title.toLowerCase();
 	const contentKinds = (tool.content ?? [])
@@ -342,8 +358,8 @@ function shouldRefreshGitAfterTool(tool: MockToolCall) {
 	);
 }
 
-function SessionActivityIndicator({ status }: { status: MockRunStatus }) {
-	if (status === "starting" || status === "running") {
+function SessionActivityIndicator({ status }: { status: AgentRunStatus }) {
+	if (status === "starting" || status === "running" || status === "stopping") {
 		return (
 			<span
 				aria-label={sessionActivityLabel(status)}
@@ -374,21 +390,22 @@ function App() {
 	const [projectFolder, setProjectFolder] = useState<string | null>(null);
 	const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
 	const [projectSearch, setProjectSearch] = useState("");
-	const [model, setModel] = useState<MockModelId>("mock-pro");
+	const [model, setModel] = useState<AgentModelId>("");
 	const [approvalMode, setApprovalMode] = useState<ApprovalModeId>("ask");
 	const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
-	const [usage, setUsage] = useState<MockUsage | null>(null);
-	const [sessions, setSessions] = useState<MockSessionSummary[]>([]);
+	const [usage, setUsage] = useState<AgentUsage | null>(null);
+	const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
 	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
-	const [runStatus, setRunStatus] = useState<MockRunStatus>("idle");
+	const [runStatus, setRunStatus] = useState<AgentRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
-	const [pendingPermission, setPendingPermission] = useState<MockPermissionRequest | null>(null);
+	const [pendingPermission, setPendingPermission] = useState<AgentPermissionRequest | null>(null);
 	const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
 	const [isApprovalMenuOpen, setIsApprovalMenuOpen] = useState(false);
-	const [slashCommands, setSlashCommands] = useState<MockSlashCommand[]>([]);
-	const [skills, setSkills] = useState<MockSkill[]>([]);
+	const [slashCommands, setSlashCommands] = useState<AgentSlashCommand[]>([]);
+	const [skills, setSkills] = useState<AgentSkill[]>([]);
+	const [agentConfigOptions, setAgentConfigOptions] = useState<AgentConfigOption[]>([]);
 	const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
 	const [lastSubmittedAttachmentCount, setLastSubmittedAttachmentCount] = useState(0);
 	const [gitStatus, setGitStatus] = useState<ProjectGitStatus | null>(null);
@@ -414,7 +431,11 @@ function App() {
 	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
 	const currentApprovalOption =
 		APPROVAL_MODE_OPTIONS.find((option) => option.value === approvalMode) ?? APPROVAL_MODE_OPTIONS[0];
-	const isRunning = runStatus === "starting" || runStatus === "running";
+	const modelConfigOption = agentConfigOptions.find((option) => option.id === "model");
+	const modelOptions = modelConfigOption?.options?.map((option) => ({ value: option.value, label: option.name })) ?? [];
+	const selectedModel = model || modelConfigOption?.currentValue || modelOptions[0]?.value || "";
+	const isRunning = runStatus === "starting" || runStatus === "running" || runStatus === "stopping";
+	const isStopping = runStatus === "stopping";
 	const hasConversation = transcriptItems.length > 0;
 	const activeSessionStatus = activeSessionId ? runStatus : "idle";
 	const activeSession = activeSessionId ? sessions.find((session) => session.sessionId === activeSessionId) : undefined;
@@ -544,7 +565,7 @@ function App() {
 	}, []);
 
 	useEffect(() => {
-		const handler = (update: MockAgentUpdate) => {
+		const handler = (update: AgentUpdate) => {
 			if (update.kind === "status") {
 				setRunStatus(update.status);
 				if (update.sessionId) {
@@ -552,7 +573,7 @@ function App() {
 					if (pendingPromptProjectFolderRef.current !== undefined) {
 						sessionProjectFoldersRef.current.set(update.sessionId, pendingPromptProjectFolderRef.current);
 					}
-					void refreshMockSessions();
+					void refreshAgentSessions();
 				}
 				return;
 			}
@@ -579,6 +600,16 @@ function App() {
 				setPendingPermission(update.request);
 				return;
 			}
+			if (update.kind === "config") {
+				setAgentConfigOptions(update.options);
+				const nextModel = update.options.find((option) => option.id === "model");
+				setModel((current) => current || nextModel?.currentValue || nextModel?.options?.[0]?.value || "");
+				return;
+			}
+			if (update.kind === "slashCommands") {
+				setSlashCommands(dedupeSlashCommands(update.commands));
+				return;
+			}
 			if (update.kind === "session") {
 				setSessions((current) => upsertSession(current, update.session));
 				if (update.session.sessionId) {
@@ -587,14 +618,14 @@ function App() {
 						sessionProjectFoldersRef.current.set(update.session.sessionId, pendingPromptProjectFolderRef.current);
 					}
 				}
-				void refreshMockSessions();
+				void refreshAgentSessions();
 				return;
 			}
 			if (update.kind === "stop") {
 				pendingPromptProjectFolderRef.current = undefined;
 				setStopReason(update.stopReason);
 				setRunStatus("completed");
-				void refreshMockSessions();
+				void refreshAgentSessions();
 				return;
 			}
 			if (update.kind === "error") {
@@ -609,12 +640,12 @@ function App() {
 		};
 
 		const rpc = electroview.rpc;
-		rpc?.addMessageListener("mockAgentUpdate", handler);
-		return () => rpc?.removeMessageListener("mockAgentUpdate", handler);
+		rpc?.addMessageListener("agentUpdate", handler);
+		return () => rpc?.removeMessageListener("agentUpdate", handler);
 	}, []);
 
 	useEffect(() => {
-		void refreshMockSessions({ reportErrors: false });
+		void refreshAgentSessions({ reportErrors: false });
 		void refreshComposerMenuData();
 	}, []);
 
@@ -791,7 +822,7 @@ function App() {
 		}
 	}, [pendingPermission]);
 
-	function applyMessageUpdate(update: MockMessageUpdate) {
+	function applyMessageUpdate(update: AgentMessageUpdate) {
 		const text = contentText(update.content);
 		if (update.role === "user" && optimisticUserTextRef.current === text) {
 			optimisticUserTextRef.current = null;
@@ -801,26 +832,45 @@ function App() {
 		setTranscriptItems((current) => upsertMessageItem(current, { id: update.messageId, role: update.role, text }));
 	}
 
-	function mergeToolCall(current: ToolCallView | undefined, tool: MockToolCall): ToolCallView {
+	function mergeToolCall(current: ToolCallView | undefined, tool: AgentToolCall): ToolCallView {
 		const nextTool = {
 			...tool,
 			text: toolContentText(tool.content),
 		};
 		if (!current) {
-			return nextTool;
+			return {
+				...nextTool,
+				title: nextTool.title || "Agent tool",
+				kind: nextTool.kind || "tool",
+				status: nextTool.status || "pending",
+			};
 		}
 		return {
 			...current,
-			...nextTool,
-			title: nextTool.title === "Mock tool" ? current.title : nextTool.title,
-			kind: nextTool.kind === "tool" ? current.kind : nextTool.kind,
+			toolCallId: nextTool.toolCallId || current.toolCallId,
+			title: nextTool.title && nextTool.title !== "Agent tool" ? nextTool.title : current.title,
+			kind: nextTool.kind && nextTool.kind !== "tool" ? nextTool.kind : current.kind,
+			status: nextTool.status || current.status,
+			content: nextTool.content ?? current.content,
+			locations: nextTool.locations ?? current.locations,
+			rawInput: nextTool.rawInput ?? current.rawInput,
+			text: nextTool.text ?? current.text,
 		};
 	}
 
 	function upsertMessageItem(current: TranscriptItem[], nextMessage: ChatMessage): TranscriptItem[] {
-		const index = current.findIndex((item) => item.type === "message" && item.message.id === nextMessage.id);
+		const messageId = nextMessage.id.trim();
+		const exactIndex = messageId
+			? current.findIndex(
+					(item) => item.type === "message" && item.message.id === messageId && item.message.role === nextMessage.role,
+				)
+			: -1;
+		const lastIndex = current.length - 1;
+		const lastItem = current[lastIndex];
+		const contiguousIndex = lastItem?.type === "message" && lastItem.message.role === nextMessage.role ? lastIndex : -1;
+		const index = exactIndex >= 0 ? exactIndex : contiguousIndex;
 		if (index < 0) {
-			return [...current, { type: "message", key: `message-${nextMessage.id}`, message: nextMessage }];
+			return [...current, { type: "message", key: `message-${nextMessage.role}-${messageId || Date.now()}`, message: { ...nextMessage, id: messageId } }];
 		}
 		return current.map((item, itemIndex) =>
 			itemIndex === index && item.type === "message"
@@ -829,7 +879,7 @@ function App() {
 		);
 	}
 
-	function upsertPlanItem(current: TranscriptItem[], items: MockPlanItem[], key: string): TranscriptItem[] {
+	function upsertPlanItem(current: TranscriptItem[], items: AgentPlanItem[], key: string): TranscriptItem[] {
 		const index = current.findIndex((item) => item.key === key);
 		if (index < 0) {
 			return [...current, { type: "plan", key, items }];
@@ -837,10 +887,14 @@ function App() {
 		return current.map((item, itemIndex) => (itemIndex === index && item.type === "plan" ? { ...item, items } : item));
 	}
 
-	function upsertToolItem(current: TranscriptItem[], tool: MockToolCall): TranscriptItem[] {
+	function upsertToolItem(current: TranscriptItem[], tool: AgentToolCall): TranscriptItem[] {
 		const index = current.findIndex((item) => item.type === "tool" && item.tool.toolCallId === tool.toolCallId);
 		if (index < 0) {
-			return [...current, { type: "tool", key: `tool-${tool.toolCallId}`, tool: mergeToolCall(undefined, tool) }];
+			return [...current, {
+				type: "tool",
+				key: `tool-${tool.toolCallId}`,
+				tool: mergeToolCall(undefined, tool),
+			}];
 		}
 		return current.map((item, itemIndex) =>
 			itemIndex === index && item.type === "tool" ? { ...item, tool: mergeToolCall(item.tool, tool) } : item,
@@ -859,14 +913,14 @@ function App() {
 		return [...current, { type: "info", key, message }];
 	}
 
-	async function refreshMockSessions({ reportErrors = true }: { reportErrors?: boolean } = {}) {
+	async function refreshAgentSessions({ reportErrors = true }: { reportErrors?: boolean } = {}) {
 		try {
-			const nextSessions = await electroview.rpc?.request.listMockSessions();
+			const nextSessions = await electroview.rpc?.request.listAgentSessions();
 			if (nextSessions) {
 				setSessions(sortSessions(nextSessions));
 			}
 		} catch (error) {
-			if (isMissingRpcHandlerError(error, "listMockSessions")) {
+			if (isMissingRpcHandlerError(error, "listAgentSessions")) {
 				return;
 			}
 			if (!reportErrors) {
@@ -881,17 +935,17 @@ function App() {
 	async function refreshComposerMenuData() {
 		try {
 			const [nextSlashCommands, nextSkills] = await Promise.all([
-				electroview.rpc?.request.listMockSlashCommands() ?? Promise.resolve(undefined),
-				electroview.rpc?.request.listMockSkills() ?? Promise.resolve(undefined),
+				electroview.rpc?.request.listAgentSlashCommands() ?? Promise.resolve(undefined),
+				electroview.rpc?.request.listAgentSkills() ?? Promise.resolve(undefined),
 			]);
 			if (nextSlashCommands) {
-				setSlashCommands(nextSlashCommands);
+				setSlashCommands(dedupeSlashCommands(nextSlashCommands));
 			}
 			if (nextSkills) {
 				setSkills(nextSkills);
 			}
 		} catch (error) {
-			if (isMissingRpcHandlerError(error, "listMockSlashCommands") || isMissingRpcHandlerError(error, "listMockSkills")) {
+			if (isMissingRpcHandlerError(error, "listAgentSlashCommands") || isMissingRpcHandlerError(error, "listAgentSkills")) {
 				return;
 			}
 			// Non-fatal: the plus menu simply shows empty slash command/skill groups.
@@ -919,7 +973,7 @@ function App() {
 		setIsPlusMenuOpen(false);
 	}
 
-	function addAttachment(type: MockPromptAttachmentType, path: string) {
+	function addAttachment(type: AgentPromptAttachmentType, path: string) {
 		const name = folderDisplayName(path);
 		setAttachments((current) => {
 			if (current.some((attachment) => attachment.type === type && attachment.path === path)) {
@@ -964,11 +1018,11 @@ function App() {
 		requestAnimationFrame(() => textarea?.focus());
 	}
 
-	function handleSelectSlashCommand(command: MockSlashCommand) {
+	function handleSelectSlashCommand(command: AgentSlashCommand) {
 		insertComposerToken(`/${command.name}`);
 	}
 
-	function handleSelectSkill(skill: MockSkill) {
+	function handleSelectSkill(skill: AgentSkill) {
 		insertComposerToken(`/${skill.id}`);
 	}
 
@@ -999,7 +1053,7 @@ function App() {
 			return;
 		}
 
-		const started = await electroview.rpc?.request.startNewMockChat();
+		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
 			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before switching projects."));
 			return;
@@ -1012,6 +1066,17 @@ function App() {
 		setRunStatus("idle");
 		setProjectFolder(folder);
 		closeProjectMenu();
+		const prepared = await electroview.rpc?.request.prepareAgentSession({ cwd: folder, approvalMode });
+		if (prepared?.prepared === false) {
+			setTranscriptItems((current) => upsertErrorItem(current, prepared.reason ?? "Failed to prepare agent session."));
+			setRunStatus("error");
+			return;
+		}
+		if (prepared?.sessionId) {
+			setActiveSessionId(prepared.sessionId);
+			void refreshAgentSessions({ reportErrors: false });
+		}
+		void refreshComposerMenuData();
 	}
 
 	async function handleClearProject() {
@@ -1023,7 +1088,7 @@ function App() {
 			return;
 		}
 
-		const started = await electroview.rpc?.request.startNewMockChat();
+		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
 			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before leaving this project."));
 			return;
@@ -1068,10 +1133,10 @@ function App() {
 		);
 		void scrollToBottom();
 
-		const response = await electroview.rpc?.request.startMockPrompt({
+		const response = await electroview.rpc?.request.startAgentPrompt({
 			prompt: trimmedPrompt,
 			cwd: projectFolder,
-			model,
+			model: selectedModel || undefined,
 			approvalMode,
 			attachments: attachments.map(({ type, path, name }) => ({ type, path, name })),
 		});
@@ -1079,13 +1144,23 @@ function App() {
 			pendingPromptProjectFolderRef.current = undefined;
 			optimisticUserTextRef.current = null;
 			setRunStatus("idle");
-			setTranscriptItems((current) => upsertErrorItem(current, "The mock agent is already running or the prompt was empty."));
+			setTranscriptItems((current) => upsertErrorItem(current, "The agent is already running or the prompt was empty."));
 			return;
 		}
 		setAttachments([]);
 		if (response.sessionId) {
 			setActiveSessionId(response.sessionId);
-			void refreshMockSessions();
+			void refreshAgentSessions();
+		}
+	}
+
+	async function handleStop() {
+		if (!isRunning || isStopping) {
+			return;
+		}
+		const cancelled = await electroview.rpc?.request.cancelAgentPrompt();
+		if (!cancelled) {
+			setTranscriptItems((current) => upsertErrorItem(current, "Could not stop the active agent turn."));
 		}
 	}
 
@@ -1107,9 +1182,9 @@ function App() {
 		let accepted = false;
 		let failureMessage: string | null = null;
 		try {
-			accepted = (await electroview.rpc?.request.respondToMockPermission({ requestId, optionId })) ?? false;
+			accepted = (await electroview.rpc?.request.respondToAgentPermission({ requestId, optionId })) ?? false;
 			if (!accepted) {
-				failureMessage = "Could not respond to the permission request. The mock agent turn may be stuck; try starting a new chat.";
+				failureMessage = "Could not respond to the permission request. The agent turn may be stuck; try starting a new chat.";
 			}
 		} catch (error) {
 			failureMessage = error instanceof Error ? error.message : "Failed to respond to the permission request.";
@@ -1132,7 +1207,7 @@ function App() {
 		if (isRunning) {
 			return;
 		}
-		const started = await electroview.rpc?.request.startNewMockChat();
+		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
 			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before starting a new chat."));
 			return;
@@ -1152,7 +1227,7 @@ function App() {
 		setContextMenu(null);
 		setActiveSessionId(sessionId);
 		setRunStatus("idle");
-		const response = await electroview.rpc?.request.loadMockSession({ sessionId });
+		const response = await electroview.rpc?.request.loadAgentSession({ sessionId });
 		if (!response?.loaded) {
 			setSessions((current) => current.filter((session) => session.sessionId !== sessionId));
 			setActiveSessionId(null);
@@ -1163,7 +1238,7 @@ function App() {
 		setProjectFolder(
 			sessionProjectFoldersRef.current.get(sessionId) ?? sessionProjectFolder(loadedSession),
 		);
-		void refreshMockSessions();
+		void refreshAgentSessions();
 	}
 
 	function handleSessionContextMenu(event: MouseEvent<HTMLButtonElement>, sessionId: string) {
@@ -1182,7 +1257,7 @@ function App() {
 			return;
 		}
 		const targetId = deleteTargetId;
-		const response = await electroview.rpc?.request.deleteMockSession({ sessionId: targetId });
+		const response = await electroview.rpc?.request.deleteAgentSession({ sessionId: targetId });
 		if (!response?.deleted) {
 			setDeleteTargetId(null);
 			setTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to delete chat."));
@@ -1506,7 +1581,7 @@ function App() {
 										ref={textareaRef}
 										value={prompt}
 										placeholder="Do anything"
-										aria-label="Message the mock agent"
+										aria-label="Message the agent"
 										className="relative block w-full resize-none bg-transparent text-[22px] font-medium leading-6 text-transparent caret-foreground placeholder:text-muted-foreground/70 focus:outline-none"
 										style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
 										onChange={(event) => setPrompt(event.target.value)}
@@ -1560,7 +1635,7 @@ function App() {
 												<div className="px-2 pb-1 text-[12px] font-semibold text-muted-foreground">Slash commands</div>
 												{slashCommands.length === 0 ? (
 													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
-														No slash commands available
+														No commands available from the current agent
 													</div>
 												) : (
 													<div className="flex flex-col gap-1">
@@ -1577,13 +1652,9 @@ function App() {
 												)}
 											</div>
 
-											<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
-												<div className="px-2 pb-1 text-[12px] font-semibold text-muted-foreground">Skills</div>
-												{skills.length === 0 ? (
-													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
-														No skills available
-													</div>
-												) : (
+											{skills.length > 0 ? (
+												<div className="mt-2 border-t border-[var(--app-sidebar-border)] pt-2">
+													<div className="px-2 pb-1 text-[12px] font-semibold text-muted-foreground">Skills</div>
 													<div className="flex flex-col gap-1">
 														{skills.map((skill) => (
 															<ComposerMenuItem
@@ -1595,8 +1666,8 @@ function App() {
 															/>
 														))}
 													</div>
-												)}
-											</div>
+												</div>
+											) : null}
 										</div>
 									) : null}
 								</div>
@@ -1624,7 +1695,7 @@ function App() {
 											onPointerDown={(event) => event.stopPropagation()}
 										>
 											<div className="px-1 pb-2 text-[13px] font-semibold text-muted-foreground">
-												How should mock actions be approved?
+												How should agent actions be approved?
 											</div>
 											<div className="flex flex-col gap-0.5">
 												{APPROVAL_MODE_OPTIONS.map((option) => {
@@ -1663,29 +1734,36 @@ function App() {
 
 								{hasConversation ? <ContextUsageRing used={usage?.used ?? 0} size={usage?.size ?? 1} /> : null}
 
-								<SelectControl
-									label="Model"
-									value={model}
-									onChange={(value) => setModel(value as MockModelId)}
-									options={[
-										{ value: "mock-fast", label: "Mock Fast" },
-										{ value: "mock-pro", label: "Mock Pro" },
-										{ value: "mock-deep", label: "Mock Deep" },
-									]}
-								/>
+								{modelOptions.length > 0 ? (
+									<SelectControl
+										label={modelConfigOption?.name ?? "Model"}
+										value={selectedModel}
+										onChange={(value) => setModel(value)}
+										options={modelOptions}
+									/>
+								) : null}
 								<button
 									type="button"
-									aria-label="Send message"
+									aria-label={isRunning ? "Stop agent" : "Send message"}
 									className={cn(
-										"flex size-11 shrink-0 items-center justify-center rounded-full transition-colors",
-										prompt.trim() && !isRunning
+										"relative flex size-11 shrink-0 items-center justify-center rounded-full transition-colors",
+										isRunning
+											? "bg-foreground text-background shadow-[0_10px_24px_rgba(17,24,39,0.2)] hover:bg-foreground/90"
+											: prompt.trim()
 											? "bg-foreground text-background shadow-[0_10px_24px_rgba(17,24,39,0.2)] hover:bg-foreground/90"
 											: "bg-muted text-muted-foreground",
 									)}
-									disabled={!prompt.trim() || isRunning}
-									onClick={() => void handleSend()}
+									disabled={isRunning ? isStopping : !prompt.trim()}
+									onClick={() => (isRunning ? void handleStop() : void handleSend())}
 								>
-									<Send className="size-5" strokeWidth={2} />
+									{isRunning ? (
+										<>
+											<LoaderCircle className="absolute size-8 animate-spin opacity-55" strokeWidth={1.8} />
+											<Square className="size-4 fill-current" strokeWidth={2} />
+										</>
+									) : (
+										<Send className="size-5" strokeWidth={2} />
+									)}
 								</button>
 							</div>
 
@@ -2036,7 +2114,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 	);
 }
 
-function PlanCard({ items }: { items: MockPlanItem[] }) {
+function PlanCard({ items }: { items: AgentPlanItem[] }) {
 	return (
 		<section className="w-full max-w-3xl rounded-[20px] border border-[rgba(0,0,0,0.08)] bg-white/72 p-4 shadow-[0_12px_32px_rgba(17,24,39,0.08)]">
 			<div className="mb-3 flex items-center gap-2 text-[14px] font-semibold">
@@ -2074,7 +2152,7 @@ function ToolCallCard({ tool }: { tool: ToolCallView }) {
 
 const APPROVAL_DETAILS_PREVIEW_LENGTH = 220;
 
-function approvalQuestion(request: MockPermissionRequest): string {
+function approvalQuestion(request: AgentPermissionRequest): string {
 	const title = request.toolCall?.title;
 	return title ? `Do you want me to go ahead with "${title}"?` : "Do you want me to proceed?";
 }
@@ -2084,7 +2162,7 @@ function ApprovalPrompt({
 	onRespond,
 	onDraftFeedback,
 }: {
-	request: MockPermissionRequest;
+	request: AgentPermissionRequest;
 	onRespond: (requestId: number | string, optionId: string) => Promise<void>;
 	onDraftFeedback: (text: string) => void;
 }) {

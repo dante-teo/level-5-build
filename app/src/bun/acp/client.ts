@@ -36,7 +36,7 @@ export class AcpClient {
 	}
 
 	listSessions(params?: JsonValue): Promise<unknown> {
-		return this.transport.request(AGENT_METHODS.session_list, params, {
+		return this.transport.request(AGENT_METHODS.session_list, params ?? {}, {
 			timeoutMs: ACP_REQUEST_TIMEOUTS_MS.setup,
 		});
 	}

@@ -1,8 +1,8 @@
 import type { RPCSchema } from "electrobun";
 
-export type MockModelId = "mock-fast" | "mock-pro" | "mock-deep";
+export type AgentModelId = string;
 export type ApprovalModeId = "ask" | "auto" | "full-access";
-export type MockRunStatus = "idle" | "starting" | "running" | "completed" | "error";
+export type AgentRunStatus = "idle" | "starting" | "running" | "stopping" | "completed" | "error";
 
 export const APPROVAL_MODE_LABELS: Record<ApprovalModeId, string> = {
 	ask: "Ask for approval",
@@ -10,24 +10,24 @@ export const APPROVAL_MODE_LABELS: Record<ApprovalModeId, string> = {
 	"full-access": "Full access",
 };
 
-export type MockContentBlock =
+export type AgentContentBlock =
 	| { type: "text"; text: string }
 	| { type: string; [key: string]: unknown };
 
-export type MockMessageUpdate = {
+export type AgentMessageUpdate = {
 	kind: "message";
 	role: "user" | "agent";
 	messageId: string;
-	content: MockContentBlock;
+	content: AgentContentBlock;
 };
 
-export type MockPlanItem = {
+export type AgentPlanItem = {
 	title: string;
 	priority?: string;
 	status?: string;
 };
 
-export type MockToolCall = {
+export type AgentToolCall = {
 	toolCallId: string;
 	title: string;
 	kind: string;
@@ -37,27 +37,27 @@ export type MockToolCall = {
 	rawInput?: unknown;
 };
 
-export type MockPermissionOption = {
+export type AgentPermissionOption = {
 	optionId: string;
 	name: string;
 	kind?: string;
 };
 
-export type MockPermissionRequest = {
+export type AgentPermissionRequest = {
 	requestId: number | string;
 	sessionId: string;
-	toolCall?: MockToolCall;
-	options: MockPermissionOption[];
+	toolCall?: AgentToolCall;
+	options: AgentPermissionOption[];
 };
 
-export type MockConfigOption = {
+export type AgentConfigOption = {
 	id: string;
 	name?: string;
 	currentValue?: string;
 	options?: Array<{ value: string; name: string; description?: string }>;
 };
 
-export type MockSessionSummary = {
+export type AgentSessionSummary = {
 	sessionId: string;
 	title: string;
 	cwd: string;
@@ -66,27 +66,27 @@ export type MockSessionSummary = {
 	messageCount: number;
 };
 
-export type MockSlashCommand = {
+export type AgentSlashCommand = {
 	name: string;
 	description: string;
 	hint?: string;
 };
 
-export type MockSkill = {
+export type AgentSkill = {
 	id: string;
 	name: string;
 	description: string;
 };
 
-export type MockPromptAttachmentType = "file" | "directory";
+export type AgentPromptAttachmentType = "file" | "directory";
 
-export type MockPromptAttachment = {
-	type: MockPromptAttachmentType;
+export type AgentPromptAttachment = {
+	type: AgentPromptAttachmentType;
 	path: string;
 	name: string;
 };
 
-export type MockUsage = {
+export type AgentUsage = {
 	used: number;
 	size: number;
 };
@@ -111,51 +111,63 @@ export type GetProjectGitStatusParams = {
 	cwd: string;
 };
 
-export type MockAgentUpdate =
-	| { kind: "status"; status: MockRunStatus; sessionId?: string; cwd?: string }
-	| MockMessageUpdate
-	| { kind: "plan"; items: MockPlanItem[] }
-	| { kind: "tool"; tool: MockToolCall }
-	| { kind: "permission"; request: MockPermissionRequest }
-	| { kind: "config"; options: MockConfigOption[] }
-	| { kind: "session"; session: MockSessionSummary }
+export type AgentUpdate =
+	| { kind: "status"; status: AgentRunStatus; sessionId?: string; cwd?: string }
+	| AgentMessageUpdate
+	| { kind: "plan"; items: AgentPlanItem[] }
+	| { kind: "tool"; tool: AgentToolCall }
+	| { kind: "permission"; request: AgentPermissionRequest }
+	| { kind: "config"; options: AgentConfigOption[] }
+	| { kind: "slashCommands"; commands: AgentSlashCommand[] }
+	| { kind: "session"; session: AgentSessionSummary }
 	| { kind: "usage"; used: number; size: number }
 	| { kind: "stop"; stopReason: string }
 	| { kind: "error"; message: string }
 	| { kind: "info"; id: string; message: string };
 
-export type StartMockPromptParams = {
+export type StartAgentPromptParams = {
 	prompt: string;
 	cwd?: string | null;
-	model?: MockModelId | string;
+	model?: AgentModelId | string;
 	approvalMode?: ApprovalModeId | string;
-	attachments?: MockPromptAttachment[];
+	attachments?: AgentPromptAttachment[];
 };
 
-export type StartMockPromptResponse = {
+export type StartAgentPromptResponse = {
 	accepted: boolean;
 	sessionId?: string;
 };
 
-export type RespondToMockPermissionParams = {
+export type PrepareAgentSessionParams = {
+	cwd?: string | null;
+	approvalMode?: ApprovalModeId | string;
+};
+
+export type PrepareAgentSessionResponse = {
+	prepared: boolean;
+	sessionId?: string;
+	reason?: string;
+};
+
+export type RespondToAgentPermissionParams = {
 	requestId: number | string;
 	optionId: string;
 };
 
-export type LoadMockSessionParams = {
+export type LoadAgentSessionParams = {
 	sessionId: string;
 };
 
-export type LoadMockSessionResponse = {
+export type LoadAgentSessionResponse = {
 	loaded: boolean;
 	reason?: string;
 };
 
-export type DeleteMockSessionParams = {
+export type DeleteAgentSessionParams = {
 	sessionId: string;
 };
 
-export type DeleteMockSessionResponse = {
+export type DeleteAgentSessionResponse = {
 	deleted: boolean;
 	reason?: string;
 };
@@ -180,39 +192,47 @@ export type AppRPC = {
 				params: void;
 				response: string | null;
 			};
-			startMockPrompt: {
-				params: StartMockPromptParams;
-				response: StartMockPromptResponse;
+			startAgentPrompt: {
+				params: StartAgentPromptParams;
+				response: StartAgentPromptResponse;
 			};
-			respondToMockPermission: {
-				params: RespondToMockPermissionParams;
-				response: boolean;
+			prepareAgentSession: {
+				params: PrepareAgentSessionParams;
+				response: PrepareAgentSessionResponse;
 			};
-			listMockSessions: {
-				params: void;
-				response: MockSessionSummary[];
-			};
-			listMockSlashCommands: {
-				params: void;
-				response: MockSlashCommand[];
-			};
-			listMockSkills: {
-				params: void;
-				response: MockSkill[];
-			};
-			loadMockSession: {
-				params: LoadMockSessionParams;
-				response: LoadMockSessionResponse;
-			};
-			deleteMockSession: {
-				params: DeleteMockSessionParams;
-				response: DeleteMockSessionResponse;
-			};
-			startNewMockChat: {
+			cancelAgentPrompt: {
 				params: void;
 				response: boolean;
 			};
-			resetMockChat: {
+			respondToAgentPermission: {
+				params: RespondToAgentPermissionParams;
+				response: boolean;
+			};
+			listAgentSessions: {
+				params: void;
+				response: AgentSessionSummary[];
+			};
+			listAgentSlashCommands: {
+				params: void;
+				response: AgentSlashCommand[];
+			};
+			listAgentSkills: {
+				params: void;
+				response: AgentSkill[];
+			};
+			loadAgentSession: {
+				params: LoadAgentSessionParams;
+				response: LoadAgentSessionResponse;
+			};
+			deleteAgentSession: {
+				params: DeleteAgentSessionParams;
+				response: DeleteAgentSessionResponse;
+			};
+			startNewAgentChat: {
+				params: void;
+				response: boolean;
+			};
+			resetAgentChat: {
 				params: void;
 				response: boolean;
 			};
@@ -224,7 +244,7 @@ export type AppRPC = {
 	}>;
 	webview: RPCSchema<{
 		messages: {
-			mockAgentUpdate: MockAgentUpdate;
+			agentUpdate: AgentUpdate;
 		};
 	}>;
 };

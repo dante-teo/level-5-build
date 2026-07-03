@@ -22,5 +22,5 @@ export function toUserMessage(error: unknown): string {
 	if (error instanceof AcpError) {
 		return error.message;
 	}
-	return error instanceof Error ? error.message : "Mock ACP request failed.";
+	return error instanceof Error ? error.message : "Agent ACP request failed.";
 }

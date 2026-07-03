@@ -160,7 +160,7 @@ Rules:
 - Never collapse into icon-only mode automatically.
 - Manual collapse hides the sidebar completely. Keep the collapse/expand affordance outside the sidebar so it remains reachable when the sidebar is hidden.
 - Selected rows use a subtle surface tint plus the accent color.
-- Session rows in the current mock UI live under an `All chats` header. The empty state should sit close to the header, not centered deep in the sidebar.
+- Session rows in the current chat UI live under an `All chats` header. The empty state should sit close to the header, not centered deep in the sidebar.
 - The active session row may show a compact right-aligned state indicator: spinner while running, quiet completion glyph when done, and no indicator while idle.
 - Group hierarchy should be readable without heavy separators.
 - Bottom account/settings areas may use a quiet divider.
@@ -214,10 +214,10 @@ Rules:
 - Grows with content.
 - Maximum height is 8 text lines before internal scrolling.
 - Placeholder text is muted and concise.
-- Send is the only primary action in the composer group.
+- Send is the only primary action in the composer group while idle. During an active agent turn, the send button becomes a stop button with a small circular loading indicator and sends ACP cancellation; do not add a second competing stop control.
 - In the empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
 - Once a chat has visible transcript content, hide the project footer; project context moves to the top capsule when applicable.
-- The `+` icon button opens the composer's "Add to prompt" menu, a single popover with three stacked groups: an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group, then a `Skills` group, both sourced live from the connected agent. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
+- The `+` icon button opens the composer's "Add to prompt" menu, a single popover with an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group sourced live from the connected agent. Only show a `Skills` group if a real agent surface advertises skills separately; Devin currently exposes skill-like actions as slash commands. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
 - Slash-command and skill tokens typed or inserted into the composer (e.g. `/plan`, `/workspace-search`) are highlighted using the single accent color, keeping the rest of the typed text at its normal style — do not introduce a second highlight color for this.
 - The approval-mode control (icon + label + chevron, next to the `+` menu) opens a popover with a short header question, then one row per mode: an icon, a bold label, and a muted one-line description, with a trailing checkmark on the selected row. Use this row layout for any future single-select "mode" control instead of a native `<select>`.
 - Once a chat has visible transcript content, a small context-usage ring appears immediately to the left of the Model selector: a compact circular progress indicator (accent color, escalating to warning/danger color as usage approaches the limit) showing the fraction of the model's context window used so far. Hovering or focusing it reveals a small rounded info card ("Context window:" label plus a bold "N% used (M% left)" line) anchored above the ring with a caret pointing back at it. This hover-card is a distinct pattern from the click-toggle popovers above (no open/close state, no click target) — reuse it for any future passive, read-only hover indicator rather than adding a third tooltip mechanism alongside native `title` attributes and click-toggle popovers.
@@ -242,7 +242,7 @@ Rules:
 - Timestamps and metadata use caption styling.
 - Plans, changed files, and summaries can appear as compact cards.
 - Avoid decorative message chrome.
-- In the current mock chat workspace, the transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
+- In the current chat workspace, the transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
 - Because the composer visually overlays the tail of the scroll layer, the transcript reserves matching space via a real spacer element sized to the composer's live height (tracked with `ResizeObserver`), not a static padding guess, and uses `use-stick-to-bottom` to stay pinned to the true bottom as content streams in or the composer resizes (e.g. an approval prompt collapsing back to the normal composer). Do not swap this for `scrollIntoView()`/`Element.scrollIntoView` on an end-of-list sentinel — it aligns to the viewport edge, not past the reserved spacer, and silently leaves the latest content tucked behind the composer.
 

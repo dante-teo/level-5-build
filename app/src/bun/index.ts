@@ -1,7 +1,4 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { ApplicationMenu, BrowserWindow, BrowserView, Updater, Utils } from "electrobun/bun";
 import { AcpClient } from "./acp/client";
 import { AcpError } from "./acp/errors";
@@ -15,41 +12,48 @@ import {
 	type RpcId,
 } from "./acp/transport";
 import { startAcpTurnIdleWatchdog, type AcpTurnIdleWatchdog } from "./acp/watchdog";
+import {
+	AGENT_CLIENT_CAPABILITIES,
+	DEFAULT_APPROVAL_MODE,
+	DEVIN_MISSING_CLI_MESSAGE,
+	buildSelectedPermissionResponse,
+	buildDevinSpawnOptions,
+	devinPermissionMode,
+	isDevinAvailable,
+	normalizeApprovalMode,
+	pickAutoApproveOptionId,
+	resolveAgentCwd,
+} from "./agent/runtime";
 import { getProjectGitStatus } from "./git/status";
 import { APPROVAL_MODE_LABELS } from "../shared/rpc";
 import type {
 	AppRPC,
 	ApprovalModeId,
-	DeleteMockSessionParams,
+	DeleteAgentSessionParams,
 	GetProjectGitStatusParams,
-	DeleteMockSessionResponse,
-	LoadMockSessionParams,
-	LoadMockSessionResponse,
-	MockAgentUpdate,
-	MockConfigOption,
-	MockContentBlock,
-	MockModelId,
-	MockPermissionOption,
-	MockPermissionRequest,
-	MockPlanItem,
-	MockPromptAttachment,
-	MockSessionSummary,
-	MockSkill,
-	MockSlashCommand,
-	MockToolCall,
-	RespondToMockPermissionParams,
-	StartMockPromptParams,
-	StartMockPromptResponse,
+	DeleteAgentSessionResponse,
+	LoadAgentSessionParams,
+	LoadAgentSessionResponse,
+	AgentUpdate,
+	AgentConfigOption,
+	AgentContentBlock,
+	AgentPermissionOption,
+	AgentPermissionRequest,
+	AgentPlanItem,
+	AgentPromptAttachment,
+	AgentSessionSummary,
+	AgentSkill,
+	AgentSlashCommand,
+	AgentToolCall,
+	PrepareAgentSessionParams,
+	PrepareAgentSessionResponse,
+	RespondToAgentPermissionParams,
+	StartAgentPromptParams,
+	StartAgentPromptResponse,
 } from "../shared/rpc";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
-const MOCK_MODELS = new Set<MockModelId>(["mock-fast", "mock-pro", "mock-deep"]);
-const MOCK_APPROVAL_MODES = new Set<ApprovalModeId>(["ask", "auto", "full-access"]);
-const DEFAULT_MODEL: MockModelId = "mock-pro";
-const DEFAULT_APPROVAL_MODE: ApprovalModeId = "ask";
-
-const bundledMainDir = dirname(fileURLToPath(import.meta.url));
 const ACP_TURN_IDLE_TIMEOUT_MS = Number(process.env.LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS ?? "120000");
 const ACP_TURN_IDLE_CHECK_INTERVAL_MS = 2_000;
 
@@ -78,58 +82,10 @@ const url = await getMainViewUrl();
 // As a stand-in for that, let the webview double-click the drag region to
 // toggle maximize/fill-screen (mirrors the native macOS title bar convention).
 let mainWindow: BrowserWindow;
-let mockClient: MockAcpClient | null = null;
+let agentClient: AgentAcpClient | null = null;
 
-function sendMockUpdate(update: MockAgentUpdate) {
-	rpc.send.mockAgentUpdate(update);
-}
-
-function normalizeModel(model: string | undefined): MockModelId {
-	return MOCK_MODELS.has(model as MockModelId) ? (model as MockModelId) : DEFAULT_MODEL;
-}
-
-function normalizeApprovalMode(mode: string | undefined): ApprovalModeId {
-	return MOCK_APPROVAL_MODES.has(mode as ApprovalModeId) ? (mode as ApprovalModeId) : DEFAULT_APPROVAL_MODE;
-}
-
-function pickAutoApproveOptionId(options: MockPermissionOption[]): string | undefined {
-	return options.find((option) => option.kind?.startsWith("allow"))?.optionId ?? options[0]?.optionId;
-}
-
-function findMockServerPaths(): { mockServerDir: string; mockServerEntrypoint: string } {
-	for (const start of [process.cwd(), bundledMainDir]) {
-		let current = resolve(start);
-		while (true) {
-			const candidateDir = resolve(current, "acp-mock-server");
-			const candidateEntrypoint = resolve(candidateDir, "src/index.ts");
-			if (existsSync(candidateEntrypoint)) {
-				return { mockServerDir: candidateDir, mockServerEntrypoint: candidateEntrypoint };
-			}
-
-			const parent = dirname(current);
-			if (parent === current) {
-				break;
-			}
-			current = parent;
-		}
-	}
-
-	throw new Error("Unable to locate bundled acp-mock-server/src/index.ts.");
-}
-
-function getBunRuntimePath(): string {
-	const bundledRuntime = resolve(dirname(process.execPath), process.platform === "win32" ? "bun.exe" : "bun");
-	return existsSync(bundledRuntime) ? bundledRuntime : process.execPath;
-}
-
-function resolveCwd(cwd: string | null | undefined): string {
-	if (!cwd || cwd.trim().length === 0 || cwd.trim() === "~/" || cwd.trim() === "~") {
-		return homedir();
-	}
-	if (cwd.startsWith("~/")) {
-		return resolve(homedir(), cwd.slice(2));
-	}
-	return cwd;
+function sendAgentUpdate(update: AgentUpdate) {
+	rpc.send.agentUpdate(update);
 }
 
 function asObject(value: unknown): JsonObject {
@@ -151,52 +107,59 @@ function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-class MockAcpClient {
+class AgentAcpClient {
 	private process: Bun.PipedSubprocess | null = null;
 	private stdin: Bun.PipedSubprocess["stdin"] | null = null;
 	private transport: AcpJsonRpcTransport | null = null;
 	private acp: AcpClient | null = null;
-	private readonly permissionRequests = new Map<RpcId, MockPermissionRequest>();
-	private readonly sessions = new Map<string, MockSessionSummary>();
-	private readonly transcripts = new Map<string, MockAgentUpdate[]>();
+	private readonly permissionRequests = new Map<RpcId, AgentPermissionRequest>();
+	private readonly sessions = new Map<string, AgentSessionSummary>();
+	private readonly transcripts = new Map<string, AgentUpdate[]>();
 	private turnWatchdog: AcpTurnIdleWatchdog | null = null;
 	private initialized = false;
 	private sessionId: string | null = null;
 	private currentCwd: string | null = null;
+	private processCwd: string | null = null;
+	private processPermissionMode: string | null = null;
 	private running = false;
+	private cancellationRequested = false;
 	private approvalMode: ApprovalModeId = DEFAULT_APPROVAL_MODE;
+	private configOptions: AgentConfigOption[] = [];
+	private slashCommands: AgentSlashCommand[] = [];
 
-	constructor(private readonly emit: (update: MockAgentUpdate) => void) {}
+	constructor(private readonly emit: (update: AgentUpdate) => void) {}
 
 	get isRunning() {
 		return this.running;
 	}
 
-	async startPrompt(params: StartMockPromptParams): Promise<void> {
+	async startPrompt(params: StartAgentPromptParams): Promise<void> {
 		if (this.running) {
-			this.emit({ kind: "error", message: "A mock agent turn is already running." });
+			this.emit({ kind: "error", message: "An agent turn is already running." });
 			return;
 		}
 
 		this.running = true;
-		const cwd = resolveCwd(params.cwd);
-		const model = normalizeModel(params.model);
+		this.cancellationRequested = false;
+		const cwd = resolveAgentCwd(params.cwd);
 		this.approvalMode = normalizeApprovalMode(params.approvalMode);
 		this.emit({ kind: "status", status: "starting", cwd, sessionId: this.sessionId ?? undefined });
 
 		try {
-			await this.ensureProcess();
+			await this.ensureProcess(cwd);
 			await this.ensureInitialized();
 			await this.ensureSession(cwd);
 			if (!this.sessionId) {
-				throw new Error("Mock ACP session was not created.");
+				throw new Error("Agent session was not created.");
 			}
 
-			await this.requireAcp().setConfigOption({
-				sessionId: this.sessionId,
-				configId: "model",
-				value: model,
-			});
+			if (params.model && this.configOptions.some((option) => option.id === "model")) {
+				await this.requireAcp().setConfigOption({
+					sessionId: this.sessionId,
+					configId: "model",
+					value: params.model,
+				});
+			}
 
 			this.emit({ kind: "status", status: "running", cwd, sessionId: this.sessionId });
 			this.startTurnWatchdog();
@@ -206,6 +169,11 @@ class MockAcpClient {
 					prompt: buildPromptContent(params.prompt, params.attachments),
 				}),
 			);
+			if (this.cancellationRequested) {
+				this.emit({ kind: "stop", stopReason: "cancelled" });
+				this.emit({ kind: "status", status: "completed", cwd, sessionId: this.sessionId });
+				return;
+			}
 			const existingSession = this.sessions.get(this.sessionId);
 			if (existingSession) {
 				this.rememberSession({
@@ -217,9 +185,14 @@ class MockAcpClient {
 			this.emit({ kind: "stop", stopReason: asString(result.stopReason, "end_turn") });
 			this.emit({ kind: "status", status: "completed", cwd, sessionId: this.sessionId });
 		} catch (error) {
+			if (this.cancellationRequested) {
+				this.emit({ kind: "stop", stopReason: "cancelled" });
+				this.emit({ kind: "status", status: "completed", cwd, sessionId: this.sessionId ?? undefined });
+				return;
+			}
 			this.emit({
 				kind: "error",
-				message: error instanceof Error ? error.message : "Mock ACP request failed.",
+				message: error instanceof Error ? error.message : "Agent request failed.",
 			});
 			this.emit({ kind: "status", status: "error", cwd, sessionId: this.sessionId ?? undefined });
 		} finally {
@@ -228,25 +201,44 @@ class MockAcpClient {
 		}
 	}
 
-	respondToPermission({ requestId, optionId }: RespondToMockPermissionParams): boolean {
+	cancelActiveTurn(): boolean {
+		if (!this.running || !this.sessionId) {
+			return false;
+		}
+		this.cancellationRequested = true;
+		this.turnWatchdog?.setAwaitingHuman(false);
+		this.turnWatchdog?.touch();
+		this.requireAcp().cancel({ sessionId: this.sessionId });
+		for (const requestId of this.permissionRequests.keys()) {
+			this.requireAcp().respondSuccess(requestId, { outcome: { outcome: "cancelled" } });
+		}
+		this.permissionRequests.clear();
+		this.emit({ kind: "status", status: "stopping", cwd: this.currentCwd ?? undefined, sessionId: this.sessionId });
+		return true;
+	}
+
+	respondToPermission({ requestId, optionId }: RespondToAgentPermissionParams): boolean {
 		if (!this.permissionRequests.has(requestId)) {
 			return false;
 		}
 		this.permissionRequests.delete(requestId);
 		this.turnWatchdog?.setAwaitingHuman(false);
 		this.turnWatchdog?.touch();
-		this.requireAcp().respondSuccess(requestId, { outcome: { optionId } });
+		this.requireAcp().respondSuccess(requestId, buildSelectedPermissionResponse(optionId));
 		return true;
 	}
 
-	async listSessions(): Promise<MockSessionSummary[]> {
-		await this.ensureProcess();
+	async listSessions(): Promise<AgentSessionSummary[]> {
+		if (!this.process) {
+			return this.sortedSessions();
+		}
 		await this.ensureInitialized();
 		let cursor: string | undefined;
 		do {
 			const result = asObject(
 				await this.requireAcp().listSessions(cursor ? { cursor } : undefined),
 			);
+			this.emitConfig(result.configOptions);
 			const sessionValues = Array.isArray(result.sessions) ? result.sessions : [];
 			for (const sessionValue of sessionValues) {
 				this.rememberSession(normalizeSessionSummary(sessionValue), false);
@@ -257,25 +249,34 @@ class MockAcpClient {
 		return this.sortedSessions();
 	}
 
-	async listSlashCommands(): Promise<MockSlashCommand[]> {
-		await this.ensureProcess();
-		await this.ensureInitialized();
-		const result = asObject(await this.requireAcp().requestExtension("_mock/list_slash_commands"));
-		const commands = Array.isArray(result.availableCommands) ? result.availableCommands : [];
-		return commands.map(normalizeSlashCommand);
+	async listSlashCommands(): Promise<AgentSlashCommand[]> {
+		return this.slashCommands;
 	}
 
-	async listSkills(): Promise<MockSkill[]> {
-		await this.ensureProcess();
-		await this.ensureInitialized();
-		const result = asObject(await this.requireAcp().requestExtension("_mock/list_skills"));
-		const skills = Array.isArray(result.skills) ? result.skills : [];
-		return skills.map(normalizeSkill);
+	async listSkills(): Promise<AgentSkill[]> {
+		return [];
 	}
 
-	async loadSession({ sessionId }: LoadMockSessionParams): Promise<LoadMockSessionResponse> {
+	async prepareSession(params: PrepareAgentSessionParams): Promise<PrepareAgentSessionResponse> {
 		if (this.running) {
-			return { loaded: false, reason: "A mock agent turn is already running." };
+			return { prepared: false, reason: "Wait for the active agent turn to finish before switching projects." };
+		}
+		const cwd = resolveAgentCwd(params.cwd);
+		this.approvalMode = normalizeApprovalMode(params.approvalMode);
+		try {
+			await this.ensureProcess(cwd);
+			await this.ensureInitialized();
+			await this.ensureSession(cwd);
+			this.emit({ kind: "status", status: "idle", cwd, sessionId: this.sessionId ?? undefined });
+			return { prepared: true, sessionId: this.sessionId ?? undefined };
+		} catch (error) {
+			return { prepared: false, reason: error instanceof Error ? error.message : "Failed to prepare agent session." };
+		}
+	}
+
+	async loadSession({ sessionId }: LoadAgentSessionParams): Promise<LoadAgentSessionResponse> {
+		if (this.running) {
+			return { loaded: false, reason: "An agent turn is already running." };
 		}
 		if (!sessionId) {
 			return { loaded: false, reason: "No session was selected." };
@@ -287,7 +288,7 @@ class MockAcpClient {
 				return { loaded: false, reason: "That chat no longer exists." };
 			}
 
-			await this.ensureProcess();
+			await this.ensureProcess(session.cwd);
 			await this.ensureInitialized();
 			this.permissionRequests.clear();
 			const cachedTranscript = this.transcripts.get(sessionId);
@@ -314,7 +315,7 @@ class MockAcpClient {
 		}
 	}
 
-	async deleteSession({ sessionId }: DeleteMockSessionParams): Promise<DeleteMockSessionResponse> {
+	async deleteSession({ sessionId }: DeleteAgentSessionParams): Promise<DeleteAgentSessionResponse> {
 		if (!sessionId) {
 			return { deleted: false, reason: "No session was selected." };
 		}
@@ -323,7 +324,7 @@ class MockAcpClient {
 		}
 
 		try {
-			await this.ensureProcess();
+			await this.ensureProcess(this.sessions.get(sessionId)?.cwd ?? this.currentCwd ?? homedir());
 			await this.ensureInitialized();
 			await this.requireAcp().deleteSession({ sessionId });
 			this.permissionRequests.clear();
@@ -357,7 +358,7 @@ class MockAcpClient {
 	async reset(): Promise<void> {
 		this.running = false;
 		this.stopTurnWatchdog();
-		this.transport?.failAll(new AcpError("transport_failure", "Mock ACP client reset."));
+		this.transport?.failAll(new AcpError("transport_failure", "Agent ACP client reset."));
 		this.permissionRequests.clear();
 		this.stdin?.end();
 		this.stdin = null;
@@ -368,36 +369,57 @@ class MockAcpClient {
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
+		this.processCwd = null;
+		this.processPermissionMode = null;
+		this.cancellationRequested = false;
 		this.approvalMode = DEFAULT_APPROVAL_MODE;
+		this.configOptions = [];
+		this.slashCommands = [];
 		this.sessions.clear();
 		this.transcripts.clear();
 		this.emit({ kind: "status", status: "idle" });
 	}
 
-	private async ensureProcess(): Promise<void> {
+	private async ensureProcess(cwd: string): Promise<void> {
+		const permissionMode = devinPermissionMode(this.approvalMode);
 		if (this.process) {
-			return;
+			if (this.processCwd === cwd && this.processPermissionMode === permissionMode) {
+				return;
+			}
+			const approvalMode = this.approvalMode;
+			await this.reset();
+			this.approvalMode = approvalMode;
 		}
 
-		const { mockServerDir, mockServerEntrypoint } = findMockServerPaths();
-		const subprocess = Bun.spawn({
-			cmd: [getBunRuntimePath(), mockServerEntrypoint],
-			cwd: mockServerDir,
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
-			env: {
-				...process.env,
-				ACP_MOCK_LOG: process.env.ACP_MOCK_LOG ?? "info",
-				ACP_MOCK_STATE_PATH: process.env.ACP_MOCK_STATE_PATH ?? resolve(homedir(), ".level5-build", "acp-mock-state.json"),
-			},
-		});
-		this.process = subprocess;
-		this.stdin = subprocess.stdin;
+		try {
+			if (!isDevinAvailable()) {
+				throw new AcpError("spawn_failure", DEVIN_MISSING_CLI_MESSAGE);
+			}
+			const options = buildDevinSpawnOptions({ approvalMode: this.approvalMode, cwd });
+			const subprocess = Bun.spawn({
+				...options,
+				stdin: "pipe",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			this.process = subprocess;
+			this.processCwd = cwd;
+			this.processPermissionMode = permissionMode;
+			this.stdin = subprocess.stdin;
+		} catch (error) {
+			if (error instanceof AcpError) {
+				throw error;
+			}
+			throw new AcpError("spawn_failure", DEVIN_MISSING_CLI_MESSAGE);
+		}
+
+		if (!this.process || !this.stdin) {
+			return;
+		}
 		this.transport = new AcpJsonRpcTransport({
 			writeLine: (line) => {
 				if (!this.stdin) {
-					throw new AcpError("transport_failure", "Mock ACP server is not running.");
+					throw new AcpError("transport_failure", "Agent ACP process is not running.");
 				}
 				this.stdin.write(`${line}\n`);
 			},
@@ -411,9 +433,9 @@ class MockAcpClient {
 			onActivity: () => this.turnWatchdog?.touch(),
 		});
 		this.acp = new AcpClient(this.transport);
-		void this.readStdout(subprocess.stdout);
-		void this.readStderr(subprocess.stderr);
-		void this.watchExit(subprocess);
+		void this.readStdout(this.process.stdout);
+		void this.readStderr(this.process.stderr);
+		void this.watchExit(this.process);
 	}
 
 	private async ensureInitialized(): Promise<void> {
@@ -421,14 +443,14 @@ class MockAcpClient {
 			return;
 		}
 
-		await this.requireAcp().initialize({
-			protocolVersion: 1,
-			clientInfo: { name: "level5-build", version: "0.0.0" },
-			clientCapabilities: {
-				fs: { readTextFile: true, writeTextFile: true },
-				terminal: true,
-			},
-		});
+		const result = asObject(
+			await this.requireAcp().initialize({
+				protocolVersion: 1,
+				clientInfo: { name: "level5-build", version: "0.0.0" },
+				clientCapabilities: AGENT_CLIENT_CAPABILITIES,
+			}),
+		);
+		this.emitConfig(result.configOptions);
 		this.initialized = true;
 	}
 
@@ -450,7 +472,7 @@ class MockAcpClient {
 		);
 		const sessionId = asString(result.sessionId);
 		if (!sessionId) {
-			throw new Error("Mock ACP server did not return a session id.");
+			throw new Error("Agent ACP process did not return a session id.");
 		}
 		this.sessionId = sessionId;
 		this.currentCwd = cwd;
@@ -465,7 +487,7 @@ class MockAcpClient {
 		this.emitConfig(result.configOptions);
 	}
 
-	private rememberSession(session: MockSessionSummary, shouldEmit = true): MockSessionSummary {
+	private rememberSession(session: AgentSessionSummary, shouldEmit = true): AgentSessionSummary {
 		const existing = this.sessions.get(session.sessionId);
 		const nextSession = {
 			...existing,
@@ -482,11 +504,11 @@ class MockAcpClient {
 		return nextSession;
 	}
 
-	private sortedSessions(): MockSessionSummary[] {
+	private sortedSessions(): AgentSessionSummary[] {
 		return [...this.sessions.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	}
 
-	private rememberTranscriptUpdate(sessionId: string, update: MockAgentUpdate): void {
+	private rememberTranscriptUpdate(sessionId: string, update: AgentUpdate): void {
 		if (!sessionId) {
 			return;
 		}
@@ -494,7 +516,7 @@ class MockAcpClient {
 		this.transcripts.set(sessionId, upsertTranscriptUpdate(current, update));
 	}
 
-	private emitTranscriptUpdate(sessionId: string, update: MockAgentUpdate): void {
+	private emitTranscriptUpdate(sessionId: string, update: AgentUpdate): void {
 		this.rememberTranscriptUpdate(sessionId, update);
 		this.emit(update);
 	}
@@ -516,7 +538,7 @@ class MockAcpClient {
 			checkIntervalMs: ACP_TURN_IDLE_CHECK_INTERVAL_MS,
 			isTurnActive: () => this.running,
 			onIdleTimeout: (idleMs) => {
-				const error = new AcpError("request_timeout", `Mock ACP turn went silent for ${Math.round(idleMs / 1000)}s.`);
+				const error = new AcpError("request_timeout", `Agent turn went silent for ${Math.round(idleMs / 1000)}s.`);
 				this.forceStopActiveTurn(error);
 			},
 		});
@@ -529,7 +551,7 @@ class MockAcpClient {
 
 	private requireAcp(): AcpClient {
 		if (!this.acp) {
-			throw new AcpError("transport_failure", "Mock ACP server is not running.");
+			throw new AcpError("transport_failure", "Agent ACP process is not running.");
 		}
 		return this.acp;
 	}
@@ -577,7 +599,7 @@ class MockAcpClient {
 		} catch (error) {
 			this.emit({
 				kind: "error",
-				message: error instanceof Error ? error.message : "Failed to read mock ACP stdout.",
+				message: error instanceof Error ? error.message : "Failed to read agent ACP stdout.",
 			});
 		} finally {
 			const rest = decoder.decode();
@@ -594,7 +616,7 @@ class MockAcpClient {
 		}
 
 		const params = asObject(message.params);
-		const options: MockPermissionOption[] = Array.isArray(params.options)
+		const options: AgentPermissionOption[] = Array.isArray(params.options)
 			? params.options.map((option) => {
 					const object = asObject(option);
 					return {
@@ -609,7 +631,7 @@ class MockAcpClient {
 		if (this.approvalMode !== "ask") {
 			const autoOptionId = pickAutoApproveOptionId(options);
 			if (autoOptionId) {
-				this.requireAcp().respondSuccess(message.id, { outcome: { optionId: autoOptionId } });
+				this.requireAcp().respondSuccess(message.id, buildSelectedPermissionResponse(autoOptionId));
 				this.emit({
 					kind: "info",
 					id: String(message.id),
@@ -619,7 +641,7 @@ class MockAcpClient {
 			}
 		}
 
-		const request: MockPermissionRequest = {
+		const request: AgentPermissionRequest = {
 			requestId: message.id ?? "",
 			sessionId: asString(params.sessionId, this.sessionId ?? ""),
 			toolCall,
@@ -656,15 +678,22 @@ class MockAcpClient {
 			return;
 		}
 		if (updateType === "tool_call") {
-			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update) });
+			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update, { isUpdate: false }) });
 			return;
 		}
 		if (updateType === "tool_call_update") {
-			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update) });
+			this.emitTranscriptUpdate(sessionId, { kind: "tool", tool: normalizeToolCall(update, { isUpdate: true }) });
 			return;
 		}
 		if (updateType === "config_option_update") {
 			this.emitConfig(update.configOptions);
+			return;
+		}
+		if (updateType === "available_commands_update") {
+			this.slashCommands = Array.isArray(update.availableCommands)
+				? update.availableCommands.map(normalizeSlashCommand)
+				: [];
+			this.emit({ kind: "slashCommands", commands: this.slashCommands });
 			return;
 		}
 		if (updateType === "usage_update") {
@@ -692,26 +721,28 @@ class MockAcpClient {
 		if (!Array.isArray(value)) {
 			return;
 		}
+		const options = value.map((entry) => {
+			const object = asObject(entry);
+			return {
+				id: asString(object.id),
+				name: asOptionalString(object.name),
+				currentValue: asOptionalString(object.currentValue),
+				options: Array.isArray(object.options)
+					? object.options.map((option) => {
+							const optionObject = asObject(option);
+							return {
+								value: asString(optionObject.value),
+								name: asString(optionObject.name),
+								description: asOptionalString(optionObject.description),
+							};
+						})
+					: undefined,
+			} satisfies AgentConfigOption;
+		});
+		this.configOptions = options;
 		this.emit({
 			kind: "config",
-			options: value.map((entry) => {
-				const object = asObject(entry);
-				return {
-					id: asString(object.id),
-					name: asOptionalString(object.name),
-					currentValue: asOptionalString(object.currentValue),
-					options: Array.isArray(object.options)
-						? object.options.map((option) => {
-								const optionObject = asObject(option);
-								return {
-									value: asString(optionObject.value),
-									name: asString(optionObject.name),
-									description: asOptionalString(optionObject.description),
-								};
-							})
-						: undefined,
-				} satisfies MockConfigOption;
-			}),
+			options,
 		});
 	}
 
@@ -739,17 +770,22 @@ class MockAcpClient {
 		this.initialized = false;
 		this.sessionId = null;
 		this.currentCwd = null;
+		this.processCwd = null;
+		this.processPermissionMode = null;
 		this.running = false;
+		this.permissionRequests.clear();
+		this.configOptions = [];
+		this.slashCommands = [];
 		this.stopTurnWatchdog();
-		this.transport?.failAll(new AcpError("process_exit", `Mock ACP server exited with code ${exitCode}.`));
+		this.transport?.failAll(new AcpError("process_exit", `Agent ACP process exited with code ${exitCode}.`));
 		this.transport = null;
 		if (exitCode !== 0) {
-			this.emit({ kind: "error", message: `Mock ACP server exited with code ${exitCode}.` });
+			this.emit({ kind: "error", message: `Agent ACP process exited with code ${exitCode}.` });
 		}
 	}
 }
 
-function normalizeContent(value: JsonValue | undefined): MockContentBlock {
+function normalizeContent(value: JsonValue | undefined): AgentContentBlock {
 	const object = asObject(value);
 	if (object.type === "text") {
 		return { type: "text", text: asString(object.text) };
@@ -757,18 +793,24 @@ function normalizeContent(value: JsonValue | undefined): MockContentBlock {
 	return { type: asString(object.type, "unknown"), ...object };
 }
 
-function mergeContentBlock(left: MockContentBlock, right: MockContentBlock): MockContentBlock {
+function mergeContentBlock(left: AgentContentBlock, right: AgentContentBlock): AgentContentBlock {
 	if (left.type === "text" && right.type === "text") {
 		return { type: "text", text: `${left.text}${right.text}` };
 	}
 	return right;
 }
 
-function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpdate): MockAgentUpdate[] {
+function upsertTranscriptUpdate(current: AgentUpdate[], update: AgentUpdate): AgentUpdate[] {
 	if (update.kind === "message") {
-		const index = current.findIndex(
-			(entry) => entry.kind === "message" && entry.messageId === update.messageId && entry.role === update.role,
-		);
+		const exactIndex = update.messageId
+			? current.findIndex(
+					(entry) => entry.kind === "message" && entry.messageId === update.messageId && entry.role === update.role,
+				)
+			: -1;
+		const lastIndex = current.length - 1;
+		const lastEntry = current[lastIndex];
+		const contiguousIndex = lastEntry?.kind === "message" && lastEntry.role === update.role ? lastIndex : -1;
+		const index = exactIndex >= 0 ? exactIndex : contiguousIndex;
 		if (index < 0) {
 			return [...current, update];
 		}
@@ -779,10 +821,18 @@ function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpd
 		);
 	}
 	if (update.kind === "plan") {
-		return [...current.filter((entry) => entry.kind !== "plan"), update];
+		const index = current.findIndex((entry) => entry.kind === "plan");
+		if (index < 0) {
+			return [...current, update];
+		}
+		return current.map((entry, entryIndex) => (entryIndex === index ? update : entry));
 	}
 	if (update.kind === "usage") {
-		return [...current.filter((entry) => entry.kind !== "usage"), update];
+		const index = current.findIndex((entry) => entry.kind === "usage");
+		if (index < 0) {
+			return [...current, update];
+		}
+		return current.map((entry, entryIndex) => (entryIndex === index ? update : entry));
 	}
 	if (update.kind === "tool") {
 		const index = current.findIndex(
@@ -797,9 +847,13 @@ function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpd
 						kind: "tool",
 						tool: {
 							...entry.tool,
-							...update.tool,
-							title: update.tool.title === "Mock tool" ? entry.tool.title : update.tool.title,
-							kind: update.tool.kind === "tool" ? entry.tool.kind : update.tool.kind,
+							toolCallId: update.tool.toolCallId || entry.tool.toolCallId,
+							title: update.tool.title && update.tool.title !== "Agent tool" ? update.tool.title : entry.tool.title,
+							kind: update.tool.kind && update.tool.kind !== "tool" ? update.tool.kind : entry.tool.kind,
+							status: update.tool.status || entry.tool.status,
+							content: update.tool.content ?? entry.tool.content,
+							locations: update.tool.locations ?? entry.tool.locations,
+							rawInput: update.tool.rawInput ?? entry.tool.rawInput,
 						},
 					}
 				: entry,
@@ -808,7 +862,7 @@ function upsertTranscriptUpdate(current: MockAgentUpdate[], update: MockAgentUpd
 	return current;
 }
 
-function normalizePlanItem(value: JsonValue): MockPlanItem {
+function normalizePlanItem(value: JsonValue): AgentPlanItem {
 	const object = asObject(value);
 	return {
 		title: asString(object.content, asString(object.title, "Untitled step")),
@@ -817,20 +871,20 @@ function normalizePlanItem(value: JsonValue): MockPlanItem {
 	};
 }
 
-function normalizeToolCall(value: JsonValue | undefined): MockToolCall {
+function normalizeToolCall(value: JsonValue | undefined, options: { isUpdate?: boolean } = {}): AgentToolCall {
 	const object = asObject(value);
 	return {
 		toolCallId: asString(object.toolCallId),
-		title: asString(object.title, "Mock tool"),
-		kind: asString(object.kind, "tool"),
-		status: asString(object.status, "pending"),
+		title: asString(object.title, options.isUpdate ? "" : "Agent tool"),
+		kind: asString(object.kind, options.isUpdate ? "" : "tool"),
+		status: asString(object.status, options.isUpdate ? "" : "pending"),
 		content: Array.isArray(object.content) ? object.content : undefined,
 		locations: Array.isArray(object.locations) ? object.locations : undefined,
 		rawInput: object.rawInput,
 	};
 }
 
-function buildPromptContent(prompt: string, attachments: MockPromptAttachment[] | undefined): JsonValue[] {
+function buildPromptContent(prompt: string, attachments: AgentPromptAttachment[] | undefined): JsonValue[] {
 	const content: JsonValue[] = [{ type: "text", text: prompt }];
 	for (const attachment of attachments ?? []) {
 		content.push({
@@ -843,7 +897,7 @@ function buildPromptContent(prompt: string, attachments: MockPromptAttachment[] 
 	return content;
 }
 
-function normalizeSlashCommand(value: JsonValue): MockSlashCommand {
+function normalizeSlashCommand(value: JsonValue): AgentSlashCommand {
 	const object = asObject(value);
 	const input = asObject(object.input);
 	return {
@@ -853,26 +907,17 @@ function normalizeSlashCommand(value: JsonValue): MockSlashCommand {
 	};
 }
 
-function normalizeSkill(value: JsonValue): MockSkill {
-	const object = asObject(value);
-	return {
-		id: asString(object.id),
-		name: asString(object.name),
-		description: asString(object.description),
-	};
-}
-
-function normalizeSessionSummary(value: JsonValue | undefined): MockSessionSummary {
+function normalizeSessionSummary(value: JsonValue | undefined): AgentSessionSummary {
 	const object = asObject(value);
 	const meta = asObject(object._meta);
 	const title = asString(object.title).trim();
-	const displayTitle = title === "New mock agent session" ? "" : title;
+	const displayTitle = title === "New agent session" ? "" : title;
 	const cwd = asString(object.cwd);
 	return {
 		sessionId: asString(object.sessionId),
 		title: displayTitle || "New chat",
 		cwd,
-		isNoProject: resolveCwd(cwd) === homedir(),
+		isNoProject: resolveAgentCwd(cwd) === homedir(),
 		updatedAt: asString(object.updatedAt, new Date(0).toISOString()),
 		messageCount: asNumber(meta.messageCount),
 	};
@@ -920,54 +965,58 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 				});
 				return folder && folder.trim().length > 0 ? folder : null;
 			},
-			startMockPrompt: (params: StartMockPromptParams): StartMockPromptResponse => {
+			startAgentPrompt: (params: StartAgentPromptParams): StartAgentPromptResponse => {
 				const prompt = params.prompt.trim();
 				if (!prompt) {
 					return { accepted: false };
 				}
-				mockClient ??= new MockAcpClient(sendMockUpdate);
-				if (mockClient.isRunning) {
+				agentClient ??= new AgentAcpClient(sendAgentUpdate);
+				if (agentClient.isRunning) {
 					return { accepted: false };
 				}
-				void mockClient.startPrompt({ ...params, prompt });
+				void agentClient.startPrompt({ ...params, prompt });
 				return { accepted: true };
 			},
-			respondToMockPermission: (params: RespondToMockPermissionParams) => {
-				return mockClient?.respondToPermission(params) ?? false;
+			prepareAgentSession: async (params: PrepareAgentSessionParams): Promise<PrepareAgentSessionResponse> => {
+				agentClient ??= new AgentAcpClient(sendAgentUpdate);
+				return agentClient.prepareSession(params);
 			},
-			listMockSessions: async () => {
-				mockClient ??= new MockAcpClient(sendMockUpdate);
-				return mockClient.listSessions();
+			cancelAgentPrompt: () => {
+				return agentClient?.cancelActiveTurn() ?? false;
 			},
-			listMockSlashCommands: async () => {
-				mockClient ??= new MockAcpClient(sendMockUpdate);
-				return mockClient.listSlashCommands();
+			respondToAgentPermission: (params: RespondToAgentPermissionParams) => {
+				return agentClient?.respondToPermission(params) ?? false;
 			},
-			listMockSkills: async () => {
-				mockClient ??= new MockAcpClient(sendMockUpdate);
-				return mockClient.listSkills();
+			listAgentSessions: async () => {
+				return agentClient?.listSessions() ?? [];
 			},
-			loadMockSession: async (params: LoadMockSessionParams) => {
-				if (!mockClient) {
-					return { loaded: false, reason: "The mock agent has not started yet." };
+			listAgentSlashCommands: async () => {
+				return agentClient?.listSlashCommands() ?? [];
+			},
+			listAgentSkills: async () => {
+				return agentClient?.listSkills() ?? [];
+			},
+			loadAgentSession: async (params: LoadAgentSessionParams) => {
+				if (!agentClient) {
+					return { loaded: false, reason: "The agent has not started yet." };
 				}
-				return mockClient.loadSession(params);
+				return agentClient.loadSession(params);
 			},
-			deleteMockSession: async (params: DeleteMockSessionParams): Promise<DeleteMockSessionResponse> => {
-				if (!mockClient) {
-					return { deleted: false, reason: "The mock agent has not started yet." };
+			deleteAgentSession: async (params: DeleteAgentSessionParams): Promise<DeleteAgentSessionResponse> => {
+				if (!agentClient) {
+					return { deleted: false, reason: "The agent has not started yet." };
 				}
-				return mockClient.deleteSession(params);
+				return agentClient.deleteSession(params);
 			},
-			startNewMockChat: async () => {
-				if (!mockClient) {
+			startNewAgentChat: async () => {
+				if (!agentClient) {
 					return true;
 				}
-				return mockClient.startNewChat();
+				return agentClient.startNewChat();
 			},
-			resetMockChat: async () => {
-				await mockClient?.reset();
-				mockClient = null;
+			resetAgentChat: async () => {
+				await agentClient?.reset();
+				agentClient = null;
 				return true;
 			},
 			getProjectGitStatus: (params: GetProjectGitStatusParams) => {
@@ -1015,7 +1064,7 @@ mainWindow = new BrowserWindow({
 });
 
 process.on("exit", () => {
-	mockClient?.reset();
+	agentClient?.reset();
 });
 
 console.log("App started!");

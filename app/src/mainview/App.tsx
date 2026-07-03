@@ -13,12 +13,13 @@ import {
 import { useAtom } from "jotai";
 import { useStickToBottom } from "use-stick-to-bottom";
 import {
-	Bot,
 	Check,
 	ChevronDown,
 	Circle,
 	Folder,
+	GitBranch,
 	Hand,
+	LayoutDashboard,
 	ListTodo,
 	LoaderCircle,
 	type LucideIcon,
@@ -29,6 +30,7 @@ import {
 	PanelLeftOpen,
 	Pencil,
 	Plus,
+	RefreshCw,
 	Search,
 	Send,
 	Settings,
@@ -37,13 +39,12 @@ import {
 	Sparkles,
 	SquareTerminal,
 	Trash2,
-	User,
 	X,
 } from "lucide-react";
 import appIcon from "@/assets/app-icon.png";
 import { electroview } from "@/lib/electrobun";
 import { cn } from "@/lib/utils";
-import { isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
+import { isDashboardPinnedAtom, isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
 import {
 	APPROVAL_MODE_LABELS,
 	type ApprovalModeId,
@@ -61,6 +62,7 @@ import {
 	type MockSlashCommand,
 	type MockToolCall,
 	type MockUsage,
+	type ProjectGitStatus,
 } from "@shared/rpc";
 
 const SIDEBAR_MIN_WIDTH = 260;
@@ -70,6 +72,9 @@ const SIDEBAR_FLOATING_TOGGLE_GAP = 8;
 const SIDEBAR_FLOATING_TOGGLE_TOP = 30;
 const COMPOSER_MIN_HEIGHT = 56;
 const COMPOSER_MAX_HEIGHT = 192;
+const DASHBOARD_REFRESH_DEBOUNCE_MS = 500;
+const DASHBOARD_RESERVED_WIDTH_REM = 24;
+const MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM = 42;
 
 type ApprovalModeOption = {
 	value: ApprovalModeId;
@@ -151,6 +156,14 @@ function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 
 function clampSidebarWidth(width: number) {
 	return Math.min(Math.max(width, SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
+}
+
+function remToPixels(rem: number) {
+	if (typeof window === "undefined") {
+		return rem * 16;
+	}
+	const rootFontSize = Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize);
+	return rem * (Number.isFinite(rootFontSize) ? rootFontSize : 16);
 }
 
 function contentText(content: MockContentBlock): string {
@@ -272,6 +285,63 @@ function sessionActivityLabel(status: MockRunStatus) {
 	return undefined;
 }
 
+function planSummary(items: TranscriptItem[]) {
+	const plan = [...items].reverse().find((item): item is Extract<TranscriptItem, { type: "plan" }> => item.type === "plan");
+	if (!plan || plan.items.length === 0) {
+		return "No active plan";
+	}
+	const activeItem =
+		plan.items.find((item) => item.status === "in_progress" || item.status === "running") ?? plan.items[0];
+	return `${activeItem.title} (${plan.items.length})`;
+}
+
+function attachmentSummary(currentCount: number, lastSubmittedCount: number) {
+	if (currentCount > 0) {
+		return `${currentCount} attached`;
+	}
+	if (lastSubmittedCount > 0) {
+		return `${lastSubmittedCount} last submitted`;
+	}
+	return "No sources";
+}
+
+function gitStatusSummary(status: ProjectGitStatus | null) {
+	if (!status) {
+		return "Not loaded";
+	}
+	if (!status.ok) {
+		return status.error ?? "Git unavailable";
+	}
+	const files = `${status.changedFiles} file${status.changedFiles === 1 ? "" : "s"}`;
+	const lines = `+${status.additions} / -${status.deletions}`;
+	return status.hasUntracked ? `${files}, ${lines}, untracked` : `${files}, ${lines}`;
+}
+
+function gitBranchSummary(status: ProjectGitStatus | null) {
+	if (!status) {
+		return "Unknown";
+	}
+	if (!status.ok) {
+		return "Not a git repo";
+	}
+	return status.isDetached ? `Detached at ${status.branch}` : status.branch;
+}
+
+function shouldRefreshGitAfterTool(tool: MockToolCall) {
+	const kind = tool.kind.toLowerCase();
+	const title = tool.title.toLowerCase();
+	const contentKinds = (tool.content ?? [])
+		.map((entry) => (entry && typeof entry === "object" ? String((entry as Record<string, unknown>).type ?? "") : ""))
+		.map((type) => type.toLowerCase());
+	return (
+		kind.includes("terminal") ||
+		kind.includes("diff") ||
+		title.includes("terminal") ||
+		title.includes("diff") ||
+		contentKinds.some((type) => type === "terminal" || type === "diff")
+	);
+}
+
 function SessionActivityIndicator({ status }: { status: MockRunStatus }) {
 	if (status === "starting" || status === "running") {
 		return (
@@ -299,6 +369,7 @@ function SessionActivityIndicator({ status }: { status: MockRunStatus }) {
 function App() {
 	const [isSidebarCollapsed, setIsSidebarCollapsed] = useAtom(isSidebarCollapsedAtom);
 	const [sidebarWidth, setSidebarWidth] = useAtom(sidebarWidthAtom);
+	const [isDashboardPinned, setIsDashboardPinned] = useAtom(isDashboardPinnedAtom);
 	const [prompt, setPrompt] = useState("");
 	const [projectFolder, setProjectFolder] = useState<string | null>(null);
 	const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
@@ -319,7 +390,11 @@ function App() {
 	const [slashCommands, setSlashCommands] = useState<MockSlashCommand[]>([]);
 	const [skills, setSkills] = useState<MockSkill[]>([]);
 	const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+	const [lastSubmittedAttachmentCount, setLastSubmittedAttachmentCount] = useState(0);
+	const [gitStatus, setGitStatus] = useState<ProjectGitStatus | null>(null);
+	const [isGitStatusRefreshing, setIsGitStatusRefreshing] = useState(false);
 	const [composerHeight, setComposerHeight] = useState(224);
+	const [viewportWidth, setViewportWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const promptOverlayRef = useRef<HTMLDivElement | null>(null);
 	const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -332,6 +407,9 @@ function App() {
 	const pendingPromptProjectFolderRef = useRef<string | null | undefined>(undefined);
 	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
 	const currentPlanKeyRef = useRef("plan-initial");
+	const gitRefreshTimerRef = useRef<number | null>(null);
+	const projectFolderRef = useRef<string | null>(null);
+	const activeSessionIdRef = useRef<string | null>(null);
 	const SidebarToggleIcon = isSidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
 	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
 	const currentApprovalOption =
@@ -348,6 +426,13 @@ function App() {
 	);
 	const activeSessionTitle = sessionTitle(activeSession);
 	const shouldShowSessionContext = hasConversation && Boolean(projectFolder);
+	const isDashboardEligible = Boolean(activeSessionId && projectFolder);
+	const dashboardReservedWidthPixels = remToPixels(DASHBOARD_RESERVED_WIDTH_REM);
+	const minWorkspaceWidthWithDashboard = remToPixels(MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM);
+	const workspaceWidth = Math.max(viewportWidth - renderedSidebarWidth, 0);
+	const canReserveDashboardSpace = workspaceWidth - dashboardReservedWidthPixels >= minWorkspaceWidthWithDashboard;
+	const dashboardReservedWidth =
+		isDashboardEligible && isDashboardPinned && canReserveDashboardSpace ? dashboardReservedWidthPixels : 0;
 	const topBarTitle =
 		shouldShowSessionContext && activeSessionTitle === "New chat" && firstUserMessage
 			? compactTitle(firstUserMessage.message.text)
@@ -384,6 +469,80 @@ function App() {
 		);
 	}, [projectSearch, recentProjects]);
 
+	async function refreshProjectGitStatus(cwd = projectFolderRef.current) {
+		if (!cwd || !activeSessionIdRef.current) {
+			setGitStatus(null);
+			return;
+		}
+		setIsGitStatusRefreshing(true);
+		try {
+			const nextStatus = await electroview.rpc?.request.getProjectGitStatus({ cwd });
+			if (cwd === projectFolderRef.current) {
+				setGitStatus(nextStatus ?? { ok: false, error: "Git status is unavailable." });
+			}
+		} catch (error) {
+			if (cwd === projectFolderRef.current) {
+				setGitStatus({
+					ok: false,
+					error: error instanceof Error ? error.message : "Failed to read git status.",
+				});
+			}
+		} finally {
+			if (cwd === projectFolderRef.current) {
+				setIsGitStatusRefreshing(false);
+			}
+		}
+	}
+
+	function scheduleGitStatusRefresh() {
+		if (!projectFolderRef.current || !activeSessionIdRef.current) {
+			return;
+		}
+		if (gitRefreshTimerRef.current !== null) {
+			window.clearTimeout(gitRefreshTimerRef.current);
+		}
+		gitRefreshTimerRef.current = window.setTimeout(() => {
+			gitRefreshTimerRef.current = null;
+			void refreshProjectGitStatus();
+		}, DASHBOARD_REFRESH_DEBOUNCE_MS);
+	}
+
+	useEffect(() => {
+		projectFolderRef.current = projectFolder;
+		activeSessionIdRef.current = activeSessionId;
+	}, [activeSessionId, projectFolder]);
+
+	useEffect(() => {
+		function updateViewportWidth() {
+			setViewportWidth(window.innerWidth);
+		}
+
+		updateViewportWidth();
+		window.addEventListener("resize", updateViewportWidth);
+		return () => window.removeEventListener("resize", updateViewportWidth);
+	}, []);
+
+	useEffect(() => {
+		if (!isDashboardEligible) {
+			setGitStatus(null);
+			setIsGitStatusRefreshing(false);
+			return;
+		}
+		if (isDashboardPinned) {
+			void refreshProjectGitStatus(projectFolder);
+		}
+		// The dashboard intentionally refreshes on run status edges as a cheap
+		// event-driven proxy for file changes made during a turn.
+	}, [activeSessionId, isDashboardEligible, isDashboardPinned, projectFolder, runStatus]);
+
+	useEffect(() => {
+		return () => {
+			if (gitRefreshTimerRef.current !== null) {
+				window.clearTimeout(gitRefreshTimerRef.current);
+			}
+		};
+	}, []);
+
 	useEffect(() => {
 		const handler = (update: MockAgentUpdate) => {
 			if (update.kind === "status") {
@@ -407,6 +566,9 @@ function App() {
 			}
 			if (update.kind === "tool") {
 				setTranscriptItems((current) => upsertToolItem(current, update.tool));
+				if (shouldRefreshGitAfterTool(update.tool)) {
+					scheduleGitStatusRefresh();
+				}
 				return;
 			}
 			if (update.kind === "usage") {
@@ -741,6 +903,7 @@ function App() {
 		setPrompt("");
 		setTranscriptItems([]);
 		setAttachments([]);
+		setLastSubmittedAttachmentCount(0);
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
 		setStopReason(null);
 		setPendingPermission(null);
@@ -899,6 +1062,7 @@ function App() {
 		pendingPromptProjectFolderRef.current = projectFolder;
 		optimisticUserTextRef.current = trimmedPrompt;
 		currentPlanKeyRef.current = `plan-${Date.now()}`;
+		setLastSubmittedAttachmentCount(attachments.length);
 		setTranscriptItems((current) =>
 			upsertMessageItem(current, { id: `local-${Date.now()}`, role: "user", text: trimmedPrompt }),
 		);
@@ -1165,7 +1329,7 @@ function App() {
 				className={cn(
 					"electrobun-webkit-app-region-no-drag fixed z-10 inline-flex w-auto items-center gap-2 border border-[var(--app-sidebar-border)] bg-white/80 py-1 pl-1.5 text-muted-foreground shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl",
 					shouldShowSessionContext
-						? "min-h-14 max-w-[520px] rounded-[22px] pr-3"
+						? "min-h-14 max-w-[32.5rem] rounded-full pr-4"
 						: "h-11 rounded-full pr-4",
 				)}
 				style={{
@@ -1200,14 +1364,94 @@ function App() {
 				)}
 			</div>
 
-			<main className="electrobun-webkit-app-region-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-20" aria-label="Workspace">
+			{isDashboardEligible ? (
+				<div
+					className="electrobun-webkit-app-region-no-drag fixed right-6 top-[30px] z-30 flex flex-col items-end gap-2"
+					onDoubleClick={(event) => event.stopPropagation()}
+				>
+					<div
+						className={cn(
+							"rounded-[30px] border bg-white/78 p-1.5 shadow-[0_8px_24px_rgba(17,24,39,0.12)] backdrop-blur-2xl transition-[border-color,box-shadow,background-color] duration-200",
+							isDashboardPinned
+								? "border-[rgba(79,109,255,0.28)] bg-white/88 shadow-[0_12px_34px_rgba(79,109,255,0.22)]"
+								: "border-[var(--app-sidebar-border)]",
+						)}
+					>
+						<IconButton
+							label="Toggle dashboard"
+							aria-pressed={isDashboardPinned}
+							className={cn(
+								"size-11 rounded-[22px] transition-[background-color,color,box-shadow,transform] duration-200 hover:bg-white/72",
+								isDashboardPinned
+									? "bg-[var(--app-selected-surface)] text-[var(--app-accent)] shadow-[inset_0_0_0_1px_rgba(79,109,255,0.18),0_8px_22px_rgba(79,109,255,0.16)]"
+									: "text-muted-foreground",
+							)}
+							onClick={() => {
+								const shouldOpen = !isDashboardPinned;
+								setIsDashboardPinned(shouldOpen);
+								if (shouldOpen) {
+									void refreshProjectGitStatus(projectFolder);
+								}
+							}}
+						>
+							<LayoutDashboard className="size-5" strokeWidth={1.9} />
+						</IconButton>
+					</div>
+
+					{isDashboardPinned ? (
+						<section
+							aria-label="Session dashboard"
+							className="w-[21rem] max-w-[calc(100vw-3rem)] rounded-[1.5rem] border border-[var(--app-sidebar-border)] bg-white/88 p-4 text-foreground shadow-[0_24px_70px_rgba(17,24,39,0.18)] backdrop-blur-2xl"
+							onPointerDown={(event) => event.stopPropagation()}
+						>
+							<div className="flex items-center gap-3">
+								<div className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-[var(--app-selected-surface)] text-[var(--app-accent)]">
+									<LayoutDashboard className="size-5" strokeWidth={1.8} />
+								</div>
+								<div className="min-w-0 flex-1">
+									<div className="truncate text-[15px] font-semibold">Dashboard</div>
+									<div className="truncate text-[12px] font-medium text-muted-foreground">{topBarTitle}</div>
+								</div>
+								<IconButton
+									label="Refresh dashboard"
+									className="size-9 rounded-2xl hover:bg-muted/70"
+									disabled={isGitStatusRefreshing}
+									onClick={() => void refreshProjectGitStatus(projectFolder)}
+								>
+									<RefreshCw className={cn("size-4", isGitStatusRefreshing ? "animate-spin" : "")} strokeWidth={1.8} />
+								</IconButton>
+							</div>
+
+							<div className="mt-4 grid gap-2">
+								<DashboardRow label="Changes" value={gitStatusSummary(gitStatus)} />
+								<DashboardRow
+									label="Branch"
+									value={gitBranchSummary(gitStatus)}
+									icon={<GitBranch className="size-3.5" strokeWidth={1.8} />}
+								/>
+								<DashboardRow label="Plan" value={planSummary(transcriptItems)} />
+								<DashboardRow
+									label="Sources"
+									value={attachmentSummary(attachments.length, lastSubmittedAttachmentCount)}
+								/>
+							</div>
+						</section>
+					) : null}
+				</div>
+			) : null}
+
+			<main
+				className="electrobun-webkit-app-region-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-20 transition-[margin] duration-200 ease-out"
+				style={{ marginRight: `${dashboardReservedWidth}px` }}
+				aria-label="Workspace"
+			>
 				<div className={cn("mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col", hasConversation ? "" : "justify-center")}>
 					<div className={cn("flex min-h-0 w-full flex-col", hasConversation ? "relative h-full" : "")}>
 						{hasConversation ? (
 							<div
 								ref={transcriptScrollRef}
 								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pt-24"
-								style={{ left: `${renderedSidebarWidth}px` }}
+								style={{ left: `${renderedSidebarWidth}px`, right: `${dashboardReservedWidth}px` }}
 							>
 								<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-4">
 									{transcriptItems.map((item) => {
@@ -1635,6 +1879,18 @@ function IconButton({ children, label, className, ...props }: IconButtonProps) {
 	);
 }
 
+function DashboardRow({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
+	return (
+		<div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-white/48 px-3 py-2">
+			<div className="text-[12px] font-semibold text-muted-foreground">{label}</div>
+			<div className="flex min-w-0 items-center justify-end gap-1.5 text-right text-[13px] font-semibold text-foreground">
+				{icon ? <span className="shrink-0 text-muted-foreground">{icon}</span> : null}
+				<span className="min-w-0 truncate">{value}</span>
+			</div>
+		</div>
+	);
+}
+
 function ComposerMenuItem({
 	icon,
 	label,
@@ -1766,14 +2022,8 @@ function SelectControl({
 
 function MessageBubble({ message }: { message: ChatMessage }) {
 	const isUser = message.role === "user";
-	const Icon = isUser ? User : Bot;
 	return (
 		<div className={cn("flex w-full gap-3", isUser ? "justify-end" : "justify-start")}>
-			{isUser ? null : (
-				<div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-full bg-white/75 text-[var(--app-accent)] shadow-sm">
-					<Icon className="size-4" strokeWidth={1.9} />
-				</div>
-			)}
 			<div
 				className={cn(
 					"max-w-3xl whitespace-pre-wrap rounded-[20px] px-4 py-3 text-[14px] leading-6 shadow-[0_12px_32px_rgba(17,24,39,0.08)]",

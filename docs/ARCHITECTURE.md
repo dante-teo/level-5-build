@@ -130,6 +130,7 @@ Current app RPC includes the mock-agent development surface:
 - `deleteMockSession({ sessionId })`: deletes a mock session through ACP and removes the app-side session/transcript cache entry.
 - `startNewMockChat()`: clears the active session selection without terminating the mock ACP process or creating a new ACP session.
 - `resetMockChat()`: clears the current mock chat and terminates the mock server process if one is running.
+- `getProjectGitStatus({ cwd })`: returns non-throwing git summary data for the selected project folder so the webview dashboard can show branch and change counts without spawning processes in React. The main process resolves the repository root with `git -C <cwd> rev-parse --show-toplevel`, reads branch/change state with `git status --porcelain=v1 --branch`, and sums tracked line counts with `git diff --numstat`. Untracked files count toward the changed-file total, but their contents are not read for line totals. Repositories before the first commit are valid: the helper detects missing `HEAD` and diffs against Git's empty tree hash instead of treating the folder as non-git.
 - `mockAgentUpdate`: Bun-to-webview message stream used for normalized mock status, messages, plan updates, tool calls, context/usage updates, permission requests, session summaries, errors, informational notes (e.g. auto-approval), and stop reasons.
 
 The webview should treat `startMockPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `mockAgentUpdate` messages.

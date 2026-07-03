@@ -91,6 +91,26 @@ export type MockUsage = {
 	size: number;
 };
 
+export type ProjectGitStatus =
+	| {
+			ok: true;
+			root: string;
+			branch: string;
+			isDetached: boolean;
+			changedFiles: number;
+			additions: number;
+			deletions: number;
+			hasUntracked: boolean;
+	  }
+	| {
+			ok: false;
+			error?: string;
+	  };
+
+export type GetProjectGitStatusParams = {
+	cwd: string;
+};
+
 export type MockAgentUpdate =
 	| { kind: "status"; status: MockRunStatus; sessionId?: string; cwd?: string }
 	| MockMessageUpdate
@@ -195,6 +215,10 @@ export type AppRPC = {
 			resetMockChat: {
 				params: void;
 				response: boolean;
+			};
+			getProjectGitStatus: {
+				params: GetProjectGitStatusParams;
+				response: ProjectGitStatus;
 			};
 		};
 	}>;

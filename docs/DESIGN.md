@@ -198,6 +198,10 @@ Rules:
 - Use icon buttons for compact actions.
 - Use visible labels only for navigation tabs or commands that require clarity.
 - Interactive controls inside draggable regions must opt out of drag behavior.
+- A project-backed active session may show a top-right dashboard trigger. The trigger uses a rounded glass capsule with one icon button; when the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
+- The pinned session dashboard is a compact floating panel aligned below the trigger. It should show operational state only: current changes, branch, active plan, and sources. Avoid environment/local/session rows unless they become actionable.
+- The dashboard should reserve workspace width only when the remaining conversation pane can stay readable. On narrower windows it remains an overlay popover instead of forcing the chat column below its useful width.
+- Dashboard layout thresholds should be defined in design units such as rem or component/token sizes, not arbitrary pixel breakpoints.
 
 ## 12. Prompt Composer
 

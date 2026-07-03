@@ -15,11 +15,13 @@ import {
 	type RpcId,
 } from "./acp/transport";
 import { startAcpTurnIdleWatchdog, type AcpTurnIdleWatchdog } from "./acp/watchdog";
+import { getProjectGitStatus } from "./git/status";
 import { APPROVAL_MODE_LABELS } from "../shared/rpc";
 import type {
 	AppRPC,
 	ApprovalModeId,
 	DeleteMockSessionParams,
+	GetProjectGitStatusParams,
 	DeleteMockSessionResponse,
 	LoadMockSessionParams,
 	LoadMockSessionResponse,
@@ -967,6 +969,9 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 				await mockClient?.reset();
 				mockClient = null;
 				return true;
+			},
+			getProjectGitStatus: (params: GetProjectGitStatusParams) => {
+				return getProjectGitStatus(params.cwd);
 			},
 		},
 		messages: {},

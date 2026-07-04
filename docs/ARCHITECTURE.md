@@ -185,7 +185,7 @@ ACP event handling routes updates by `sessionId`, handles structured transcript 
 
 ### Native project context
 
-The native app supports local project context selection only in the new-session composer footer. The selected project is window-local `LocalShellModel` state, is not restored on launch, and becomes locked after the first message because the composer footer is hidden once transcript content exists. Starting a New Chat clears the draft/transcript and makes project selection available again while preserving the current window-local project selection.
+The native app supports local project context selection only in the new-session composer footer. The selected project is window-local `AgentSessionModel` state (`selectedProject`, on the `@State` instance `ContentView` owns), is not restored on launch, and becomes locked once a session is active because `isProjectSelectionAvailable` mirrors `isNewSession`, which `selectProject`/`clearSelectedProject` both guard on. Starting a New Chat clears the draft/transcript and makes project selection available again while preserving the current window-local project selection.
 
 Recent project folders are persisted by `Level5Core.RecentProjectStore` with GRDB in a SQLite database at `~/.level5build/level5.sqlite` for runtime. Tests must inject a temporary database URL. The `recent_projects` table uses the normalized absolute path as its primary key and stores `displayName`, `createdAt`, and `lastOpenedAt`.
 

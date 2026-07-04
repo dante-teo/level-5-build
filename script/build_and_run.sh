@@ -76,11 +76,14 @@ PLIST
 
 open_app() {
   if [[ "${LEVEL5_USE_ACP_MOCK:-0}" == "1" ]]; then
-    mkdir -p "$HOME/.level5-build"
-    LEVEL5_ACP_MOCK_START_PATH="${LEVEL5_ACP_MOCK_START_PATH:-$ROOT_DIR/acp-mock-server/start.sh}" \
-      LEVEL5_NODE_PATH="${LEVEL5_NODE_PATH:-$(command -v node || true)}" \
-      ACP_MOCK_STATE_PATH="${ACP_MOCK_STATE_PATH:-$HOME/.level5-build/acp-mock-state.json}" \
+    LEVEL5_USE_ACP_MOCK=1 \
+      LEVEL5_ACP_MOCK_HOST="${LEVEL5_ACP_MOCK_HOST:-127.0.0.1}" \
+      LEVEL5_ACP_MOCK_PORT="${LEVEL5_ACP_MOCK_PORT:-58945}" \
       "$APP_BINARY" &
+    app_pid=$!
+    if [[ "${LEVEL5_WAIT_FOR_APP:-0}" == "1" ]]; then
+      wait "$app_pid"
+    fi
   else
     /usr/bin/open -n "$APP_BUNDLE"
   fi

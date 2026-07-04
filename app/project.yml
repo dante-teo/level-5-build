@@ -100,6 +100,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.anvia.level5.build
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: "NO"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG"
   Level5CoreTests:
     type: bundle.unit-test
     platform: macOS

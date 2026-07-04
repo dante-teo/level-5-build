@@ -32,6 +32,11 @@ public struct AcpDiagnostic: Equatable, Sendable {
 public struct AcpProcessExit: Equatable, Sendable {
     public var status: Int32
     public var reason: String
+
+    public init(status: Int32, reason: String) {
+        self.status = status
+        self.reason = reason
+    }
 }
 
 public enum AcpEvent: Sendable {
@@ -98,7 +103,12 @@ public actor AcpJsonRpcTransport {
             try await withCheckedThrowingContinuation { continuation in
                 let timeoutTask = Task.detached { [defaultTimeout] in
                     let effectiveTimeout = timeout ?? defaultTimeout
-                    try? await Task.sleep(for: effectiveTimeout)
+                    do {
+                        try await Task.sleep(for: effectiveTimeout)
+                    } catch {
+                        return
+                    }
+                    guard !Task.isCancelled else { return }
                     await self.timeoutPending(id)
                 }
                 pending[id] = Pending(continuation: continuation, timeoutTask: timeoutTask)

@@ -97,19 +97,15 @@ public final class AcpProcessTransport: @unchecked Sendable {
         Task.detached {
             var buffer = Data()
             while !Task.isCancelled {
-                do {
-                    let chunk = try handle.read(upToCount: 4096) ?? Data()
-                    if chunk.isEmpty { break }
-                    buffer.append(chunk)
-                    while let newline = buffer.firstIndex(of: 10) {
-                        let lineData = buffer[..<newline]
-                        buffer.removeSubrange(...newline)
-                        if let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
-                            await consume(line)
-                        }
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: 10) {
+                    let lineData = buffer[..<newline]
+                    buffer.removeSubrange(...newline)
+                    if let line = String(data: lineData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
+                        await consume(line)
                     }
-                } catch {
-                    break
                 }
             }
         }

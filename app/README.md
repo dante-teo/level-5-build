@@ -19,6 +19,9 @@ xcodegen generate --spec project.yml --project .
 # Run package tests.
 swift test
 
+# Run package tests including the opt-in ACP mock subprocess integration.
+LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1 swift test
+
 # Run Xcode build and test checks without signing.
 xcodebuild test \
   -project "Level5 Build.xcodeproj" \
@@ -61,15 +64,23 @@ app/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB and ACP protocol primitives. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a transcript, a focused prompt composer, and a new-session-only project picker. By default sends remain local placeholders; with `LEVEL5_USE_ACP_MOCK=1`, sends go to the repo-local ACP mock server. Durable session history, Devin runtime integration, signing, notarization, and packaging are deferred to follow-up issues.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB and ACP protocol primitives. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native shell backed by an app-private agent session lifecycle model: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, startup session listing, selectable/deletable session rows, an unsent New Chat draft state, transcript replay, per-session prompt queues, and a new-session-only project picker.
+
+Without an available backend, agent actions are disabled and the composer shows “Agent runtime unavailable”; there is no fake local “message captured” behavior in the active app path. Devin runtime process supervision is deferred to the Devin backend issue. In DEBUG builds only, `LEVEL5_USE_ACP_MOCK=1` selects the repo-local ACP mock backend for development. Release/Homebrew-style builds ignore mock env vars.
 
 To exercise the current native mock path manually from the repo root:
 
 ```bash
-LEVEL5_USE_ACP_MOCK=1 ./script/build_and_run.sh
+./script/run_mock_app.sh
 ```
 
-Mock mode starts the repo-local `acp-mock-server/start.sh` over stdio, initializes ACP, creates a mock session on first send, and streams mock agent chunks plus status rows into the local transcript. It is intentionally a development path only: the sidebar is still placeholder UI, mock sessions are not loaded into durable native chat history, and production Devin ACP integration remains future work.
+Mock mode connects to an independently running TCP mock server. `script/run_mock_app.sh` starts `acp-mock-server/start-tcp.sh`, waits for `127.0.0.1:58945`, then launches the app with `LEVEL5_USE_ACP_MOCK=1` plus `LEVEL5_ACP_MOCK_HOST` and `LEVEL5_ACP_MOCK_PORT`. The app does not spawn or supervise the mock process. This keeps development mock lifecycle outside the macOS app process; Devin runtime process supervision remains deferred to the Devin backend issue.
+
+Once connected, the app initializes ACP and calls `session/list` so existing mock sessions appear in the sidebar. New Chat remains an unsent draft and creates no hidden ACP session until the first send. First send calls `session/new`, inserts/selects the session row, then sends `session/prompt`; later sends reuse that `sessionId`. Selecting a row calls `session/load` and replaces the simple transcript cache with replayed user/agent text. Selection itself does not change sidebar recency; only sent or received live message activity updates app-observed recency. Delete uses ACP `session/delete`, refreshes the list, and returns to New Chat if the deleted session was active.
+
+The native model supports multiple sessions with running turns at once. Each session has one active turn and an in-memory FIFO queue; sending again while that same session is running queues the prompt for that session, and queued prompts render above the composer until they start or are removed. Queue and transcript caches are intentionally in-memory only for now.
+
+Transcript views follow the tail by default per session. When the user scrolls away from the bottom, that session stops auto-scrolling; it resumes only after the user scrolls back to the bottom. This state is in-memory and scoped per active session.
 
 ## Local persistence
 

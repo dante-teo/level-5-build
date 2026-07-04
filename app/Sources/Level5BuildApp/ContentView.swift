@@ -4,8 +4,7 @@ import SwiftUI
 public struct ContentView: View {
     @AppStorage("shell.sidebar.isCollapsed") private var isSidebarCollapsed = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var model = LocalShellModel()
-    @State private var mockRuntime = MockAcpRuntime()
+    @State private var model = AgentSessionModel()
     @State private var recentProjects: [RecentProject] = []
     private let recentProjectStore: RecentProjectStore?
     @FocusState private var isComposerFocused: Bool
@@ -17,17 +16,31 @@ public struct ContentView: View {
     public var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             ShellSidebarView(
-                newChatAction: startNewChat
+                sessions: model.sessions,
+                activeSessionId: model.activeSessionId,
+                hasMoreSessions: model.nextCursor != nil,
+                newChatAction: startNewChat,
+                selectSessionAction: selectSession,
+                loadMoreSessionsAction: model.loadMoreSessions,
+                deleteSessionAction: model.deleteSession
             )
             .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
         } detail: {
             WorkspaceView(
                 transcript: model.transcript,
+                transcriptFollowsTail: model.activeTranscriptFollowsTail,
+                availability: model.availability,
+                runtimeMessage: model.runtimeMessage,
+                queuedPrompts: model.activeQueue,
                 draft: $model.draft,
                 selectedProject: model.selectedProject,
                 recentProjects: recentProjects,
+                canSendWithButton: model.canSendWithButton,
+                canEditComposer: model.canEditComposer,
                 isComposerFocused: $isComposerFocused,
                 sendAction: sendDraft,
+                setTranscriptFollowsTailAction: model.setActiveTranscriptFollowsTail,
+                removeQueuedPromptAction: model.removeQueuedPrompt,
                 selectProjectAction: selectProject,
                 clearProjectAction: clearSelectedProject,
                 removeRecentProjectAction: removeRecentProject,
@@ -39,6 +52,7 @@ public struct ContentView: View {
         .onAppear {
             columnVisibility = isSidebarCollapsed ? .detailOnly : .all
             loadRecentProjects()
+            model.start()
         }
         .onChange(of: columnVisibility) { _, visibility in
             isSidebarCollapsed = visibility == .detailOnly
@@ -53,30 +67,16 @@ public struct ContentView: View {
 
     private func startNewChat() {
         model.startNewChat()
-        mockRuntime.reset()
         focusComposer()
     }
 
     private func sendDraft() {
-        if mockRuntime.isEnabled {
-            guard let message = model.submitDraft() else { return }
-            model.appendStatus("Sending to ACP mock...")
-            let cwd = model.selectedProjectPath
-            Task {
-                await mockRuntime.send(
-                    prompt: message,
-                    cwd: cwd,
-                    appendAgentText: { text in
-                        model.appendAgentText(text)
-                    },
-                    appendStatus: { text in
-                        model.appendStatus(text)
-                    }
-                )
-            }
-        } else {
-            _ = model.sendDraft()
-        }
+        model.sendDraft()
+    }
+
+    private func selectSession(_ sessionId: String) {
+        model.selectSession(sessionId)
+        focusComposer()
     }
 
     private func selectProject(_ url: URL) {

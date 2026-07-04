@@ -4,11 +4,19 @@ import SwiftUI
 
 struct WorkspaceView: View {
     let transcript: [LocalTranscriptItem]
+    let transcriptFollowsTail: Bool
+    let availability: AgentAvailability
+    let runtimeMessage: String?
+    let queuedPrompts: [QueuedPrompt]
     @Binding var draft: String
     let selectedProject: RecentProject?
     let recentProjects: [RecentProject]
+    let canSendWithButton: Bool
+    let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let setTranscriptFollowsTailAction: (Bool) -> Void
+    let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
     let removeRecentProjectAction: (RecentProject) -> Void
@@ -18,11 +26,17 @@ struct WorkspaceView: View {
         Group {
             if transcript.isEmpty {
                 NewSessionView(
+                    availability: availability,
+                    runtimeMessage: runtimeMessage,
+                    queuedPrompts: queuedPrompts,
                     draft: $draft,
                     selectedProject: selectedProject,
                     recentProjects: recentProjects,
+                    canSendWithButton: canSendWithButton,
+                    canEditComposer: canEditComposer,
                     isComposerFocused: isComposerFocused,
                     sendAction: sendAction,
+                    removeQueuedPromptAction: removeQueuedPromptAction,
                     selectProjectAction: selectProjectAction,
                     clearProjectAction: clearProjectAction,
                     removeRecentProjectAction: removeRecentProjectAction,
@@ -31,15 +45,25 @@ struct WorkspaceView: View {
             } else {
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
-                        TranscriptView(items: transcript)
+                        TranscriptView(
+                            items: transcript,
+                            followsTail: transcriptFollowsTail,
+                            setFollowsTail: setTranscriptFollowsTailAction
+                        )
 
                         ComposerView(
+                            availability: availability,
+                            runtimeMessage: runtimeMessage,
+                            queuedPrompts: queuedPrompts,
                             draft: $draft,
                             isNewSession: false,
                             selectedProject: selectedProject,
                             recentProjects: recentProjects,
+                            canSendWithButton: canSendWithButton,
+                            canEditComposer: canEditComposer,
                             isFocused: isComposerFocused,
                             sendAction: sendAction,
+                            removeQueuedPromptAction: removeQueuedPromptAction,
                             selectProjectAction: selectProjectAction,
                             clearProjectAction: clearProjectAction,
                             removeRecentProjectAction: removeRecentProjectAction,
@@ -62,11 +86,17 @@ struct WorkspaceView: View {
 }
 
 private struct NewSessionView: View {
+    let availability: AgentAvailability
+    let runtimeMessage: String?
+    let queuedPrompts: [QueuedPrompt]
     @Binding var draft: String
     let selectedProject: RecentProject?
     let recentProjects: [RecentProject]
+    let canSendWithButton: Bool
+    let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
     let removeRecentProjectAction: (RecentProject) -> Void
@@ -83,12 +113,18 @@ private struct NewSessionView: View {
                     .multilineTextAlignment(.center)
 
                 ComposerView(
+                    availability: availability,
+                    runtimeMessage: runtimeMessage,
+                    queuedPrompts: queuedPrompts,
                     draft: $draft,
                     isNewSession: true,
                     selectedProject: selectedProject,
                     recentProjects: recentProjects,
+                    canSendWithButton: canSendWithButton,
+                    canEditComposer: canEditComposer,
                     isFocused: isComposerFocused,
                     sendAction: sendAction,
+                    removeQueuedPromptAction: removeQueuedPromptAction,
                     selectProjectAction: selectProjectAction,
                     clearProjectAction: clearProjectAction,
                     removeRecentProjectAction: removeRecentProjectAction,

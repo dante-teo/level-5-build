@@ -38,6 +38,10 @@ public struct AcpClient: Sendable {
         _ = try await request(AcpMethod.sessionClose, params: params, as: JSONValue.self)
     }
 
+    public func deleteSession(_ params: AcpSessionParams) async throws {
+        _ = try await request(AcpMethod.sessionDelete, params: params, as: JSONValue.self)
+    }
+
     public func prompt(_ params: AcpPromptParams) async throws -> AcpPromptResult {
         try await request(AcpMethod.sessionPrompt, params: params, as: AcpPromptResult.self)
     }
@@ -59,10 +63,12 @@ public struct AcpClient: Sendable {
     }
 
     private func request<T: Decodable>(_ method: String, params: some Encodable, as type: T.Type) async throws -> T {
-        try await request(method, params: try AcpProtocolCoding.encodeJSONValue(params), as: type)
+        let encoded = try AcpProtocolCoding.encodeJSONValue(params)
+        let jsonParams: JSONValue? = encoded
+        return try await request(method, params: jsonParams, as: type)
     }
 
     private func request<T: Decodable>(_ method: String, params: JSONValue?, as type: T.Type) async throws -> T {
-        try AcpProtocolCoding.decode(type, from: try await transport.request(method: method, params: params))
+        return try AcpProtocolCoding.decode(type, from: try await transport.request(method: method, params: params))
     }
 }

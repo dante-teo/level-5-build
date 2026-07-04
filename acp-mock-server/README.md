@@ -19,6 +19,14 @@ The server reads ACP messages from stdin and writes ACP responses/notifications 
 
 Use `./start.sh` when connecting an ACP client. It builds stale or missing TypeScript output with build logs redirected to stderr, then execs Node so stdout stays JSON-RPC-only. Avoid package-manager script wrappers for protocol clients because their banners can pollute ACP stdout.
 
+For native macOS app development, use the TCP entrypoint:
+
+```bash
+./start-tcp.sh
+```
+
+`start-tcp.sh` listens on `127.0.0.1:58945` by default and uses the same mock ACP lifecycle as the stdio server. Override it with `ACP_MOCK_TCP_HOST` and `ACP_MOCK_TCP_PORT`.
+
 Useful environment variables:
 
 - `ACP_MOCK_DELAY_MS`: stream delay in milliseconds, default `120`
@@ -33,10 +41,10 @@ Useful environment variables:
 The native desktop app is local-only by default. To run the current native shell against this mock backend for manual testing:
 
 ```bash
-LEVEL5_USE_ACP_MOCK=1 ./script/build_and_run.sh
+./script/run_mock_app.sh
 ```
 
-In mock mode, the native app starts the bundled or repo-local `acp-mock-server/start.sh` over stdio when the first prompt is sent. It initializes ACP, creates a mock session for the selected project folder or the user's home directory, sends `session/prompt`, and streams mock agent chunks plus status updates into the local transcript. The sidebar remains placeholder native-shell UI; it is not yet backed by `session/list` or durable chat history. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_START_PATH=/absolute/path/to/acp-mock-server/start.sh`.
+In mock mode, DEBUG builds of the native app connect to an independently running TCP mock server. `script/run_mock_app.sh` starts `acp-mock-server/start-tcp.sh`, waits for the port, and launches the app with `LEVEL5_USE_ACP_MOCK=1`. The app initializes ACP, calls `session/list` so existing mock sessions appear in the native sidebar, creates a mock session only on first send from New Chat, sends `session/prompt`, replays existing sessions with `session/load`, and deletes rows with `session/delete`. Mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
 
 The retired Electrobun reference app still has its own manual mock command:
 
@@ -142,14 +150,19 @@ For prompt testing, use the `sessionId` returned by `session/new`.
 ## Verification
 
 ```bash
-pnpm install
-pnpm run build
-pnpm run typecheck
-pnpm test
+CI=true pnpm install --frozen-lockfile
+CI=true pnpm run build
+CI=true pnpm run typecheck
+CI=true pnpm test
 ```
 
 From the repo root, also check the helper scripts:
 
 ```bash
 bash -n acp-mock-server/start.sh
+bash -n acp-mock-server/start-tcp.sh
+bash -n script/build_and_run.sh
+bash -n script/run_mock_app.sh
 ```
+
+The native SwiftPM suite normally skips the subprocess integration. Run `LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1 swift test` from `app/` when you need to verify `AcpProcessTransport` against the real stdio mock server.

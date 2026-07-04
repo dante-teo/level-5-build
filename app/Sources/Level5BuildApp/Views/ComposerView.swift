@@ -4,12 +4,18 @@ import Level5Design
 import SwiftUI
 
 struct ComposerView: View {
+    let availability: AgentAvailability
+    let runtimeMessage: String?
+    let queuedPrompts: [QueuedPrompt]
     @Binding var draft: String
     let isNewSession: Bool
     let selectedProject: RecentProject?
     let recentProjects: [RecentProject]
+    let canSendWithButton: Bool
+    let canEditComposer: Bool
     var isFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
     let removeRecentProjectAction: (RecentProject) -> Void
@@ -17,19 +23,44 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !queuedPrompts.isEmpty {
+                PromptQueueView(
+                    queuedPrompts: queuedPrompts,
+                    removeAction: removeQueuedPromptAction
+                )
+                .padding(.bottom, L5Spacing.x2)
+            }
+
             VStack(spacing: L5Spacing.x3) {
+                if let statusMessage {
+                    RuntimeStatusView(message: statusMessage)
+                }
+
                 TextField("Do anything", text: $draft, axis: .vertical)
                     .font(L5Font.body)
                     .textFieldStyle(.plain)
                     .focused(isFocused)
+                    .disabled(!canEditComposer)
+                    .submitLabel(.send)
+                    .onSubmit(sendAction)
                     .lineLimit(isNewSession ? 1...6 : 1...5)
                     .frame(minHeight: isNewSession ? 70 : 54, alignment: .topLeading)
+                    .onKeyPress { press in
+                        guard press.key == .return else {
+                            return .ignored
+                        }
+                        if press.modifiers.contains(.shift) {
+                            return .ignored
+                        }
+                        sendAction()
+                        return .handled
+                    }
 
                 HStack(spacing: L5Spacing.x3) {
                     Spacer()
 
                     SendButton(
-                        isEnabled: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        isEnabled: canSendWithButton,
                         action: sendAction
                     )
                 }
@@ -68,6 +99,20 @@ struct ComposerView: View {
             }
         }
     }
+
+    private var statusMessage: String? {
+        if let runtimeMessage, !runtimeMessage.isEmpty {
+            return runtimeMessage
+        }
+        switch availability {
+        case let .unavailable(message), let .disconnected(message):
+            return message
+        case .connecting:
+            return "Starting agent runtime..."
+        case .available:
+            return nil
+        }
+    }
 }
 
 private struct SendButton: View {
@@ -85,11 +130,68 @@ private struct SendButton: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.58)
+        .keyboardShortcut(.return, modifiers: [])
         .help("Send")
     }
 
     private var sendBackground: Color {
         isEnabled ? L5Color.accent : Color(nsColor: .tertiaryLabelColor)
+    }
+}
+
+private struct PromptQueueView: View {
+    let queuedPrompts: [QueuedPrompt]
+    let removeAction: (QueuedPrompt) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: L5Spacing.x1) {
+            ForEach(queuedPrompts) { prompt in
+                HStack(spacing: L5Spacing.x2) {
+                    Image(systemName: "text.line.first.and.arrowtriangle.forward")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+
+                    Text(prompt.text)
+                        .font(L5Font.caption)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        removeAction(prompt)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove queued prompt")
+                }
+                .padding(.horizontal, L5Spacing.x3)
+                .padding(.vertical, L5Spacing.x2)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(L5Color.border, lineWidth: 1)
+                }
+            }
+        }
+    }
+}
+
+private struct RuntimeStatusView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: L5Spacing.x2) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.secondary)
+            Text(message)
+                .font(L5Font.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, L5Spacing.x1)
     }
 }
 

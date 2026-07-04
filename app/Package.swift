@@ -31,6 +31,9 @@ let package = Package(
             path: "Sources/Level5BuildApp",
             resources: [
                 .process("Resources")
+            ],
+            swiftSettings: [
+                .define("DEBUG", .when(configuration: .debug))
             ]
         ),
         .target(

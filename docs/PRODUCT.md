@@ -4,15 +4,13 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a local prompt composer, local project selection in the new-session footer, local transcript rows after sending, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
+`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a prompt composer, local project selection in the new-session footer, simple transcript rows with per-session follow-tail scrolling, per-session queued prompts, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
 
-The current native shell is local-only by default. It does not connect to Devin ACP, list persisted sessions, expose attachment menus, or provide durable session history yet. Sending a prompt normally appends the local user message and a placeholder status response. For mock development, launching with `LEVEL5_USE_ACP_MOCK=1` connects sends to the repo-local ACP mock server and streams mock agent responses into the transcript.
+The current native shell has no production agent backend by default. When no backend is available, agent actions are disabled and the composer shows “Agent runtime unavailable”; it does not pretend a message was sent. For mock development, DEBUG builds launched with `LEVEL5_USE_ACP_MOCK=1` use the repo-local ACP mock server for the real native session lifecycle path: startup `session/list`, first-send `session/new`, prompt turns, `session/load` replay, per-session in-memory queues, and `session/delete`. Selecting a session does not change sidebar recency; only live sent or received message activity does.
 
 Recent project folders are persisted locally so the project picker can offer repeat selections. The active selected project itself is window-local state and is not restored on launch.
 
-The retired Electrobun app in `legacy/electrobun-app/` remains the reference for the previous Devin-backed ACP workflow, including project selection, persisted sessions, attachment menus, slash commands, permission prompts, and streamed agent updates. That behavior should be ported deliberately into the native app rather than treated as present in `app/`.
-
-The sidebar currently shows product-shaped placeholders only: app identity, New Chat, an empty All Chats area, and an inert Settings row. It is not backed by ACP `session/list` or durable local storage yet.
+The retired Electrobun app in `legacy/electrobun-app/` remains the reference for the previous Devin-backed ACP workflow, including attachment menus, slash commands, permission prompts, rich streamed agent updates, stop/cancel behavior, and review surfaces. That behavior should be ported deliberately into the native app rather than treated as present in `app/`.
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
 

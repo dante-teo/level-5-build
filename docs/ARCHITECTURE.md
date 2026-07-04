@@ -16,7 +16,7 @@ This repo currently hosts:
 - `script/`, root-level local app run helpers.
 - `docs/`, shared architecture/product/design documentation.
 
-The mock server remains usable as a standalone stdio ACP server and protocol fixture. The native app can use it for local prompt testing when launched with `LEVEL5_USE_ACP_MOCK=1`; Devin production runtime integration remains future work.
+The mock server remains usable as a standalone stdio ACP server and protocol fixture. For native app development, the app connects to the mock through an independently started TCP wrapper; Devin production runtime integration remains future work.
 
 ## `acp-mock-server/` — ACP test agent
 
@@ -26,6 +26,7 @@ The mock server remains usable as a standalone stdio ACP server and protocol fix
 
 - The protocol entrypoint is `acp-mock-server/start.sh`, which builds stale or missing TypeScript output with pnpm and execs Node.
 - The server reads UTF-8 JSON-RPC messages from stdin and writes only JSON-RPC messages to stdout.
+- The native app development entrypoint is `acp-mock-server/start-tcp.sh`, which exposes the same mock lifecycle over TCP on `127.0.0.1:58945` by default. Use `script/run_mock_app.sh` to start the TCP server, wait for the port, and launch the macOS app.
 - Logs go to stderr. Do not route diagnostic output to stdout; ACP clients expect stdout to be protocol-clean.
 - Session state persists to `.mock-acp-state.json` by default, ignored by git. Override with `ACP_MOCK_STATE_PATH`.
 - `runServer()`'s stdin loop dispatches each parsed line without awaiting the previous line's handler to finish. This is load-bearing, not stylistic: a request handler can call back into the client mid-flight (e.g. a prompt turn's `session/request_permission`), and that callback's answer can only ever arrive as a later stdin line. If the loop awaited each line to completion before reading the next one, the server would block forever waiting on its own unread response. In-process tests that call `AcpMockServer.handleLine()` directly (`tests/server.test.ts`) can't exercise this class of bug, since they never go through the loop; `tests/subprocess.test.ts` drives the real `start.sh` entrypoint over an actual stdio pipe specifically to catch it.
@@ -66,9 +67,9 @@ cd legacy/electrobun-app
 bun run dev:mock
 ```
 
-Use `./start.sh` from `acp-mock-server/` when manually testing protocol behavior outside the app.
+Use `./start.sh` from `acp-mock-server/` when manually testing stdio protocol behavior outside the app. Use `./script/run_mock_app.sh` from the repo root for the native app mock path.
 
-Mock-mode app runs use `~/.level5-build/acp-mock-state.json` for state unless `ACP_MOCK_STATE_PATH` is set. Set `LEVEL5_ACP_MOCK_START_PATH` to an absolute `acp-mock-server/start.sh` path when testing a custom mock checkout instead of the bundled or repo-local copy.
+Mock-mode app runs use `~/.level5-build/acp-mock-state.json` for state unless `ACP_MOCK_STATE_PATH` is set. Override the mock TCP address with `LEVEL5_ACP_MOCK_HOST` and `LEVEL5_ACP_MOCK_PORT`; the native app does not spawn or supervise the mock process.
 
 ### Verification
 
@@ -86,6 +87,8 @@ From the repo root:
 ```bash
 bash -n script/build_and_run.sh
 bash -n acp-mock-server/start.sh
+bash -n acp-mock-server/start-tcp.sh
+bash -n script/run_mock_app.sh
 ```
 
 Use `./start.sh` for ACP stdio smoke tests instead of package-manager script wrappers; command banners before process output would pollute ACP stdout.
@@ -129,13 +132,21 @@ app/
 
 The current app UI is a native shell. `ContentView` owns window-scoped shell state and composes:
 
-- `ShellSidebarView` for the native sidebar placeholder structure.
-- `WorkspaceView` and `TranscriptView` for the empty new-session state plus local transcript rows.
-- `ComposerView` for local prompt drafting and sending.
-- `LocalShellModel` for draft/transcript behavior.
+- `ShellSidebarView` for New Chat, ACP-backed session rows, Load More, and delete actions.
+- `WorkspaceView` and `TranscriptView` for the empty new-session state plus the active session transcript cache.
+- `ComposerView` for prompt drafting, backend unavailable state, and the visible per-session queue.
+- `AgentSessionModel` for app-private session lifecycle, transcript caches, per-session queues, backend availability, and ACP event routing.
 - `ShellCommands` for scene-level menu commands routed through focused values.
 
-By default, sending a draft appends local transcript items only. When launched with `LEVEL5_USE_ACP_MOCK=1`, the app starts the ACP mock on first send, initializes ACP, creates a mock session for the selected project or home directory, sends `session/prompt`, and appends streamed mock agent text plus discrete status rows into the transcript. New Chat resets the mock runtime and suppresses stale process-exit callbacks so an old process shutdown cannot write into a freshly cleared transcript. Durable session persistence, Devin runtime integration, review surfaces, signing, notarization, and packaging are follow-up work.
+Backend selection is explicit. By default no native agent backend is available, so agent actions are disabled and the composer shows product UI for “Agent runtime unavailable”; the active app path does not append fake local placeholder responses. In DEBUG builds only, `LEVEL5_USE_ACP_MOCK=1` selects the repo-local ACP mock backend. Release/Homebrew-style builds ignore mock env vars. Devin runtime detection, auth, and process supervision are deferred to the Devin backend issue.
+
+In mock mode, the app connects to the independently running TCP mock server through `Level5Core.AcpClient`, initializes ACP, and calls `session/list` on startup. Existing mock sessions appear in the sidebar using provider `updatedAt` plus app-observed activity for recent-first ordering. `nextCursor` renders as Load More. New Chat is only an unsent draft: it creates no hidden ACP session and appears in no sidebar row until first send. First send calls `session/new`, inserts/selects the row, appends the user prompt when the turn starts, then sends `session/prompt`. Selecting an existing row calls `session/load` and replaces that session's simple transcript cache with replayed user/agent text. Selection is not activity for sidebar ordering; live user/agent chunks sent or received after replay are activity and can move the row. Delete calls `session/delete`, refreshes the list, and returns to New Chat when the active session was deleted.
+
+The native lifecycle model permits multiple sessions to have running turns concurrently, but only one active turn per session. Sending again while the active session is running queues the prompt in that session's in-memory FIFO queue. Queued prompts render compactly above the composer and can be removed before they start. Queued prompts move into the transcript only when they begin sending. If a queued prompt fails, the model records a status row and continues to later queued prompts.
+
+Transcript auto-scroll is per-session follow-tail state. Sessions follow the tail by default; user scroll-up disables auto-follow for that session, and scrolling back to the bottom re-enables it. This is intentionally in-memory for now, matching the in-memory transcript cache.
+
+ACP event handling is intentionally minimal in this issue. The app routes updates by `sessionId`, handles user/agent text chunks, session title/timestamp updates, diagnostics, stderr, process exits, and auto-allows temporary permission requests. Plan and tool updates become simple status rows. Rich transcript rendering belongs to #10, composer models/attachments/slash commands to #11, permission modes to #12, stop/cancel/timeout recovery to #13, structured plans/tools/usage UI to #14, and durable transcript/session persistence to #18.
 
 ### Native project context
 
@@ -145,7 +156,7 @@ Recent project folders are persisted by `Level5Core.RecentProjectStore` with GRD
 
 Path normalization uses `URL(fileURLWithPath: path).standardizedFileURL.path`; it does not resolve symlinks. Any existing directory is a valid project folder, regardless of Git/package metadata. Upserting a selected folder updates `lastOpenedAt`, keeps the original `createdAt`, and prunes the table to the 10 most recently opened projects. Missing paths are not deleted automatically; the picker displays them disabled and lets the user remove them.
 
-The selected project path is exposed as local shell state. In mock mode it is used as ACP `cwd`; folderless mock prompts use the home directory.
+The selected project path is exposed as local shell state. In mock mode it is used as ACP `cwd` for first send from New Chat; folderless mock prompts use the home directory. Selecting an existing ACP session reloads provider state and does not change that session's cwd unless the backend chooses to honor a future cwd update.
 
 ### Build / dev flow
 
@@ -154,6 +165,7 @@ From `app/`:
 ```bash
 xcodegen generate --spec project.yml --project .
 swift test
+LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1 swift test
 xcodebuild test \
   -project "Level5 Build.xcodeproj" \
   -scheme "Level5 Build" \
@@ -163,7 +175,7 @@ xcodebuild test \
   CODE_SIGN_IDENTITY=""
 ```
 
-The pure ACP transport tests are marked serialized because they intentionally exercise request cancellation, request timeout, and `failAll` cleanup against shared actor/task scheduling. Keep that suite serialized unless the helper waits are redesigned to be independent under Swift Testing's default intra-suite parallelism.
+The pure ACP transport tests are marked serialized because they intentionally exercise request cancellation, request timeout, and `failAll` cleanup against shared actor/task scheduling. Keep that suite serialized unless the helper waits are redesigned to be independent under Swift Testing's default intra-suite parallelism. The process-transport integration is opt-in through `LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1` because it launches `acp-mock-server/start.sh` as a real subprocess.
 
 From the repo root, `script/build_and_run.sh` builds the Swift package, stages `dist/Level5 Build.app`, and launches it. Normal verification should use the test commands above and should not launch the GUI unless that is explicitly intended.
 

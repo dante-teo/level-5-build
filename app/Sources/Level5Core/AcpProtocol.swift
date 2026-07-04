@@ -237,6 +237,18 @@ public struct AcpSessionResult: Codable, Equatable, Sendable {
     public var configOptions: [JSONValue]
     public var extra: [String: JSONValue]
 
+    public init(
+        sessionId: String? = nil,
+        modes: JSONValue? = nil,
+        configOptions: [JSONValue] = [],
+        extra: [String: JSONValue] = [:]
+    ) {
+        self.sessionId = sessionId
+        self.modes = modes
+        self.configOptions = configOptions
+        self.extra = extra
+    }
+
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: DynamicCodingKey.self)
         sessionId = try? keyed.decode(String.self, forKey: "sessionId")
@@ -247,15 +259,70 @@ public struct AcpSessionResult: Codable, Equatable, Sendable {
 }
 
 public struct AcpSessionListResult: Codable, Equatable, Sendable {
-    public var sessions: [JSONValue]
+    public var sessions: [AcpSessionSummary]
     public var nextCursor: String?
     public var extra: [String: JSONValue]
 
+    public init(
+        sessions: [AcpSessionSummary] = [],
+        nextCursor: String? = nil,
+        extra: [String: JSONValue] = [:]
+    ) {
+        self.sessions = sessions
+        self.nextCursor = nextCursor
+        self.extra = extra
+    }
+
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: DynamicCodingKey.self)
-        sessions = (try? keyed.decode([JSONValue].self, forKey: "sessions")) ?? []
+        sessions = (try? keyed.decode([AcpSessionSummary].self, forKey: "sessions")) ?? []
         nextCursor = try? keyed.decode(String.self, forKey: "nextCursor")
         extra = keyed.decodeUnknown(excluding: ["sessions", "nextCursor"])
+    }
+}
+
+public struct AcpSessionSummary: Codable, Equatable, Sendable {
+    public var sessionId: String
+    public var cwd: String?
+    public var additionalDirectories: [String]
+    public var title: String?
+    public var updatedAt: String?
+    public var extra: [String: JSONValue]
+
+    public init(
+        sessionId: String,
+        cwd: String? = nil,
+        additionalDirectories: [String] = [],
+        title: String? = nil,
+        updatedAt: String? = nil,
+        extra: [String: JSONValue] = [:]
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.additionalDirectories = additionalDirectories
+        self.title = title
+        self.updatedAt = updatedAt
+        self.extra = extra
+    }
+
+    public init(from decoder: Decoder) throws {
+        let keyed = try decoder.container(keyedBy: DynamicCodingKey.self)
+        sessionId = try keyed.decode(String.self, forKey: "sessionId")
+        cwd = try? keyed.decode(String.self, forKey: "cwd")
+        additionalDirectories = (try? keyed.decode([String].self, forKey: "additionalDirectories")) ?? []
+        title = try? keyed.decode(String.self, forKey: "title")
+        updatedAt = try? keyed.decode(String.self, forKey: "updatedAt")
+        extra = keyed.decodeUnknown(excluding: ["sessionId", "cwd", "additionalDirectories", "title", "updatedAt"])
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var keyed = encoder.container(keyedBy: DynamicCodingKey.self)
+        try keyed.encode(sessionId, forKey: "sessionId")
+        try keyed.encodeIfPresent(cwd, forKey: DynamicCodingKey(stringValue: "cwd"))
+        try keyed.encode(additionalDirectories, forKey: "additionalDirectories")
+        try keyed.encodeIfPresent(title, forKey: DynamicCodingKey(stringValue: "title"))
+        try keyed.encodeIfPresent(updatedAt, forKey: DynamicCodingKey(stringValue: "updatedAt"))
+        try keyed.encodeExtra(extra, excluding: ["sessionId", "cwd", "additionalDirectories", "title", "updatedAt"])
     }
 }
 
@@ -274,6 +341,11 @@ public struct AcpPromptParams: Codable, Equatable, Sendable {
 public struct AcpPromptResult: Codable, Equatable, Sendable {
     public var stopReason: String
     public var extra: [String: JSONValue]
+
+    public init(stopReason: String, extra: [String: JSONValue] = [:]) {
+        self.stopReason = stopReason
+        self.extra = extra
+    }
 
     public init(from decoder: Decoder) throws {
         let keyed = try decoder.container(keyedBy: DynamicCodingKey.self)

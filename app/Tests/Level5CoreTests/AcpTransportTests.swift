@@ -245,13 +245,17 @@ private actor SentLines {
     }
 
     func next(timeout: Duration = .seconds(5)) async throws -> String {
+        return try await withTimeout(timeout) {
+            try await self.dequeue()
+        }
+    }
+
+    private func dequeue() async throws -> String {
         if !lines.isEmpty {
             return lines.removeFirst()
         }
-        return try await withTimeout(timeout) {
-            try await withCheckedThrowingContinuation { continuation in
-                Task { await self.enqueue(continuation) }
-            }
+        return try await withCheckedThrowingContinuation { continuation in
+            enqueue(continuation)
         }
     }
 

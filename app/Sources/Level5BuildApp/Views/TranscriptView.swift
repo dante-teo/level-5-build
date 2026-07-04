@@ -3,19 +3,85 @@ import SwiftUI
 
 struct TranscriptView: View {
     let items: [LocalTranscriptItem]
+    let followsTail: Bool
+    let setFollowsTail: (Bool) -> Void
+
+    private let bottomID = "transcript-bottom"
+    private let coordinateSpaceName = "transcript-scroll"
+    private let bottomThreshold: CGFloat = 24
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: L5Spacing.x4) {
-                ForEach(items) { item in
-                    TranscriptRow(item: item)
+        GeometryReader { viewport in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: L5Spacing.x4) {
+                        ForEach(items) { item in
+                            TranscriptRow(item: item)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomID)
+                            .background {
+                                GeometryReader { bottomProxy in
+                                    Color.clear.preference(
+                                        key: TranscriptBottomPreferenceKey.self,
+                                        value: bottomProxy.frame(in: .named(coordinateSpaceName)).maxY
+                                    )
+                                }
+                            }
+                    }
+                    .padding(L5Spacing.x6)
+                    .frame(maxWidth: 900, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
+                .coordinateSpace(name: coordinateSpaceName)
+                .scrollContentBackground(.hidden)
+                .onAppear {
+                    guard followsTail else { return }
+                    scrollToBottom(proxy, animated: false)
+                }
+                .onChange(of: transcriptVersion) { _, _ in
+                    guard followsTail else { return }
+                    scrollToBottom(proxy, animated: true)
+                }
+                .onChange(of: followsTail) { _, newValue in
+                    guard newValue else { return }
+                    scrollToBottom(proxy, animated: true)
+                }
+                .onPreferenceChange(TranscriptBottomPreferenceKey.self) { bottomY in
+                    guard viewport.size.height > 0 else { return }
+                    let isAtBottom = bottomY <= viewport.size.height + bottomThreshold
+                    guard isAtBottom != followsTail else { return }
+                    setFollowsTail(isAtBottom)
                 }
             }
-            .padding(L5Spacing.x6)
-            .frame(maxWidth: 900, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
-        .scrollContentBackground(.hidden)
+    }
+
+    private var transcriptVersion: String {
+        items
+            .map { "\($0.id.uuidString):\($0.text.count)" }
+            .joined(separator: "|")
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        let action = {
+            proxy.scrollTo(bottomID, anchor: .bottom)
+        }
+        if animated {
+            withAnimation(.easeOut(duration: 0.18), action)
+        } else {
+            action()
+        }
+    }
+}
+
+private struct TranscriptBottomPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .infinity
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 

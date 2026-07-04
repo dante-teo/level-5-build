@@ -6,6 +6,7 @@
 	"description": "A fully functional ACP v1 mock agent server for client testing.",
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
+		"start:tcp": "node dist/src/tcp.js",
 		"test": "node --test dist/tests/*.test.js",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

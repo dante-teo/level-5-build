@@ -55,6 +55,9 @@ private struct TranscriptRow: View {
         case .user:
             Image(systemName: "person.fill")
                 .foregroundStyle(.white)
+        case .agent:
+            Image(systemName: "sparkles")
+                .foregroundStyle(.white)
         case .status:
             Image(systemName: "info")
                 .foregroundStyle(.secondary)
@@ -64,6 +67,7 @@ private struct TranscriptRow: View {
     private var roleTitle: String {
         switch item.role {
         case .user: "You"
+        case .agent: "Agent"
         case .status: "Status"
         }
     }
@@ -71,6 +75,7 @@ private struct TranscriptRow: View {
     private var iconBackground: Color {
         switch item.role {
         case .user: L5Color.accent
+        case .agent: Color(nsColor: .systemGreen)
         case .status: L5Color.secondaryBackground
         }
     }
@@ -78,6 +83,7 @@ private struct TranscriptRow: View {
     private var rowMaterial: Material {
         switch item.role {
         case .user: .regularMaterial
+        case .agent: .regularMaterial
         case .status: .thinMaterial
         }
     }

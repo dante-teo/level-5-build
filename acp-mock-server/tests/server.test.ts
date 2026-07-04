@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AcpMockServer } from "../src/server";
-import { StateStore } from "../src/state";
-import type { JsonValue, Logger, RpcMessage } from "../src/types";
+import { resetMessageWriter, setMessageWriter } from "../src/rpc.js";
+import { AcpMockServer } from "../src/server.js";
+import { StateStore } from "../src/state.js";
+import type { JsonValue, Logger, RpcMessage } from "../src/types.js";
 
 const silentLogger: Logger = {
 	debug() {},
@@ -13,21 +15,18 @@ const silentLogger: Logger = {
 };
 
 let tmp = "";
-let originalWrite: typeof process.stdout.write;
 let output: string[];
 
 beforeEach(() => {
 	tmp = mkdtempSync(join(tmpdir(), "acp-mock-test-"));
 	output = [];
-	originalWrite = process.stdout.write;
-	process.stdout.write = ((chunk: string | Uint8Array) => {
-		output.push(String(chunk));
-		return true;
-	}) as typeof process.stdout.write;
+	setMessageWriter((line) => {
+		output.push(line);
+	});
 });
 
 afterEach(() => {
-	process.stdout.write = originalWrite;
+	resetMessageWriter();
 	rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -39,11 +38,11 @@ describe("ACP mock server", () => {
 		const response = messages().at(-1) as Record<string, JsonValue>;
 		const result = response.result as Record<string, JsonValue>;
 		const capabilities = result.agentCapabilities as Record<string, JsonValue>;
-		expect(result.protocolVersion).toBe(1);
-		expect((capabilities.sessionCapabilities as Record<string, JsonValue>).list).toEqual({});
-		expect(capabilities._meta).toBeUndefined();
-		expect(capabilities.mcpCapabilities).toBeUndefined();
-		expect(result.authMethods).toBeUndefined();
+		assert.equal(result.protocolVersion, 1);
+		assert.deepEqual((capabilities.sessionCapabilities as Record<string, JsonValue>).list, {});
+		assert.equal(capabilities._meta, undefined);
+		assert.equal(capabilities.mcpCapabilities, undefined);
+		assert.equal(result.authMethods, undefined);
 	});
 
 	test("creates sessions with model config and core slash command update", async () => {
@@ -54,15 +53,15 @@ describe("ACP mock server", () => {
 		const all = messages();
 		const response = all.find((message) => (message as Record<string, JsonValue>).id === 2) as Record<string, JsonValue>;
 		const result = response.result as Record<string, JsonValue>;
-		expect(typeof result.sessionId).toBe("string");
+		assert.equal(typeof result.sessionId, "string");
 		const configOptions = result.configOptions as Array<Record<string, JsonValue>>;
-		expect(configOptions.map((option) => option.id)).toEqual(["model"]);
-		expect((all.at(-1) as Record<string, JsonValue>).id).toBe(response.id);
-		await Bun.sleep(1);
+		assert.deepEqual(configOptions.map((option) => option.id), ["model"]);
+		assert.equal((all.at(-1) as Record<string, JsonValue>).id, response.id);
+		await sleep(1);
 		const commandUpdate = messages().find((message) => JSON.stringify(message).includes("available_commands_update")) as Record<string, JsonValue>;
 		const commands = (((commandUpdate.params as Record<string, JsonValue>).update as Record<string, JsonValue>).availableCommands as Array<Record<string, JsonValue>>);
-		expect(commands.map((command) => command.name)).toEqual(["help", "plan", "review", "fix", "test"]);
-		expect(JSON.stringify(messages())).toContain("config_option_update");
+		assert.deepEqual(commands.map((command) => command.name), ["help", "plan", "review", "fix", "test"]);
+		assert.match(JSON.stringify(messages()), /config_option_update/);
 	});
 
 	test("supports direct model listing and config-option model switching", async () => {
@@ -71,13 +70,13 @@ describe("ACP mock server", () => {
 		const sessionId = await createSession(server);
 
 		await send(server, { jsonrpc: "2.0", id: 3, method: "_mock/list_models", params: { sessionId } });
-		expect(JSON.stringify(messages().at(-1))).toContain("mock-deep");
+		assert.match(JSON.stringify(messages().at(-1)), /mock-deep/);
 
 		await send(server, { jsonrpc: "2.0", id: 30, method: "_mock/list_slash_commands", params: { sessionId } });
 		const commandsResponse = messages().find((message) => (message as Record<string, JsonValue>).id === 30) as Record<string, JsonValue>;
 		const extensionCommands = ((commandsResponse.result as Record<string, JsonValue>).availableCommands as Array<Record<string, JsonValue>>).map((command) => command.name);
-		expect(extensionCommands).toContain("fail");
-		expect(extensionCommands).toContain("tokens");
+		assert.ok(extensionCommands.includes("fail"));
+		assert.ok(extensionCommands.includes("tokens"));
 
 		await send(server, {
 			jsonrpc: "2.0",
@@ -86,7 +85,7 @@ describe("ACP mock server", () => {
 			params: { sessionId, configId: "model", value: "mock-deep" }
 		});
 		const response = messages().find((message) => (message as Record<string, JsonValue>).id === 4) as Record<string, JsonValue>;
-		expect(JSON.stringify(response)).toContain("mock-deep");
+		assert.match(JSON.stringify(response), /mock-deep/);
 	});
 
 	test("uses the selected model context window for usage updates", async () => {
@@ -108,7 +107,7 @@ describe("ACP mock server", () => {
 
 		const usageUpdate = messages().find((message) => JSON.stringify(message).includes("usage_update")) as Record<string, JsonValue>;
 		const update = (usageUpdate.params as Record<string, JsonValue>).update as Record<string, JsonValue>;
-		expect(update.size).toBe(1000000);
+		assert.equal(update.size, 1000000);
 	});
 
 	test("streams realistic prompt updates and ends the turn", async () => {
@@ -126,16 +125,16 @@ describe("ACP mock server", () => {
 		const permissionRequest = await waitForMessage(
 			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
 		) as Record<string, JsonValue>;
-		expect(permissionRequest).toBeTruthy();
+		assert.ok(permissionRequest);
 		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "allow-once" } } });
 		await prompt;
 
 		const all = JSON.stringify(messages());
-		expect(all).toContain("plan");
-		expect(all).toContain("tool_call");
-		expect(all).toContain("session/request_permission");
-		expect(all).toContain("diff");
-		expect(all).toContain("\"stopReason\":\"end_turn\"");
+		assert.match(all, /plan/);
+		assert.match(all, /tool_call/);
+		assert.match(all, /session\/request_permission/);
+		assert.match(all, /diff/);
+		assert.match(all, /"stopReason":"end_turn"/);
 	});
 
 	test("rejecting the edit permission request stops without a diff", async () => {
@@ -153,14 +152,14 @@ describe("ACP mock server", () => {
 		const permissionRequest = await waitForMessage(
 			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
 		) as Record<string, JsonValue>;
-		expect(permissionRequest).toBeTruthy();
+		assert.ok(permissionRequest);
 		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "reject-once" } } });
 		await prompt;
 
 		const all = JSON.stringify(messages());
-		expect(all).toContain("\"status\":\"failed\"");
-		expect(all).not.toContain("\"type\":\"diff\"");
-		expect(all).toContain("\"stopReason\":\"end_turn\"");
+		assert.match(all, /"status":"failed"/);
+		assert.doesNotMatch(all, /"type":"diff"/);
+		assert.match(all, /"stopReason":"end_turn"/);
 	});
 
 	test("lists and loads persisted sessions", async () => {
@@ -179,10 +178,10 @@ describe("ACP mock server", () => {
 		const second = createServer(0, statePath);
 		await initialize(second);
 		await send(second, { jsonrpc: "2.0", id: 6, method: "session/list", params: { cwd: tmp } });
-		expect(JSON.stringify(messages().at(-1))).toContain(sessionId);
+		assert.match(JSON.stringify(messages().at(-1)), new RegExp(sessionId));
 
 		await send(second, { jsonrpc: "2.0", id: 7, method: "session/load", params: { sessionId, cwd: tmp, mcpServers: [] } });
-		expect(JSON.stringify(messages())).toContain("agent_message_chunk");
+		assert.match(JSON.stringify(messages()), /agent_message_chunk/);
 	});
 
 	test("cancels an active prompt with cancelled stop reason", async () => {
@@ -196,10 +195,10 @@ describe("ACP mock server", () => {
 			method: "session/prompt",
 			params: { sessionId, prompt: [{ type: "text", text: "/test please" }] }
 		});
-		await Bun.sleep(5);
+		await sleep(5);
 		await send(server, { jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
 		await prompt;
-		expect(JSON.stringify(messages())).toContain("\"stopReason\":\"cancelled\"");
+		assert.match(JSON.stringify(messages()), /"stopReason":"cancelled"/);
 	});
 
 	test("keeps hidden QA prompt triggers without advertising them as slash commands", async () => {
@@ -228,9 +227,9 @@ describe("ACP mock server", () => {
 		});
 
 		const all = JSON.stringify(messages());
-		expect(all).toContain("\"status\":\"failed\"");
-		expect(all).toContain("\"stopReason\":\"refusal\"");
-		expect(all).toContain("\"stopReason\":\"max_tokens\"");
+		assert.match(all, /"status":"failed"/);
+		assert.match(all, /"stopReason":"refusal"/);
+		assert.match(all, /"stopReason":"max_tokens"/);
 	});
 });
 
@@ -265,7 +264,11 @@ async function waitForMessage(predicate: (message: RpcMessage) => boolean, timeo
 	while (Date.now() < deadline) {
 		const message = messages().find(predicate);
 		if (message) return message;
-		await Bun.sleep(1);
+		await sleep(1);
 	}
 	return undefined;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

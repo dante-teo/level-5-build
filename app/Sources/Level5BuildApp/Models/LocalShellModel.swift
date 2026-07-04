@@ -3,6 +3,7 @@ import Level5Core
 
 public enum LocalTranscriptRole: Equatable, Sendable {
     case user
+    case agent
     case status
 }
 
@@ -68,22 +69,54 @@ public struct LocalShellModel: Equatable, Sendable {
 
     @discardableResult
     public mutating func sendDraft() -> Bool {
-        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else {
-            draft = ""
-            return false
-        }
+        guard submitDraft() != nil else { return false }
 
-        transcript.append(LocalTranscriptItem(role: .user, text: message))
         transcript.append(LocalTranscriptItem(
             role: .status,
             text: "Message captured."
         ))
-        draft = ""
         return true
+    }
+
+    public mutating func submitDraft() -> String? {
+        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else {
+            draft = ""
+            return nil
+        }
+
+        transcript.append(LocalTranscriptItem(role: .user, text: message))
+        draft = ""
+        return message
+    }
+
+    public mutating func appendAgentText(_ text: String) {
+        appendText(text, role: .agent)
+    }
+
+    public mutating func appendStatus(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        transcript.append(LocalTranscriptItem(role: .status, text: trimmed))
     }
 
     public mutating func clearTranscript() {
         transcript = []
+    }
+
+    private mutating func appendText(_ text: String, role: LocalTranscriptRole) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if transcript.last?.role == role, let last = transcript.popLast() {
+            transcript.append(LocalTranscriptItem(
+                id: last.id,
+                role: role,
+                text: last.text + text
+            ))
+        } else {
+            transcript.append(LocalTranscriptItem(role: role, text: trimmed))
+        }
     }
 }

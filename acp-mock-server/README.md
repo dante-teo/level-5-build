@@ -17,7 +17,7 @@ cd acp-mock-server
 
 The server reads ACP messages from stdin and writes ACP responses/notifications to stdout. Logs go to stderr.
 
-Use `./start.sh` when connecting an ACP client. It is intentionally a direct executable wrapper so stdout stays JSON-RPC-only; avoid `bun run` wrappers for protocol clients because some Bun versions echo script banners before process output.
+Use `./start.sh` when connecting an ACP client. It builds stale or missing TypeScript output with build logs redirected to stderr, then execs Node so stdout stays JSON-RPC-only. Avoid package-manager script wrappers for protocol clients because their banners can pollute ACP stdout.
 
 Useful environment variables:
 
@@ -30,19 +30,19 @@ Useful environment variables:
 
 ## App Mock Backend
 
-The desktop app uses real Devin ACP by default. To run the app against this mock backend for manual testing:
+The native desktop app is local-only by default. To run the current native shell against this mock backend for manual testing:
 
 ```bash
-cd app
-bun run dev:mock
+LEVEL5_USE_ACP_MOCK=1 ./script/build_and_run.sh
 ```
 
-This is equivalent to running the app with `LEVEL5_USE_ACP_MOCK=1`. In mock mode, app launch starts the bundled or repo-local `acp-mock-server/src/index.ts` over stdio once so the app can initialize ACP and call `session/list` for the sidebar. That startup list call does not create a new chat session; selecting a project or sending the first prompt creates or loads the actual session. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_INDEX_PATH=/absolute/path/to/acp-mock-server/src/index.ts`.
+In mock mode, the native app starts the bundled or repo-local `acp-mock-server/start.sh` over stdio when the first prompt is sent. It initializes ACP, creates a mock session for the selected project folder or the user's home directory, sends `session/prompt`, and streams mock agent chunks plus status updates into the local transcript. The sidebar remains placeholder native-shell UI; it is not yet backed by `session/list` or durable chat history. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_START_PATH=/absolute/path/to/acp-mock-server/start.sh`.
 
-From the repo root, the same manual app flow is available as:
+The retired Electrobun reference app still has its own manual mock command:
 
 ```bash
-./scripts/start-app-with-acp-mock.sh
+cd legacy/electrobun-app
+bun run dev:mock
 ```
 
 ## ACP Surface Covered
@@ -142,13 +142,14 @@ For prompt testing, use the `sessionId` returned by `session/new`.
 ## Verification
 
 ```bash
-bun test
-bunx tsc --noEmit -p tsconfig.json
+pnpm install
+pnpm run build
+pnpm run typecheck
+pnpm test
 ```
 
 From the repo root, also check the helper scripts:
 
 ```bash
-bash -n scripts/start-app-with-acp-mock.sh
 bash -n acp-mock-server/start.sh
 ```

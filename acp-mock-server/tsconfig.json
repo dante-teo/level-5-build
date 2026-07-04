@@ -2,16 +2,16 @@
 	"compilerOptions": {
 		"target": "ES2022",
 		"lib": ["ES2022"],
-		"module": "ESNext",
-		"moduleResolution": "bundler",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
 		"strict": true,
-		"noEmit": true,
+		"rootDir": ".",
+		"outDir": "dist",
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"noFallthroughCasesInSwitch": true,
 		"skipLibCheck": true,
-		"types": ["bun", "node"],
-		"typeRoots": ["./node_modules/@types", "../app/node_modules/@types"]
+		"types": ["node"]
 	},
 	"include": ["src", "tests"]
 }

@@ -5,6 +5,7 @@ public struct ContentView: View {
     @AppStorage("shell.sidebar.isCollapsed") private var isSidebarCollapsed = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var model = LocalShellModel()
+    @State private var mockRuntime = MockAcpRuntime()
     @State private var recentProjects: [RecentProject] = []
     private let recentProjectStore: RecentProjectStore?
     @FocusState private var isComposerFocused: Bool
@@ -52,11 +53,30 @@ public struct ContentView: View {
 
     private func startNewChat() {
         model.startNewChat()
+        mockRuntime.reset()
         focusComposer()
     }
 
     private func sendDraft() {
-        _ = model.sendDraft()
+        if mockRuntime.isEnabled {
+            guard let message = model.submitDraft() else { return }
+            model.appendStatus("Sending to ACP mock...")
+            let cwd = model.selectedProjectPath
+            Task {
+                await mockRuntime.send(
+                    prompt: message,
+                    cwd: cwd,
+                    appendAgentText: { text in
+                        model.appendAgentText(text)
+                    },
+                    appendStatus: { text in
+                        model.appendStatus(text)
+                    }
+                )
+            }
+        } else {
+            _ = model.sendDraft()
+        }
     }
 
     private func selectProject(_ url: URL) {

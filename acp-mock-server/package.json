@@ -5,11 +5,12 @@
 	"type": "module",
 	"description": "A fully functional ACP v1 mock agent server for client testing.",
 	"scripts": {
-		"test": "bun test",
-		"typecheck": "bunx tsc --noEmit -p tsconfig.json"
+		"build": "tsc -p tsconfig.json",
+		"test": "node --test dist/tests/*.test.js",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {
-		"@types/bun": "latest",
+		"@types/node": "^20.19.0",
 		"typescript": "^5.7.2"
 	}
 }

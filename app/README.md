@@ -61,7 +61,15 @@ app/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native local shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a local transcript, a focused prompt composer, and a new-session-only project picker. ACP/runtime integration, durable session history, signing, notarization, and packaging are deferred to follow-up issues.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB and ACP protocol primitives. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a transcript, a focused prompt composer, and a new-session-only project picker. By default sends remain local placeholders; with `LEVEL5_USE_ACP_MOCK=1`, sends go to the repo-local ACP mock server. Durable session history, Devin runtime integration, signing, notarization, and packaging are deferred to follow-up issues.
+
+To exercise the current native mock path manually from the repo root:
+
+```bash
+LEVEL5_USE_ACP_MOCK=1 ./script/build_and_run.sh
+```
+
+Mock mode starts the repo-local `acp-mock-server/start.sh` over stdio, initializes ACP, creates a mock session on first send, and streams mock agent chunks plus status rows into the local transcript. It is intentionally a development path only: the sidebar is still placeholder UI, mock sessions are not loaded into durable native chat history, and production Devin ACP integration remains future work.
 
 ## Local persistence
 

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { MockState, SessionRecord } from "./types";
+import type { MockState, SessionRecord } from "./types.js";
 
 export function createEmptyState(): MockState {
 	return {

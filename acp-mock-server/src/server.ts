@@ -8,7 +8,7 @@ import {
 	mockSkills,
 	modelContextWindow,
 	supportedModes
-} from "./fixtures";
+} from "./fixtures.js";
 import {
 	JsonRpcErrorCode,
 	RpcException,
@@ -19,9 +19,9 @@ import {
 	respond,
 	respondError,
 	writeMessage
-} from "./rpc";
-import { StateStore } from "./state";
-import type { ContentBlock, JsonObject, JsonValue, Logger, RpcId, RpcMessage, RpcRequest, RpcResponse, SessionRecord } from "./types";
+} from "./rpc.js";
+import { StateStore } from "./state.js";
+import type { ContentBlock, JsonObject, JsonValue, Logger, RpcId, RpcMessage, RpcRequest, RpcResponse, SessionRecord } from "./types.js";
 
 type PendingClientRequest = {
 	resolve: (value: JsonValue) => void;
@@ -552,7 +552,7 @@ export class AcpMockServer {
 			status: "in_progress",
 			content: [
 				{ type: "terminal", terminalId },
-				{ type: "content", content: { type: "text", text: "bunx tsc --noEmit -p tsconfig.json\nbun test" } }
+				{ type: "content", content: { type: "text", text: "pnpm run typecheck\npnpm test" } }
 			]
 		});
 		await this.checkpoint(turn);
@@ -844,8 +844,9 @@ class CancelledTurn extends Error {}
 
 export async function runServer(server: AcpMockServer): Promise<void> {
 	let buffer = "";
-	for await (const chunk of Bun.stdin.stream()) {
-		buffer += new TextDecoder().decode(chunk);
+	process.stdin.setEncoding("utf8");
+	for await (const chunk of process.stdin) {
+		buffer += chunk;
 		while (buffer.includes("\n")) {
 			const index = buffer.indexOf("\n");
 			const line = buffer.slice(0, index).trim();

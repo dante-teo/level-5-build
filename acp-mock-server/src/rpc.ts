@@ -1,4 +1,4 @@
-import type { JsonValue, Logger, RpcError, RpcId, RpcMessage, RpcNotification, RpcResponse, RpcSuccess } from "./types";
+import type { JsonValue, Logger, RpcError, RpcId, RpcMessage, RpcNotification, RpcResponse, RpcSuccess } from "./types.js";
 
 export const JsonRpcErrorCode = {
 	ParseError: -32700,
@@ -18,6 +18,20 @@ export class RpcException extends Error {
 	}
 }
 
+let messageWriter = (line: string): void => {
+	process.stdout.write(line);
+};
+
+export function setMessageWriter(writer: (line: string) => void): void {
+	messageWriter = writer;
+}
+
+export function resetMessageWriter(): void {
+	messageWriter = (line: string): void => {
+		process.stdout.write(line);
+	};
+}
+
 export function makeSuccess(id: RpcId, result: JsonValue): RpcSuccess {
 	return { jsonrpc: "2.0", id, result };
 }
@@ -34,7 +48,7 @@ export function isRpcResponse(message: RpcMessage): message is RpcResponse {
 	return !("method" in message) && "id" in message && ("result" in message || "error" in message);
 }
 
-export function isRpcRequest(message: RpcMessage): message is import("./types").RpcRequest {
+export function isRpcRequest(message: RpcMessage): message is import("./types.js").RpcRequest {
 	return "method" in message && "id" in message && !("result" in message) && !("error" in message);
 }
 
@@ -58,7 +72,7 @@ export function parseRpcLine(line: string): RpcMessage {
 }
 
 export function writeMessage(message: RpcMessage): void {
-	process.stdout.write(`${JSON.stringify(message)}\n`);
+	messageWriter(`${JSON.stringify(message)}\n`);
 }
 
 export function notify(method: string, params?: JsonValue): void {

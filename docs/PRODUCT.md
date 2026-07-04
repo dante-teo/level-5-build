@@ -6,7 +6,7 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 `app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a local prompt composer, local project selection in the new-session footer, local transcript rows after sending, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
 
-The current native shell is local-only. It does not connect to Devin ACP, list persisted sessions, expose attachment menus, prepare sessions for selected projects, or stream agent progress yet. Sending a prompt appends the local user message and a placeholder status response so the workspace and transcript layout can be exercised without runtime behavior.
+The current native shell is local-only by default. It does not connect to Devin ACP, list persisted sessions, expose attachment menus, or provide durable session history yet. Sending a prompt normally appends the local user message and a placeholder status response. For mock development, launching with `LEVEL5_USE_ACP_MOCK=1` connects sends to the repo-local ACP mock server and streams mock agent responses into the transcript.
 
 Recent project folders are persisted locally so the project picker can offer repeat selections. The active selected project itself is window-local state and is not restored on launch.
 

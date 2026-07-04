@@ -75,7 +75,15 @@ cat >"$INFO_PLIST" <<PLIST
 PLIST
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  if [[ "${LEVEL5_USE_ACP_MOCK:-0}" == "1" ]]; then
+    mkdir -p "$HOME/.level5-build"
+    LEVEL5_ACP_MOCK_START_PATH="${LEVEL5_ACP_MOCK_START_PATH:-$ROOT_DIR/acp-mock-server/start.sh}" \
+      LEVEL5_NODE_PATH="${LEVEL5_NODE_PATH:-$(command -v node || true)}" \
+      ACP_MOCK_STATE_PATH="${ACP_MOCK_STATE_PATH:-$HOME/.level5-build/acp-mock-state.json}" \
+      "$APP_BINARY" &
+  else
+    /usr/bin/open -n "$APP_BUNDLE"
+  fi
 }
 
 case "$MODE" in

@@ -17,6 +17,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift.git
     from: 7.5.0
+  SwiftUIIntrospect:
+    url: https://github.com/siteline/swiftui-introspect
+    from: 26.0.0
 targets:
   Level5Core:
     type: framework
@@ -80,6 +83,8 @@ targets:
     dependencies:
       - target: Level5Core
       - target: Level5Design
+      - package: SwiftUIIntrospect
+        product: SwiftUIIntrospect
     info:
       path: Generated/Info.plist
       properties:

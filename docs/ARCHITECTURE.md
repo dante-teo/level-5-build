@@ -95,7 +95,7 @@ Use `./start.sh` for ACP stdio smoke tests instead of package-manager script wra
 
 ## `app/` — native macOS app
 
-Stack: SwiftUI for the app shell, Swift Package Manager for module layout and command-line tests, Swift Testing for tests, and XcodeGen for the generated Xcode project. The generated `.xcodeproj` is local build output and is not committed.
+Stack: SwiftUI for the app shell, Swift Package Manager for module layout and command-line tests, Swift Testing for tests, and XcodeGen for the generated Xcode project. The generated `.xcodeproj` is local build output and is not committed. The app uses SwiftUI Introspect narrowly where SwiftUI does not expose the needed native control state; currently this is limited to transcript scroll tracking against the underlying `NSScrollView`.
 
 The scaffold requires Xcode 16 or newer because `Package.swift` uses Swift 6 and the tests use Swift Testing.
 
@@ -133,20 +133,33 @@ app/
 The current app UI is a native shell. `ContentView` owns window-scoped shell state and composes:
 
 - `ShellSidebarView` for New Chat, ACP-backed session rows, Load More, and delete actions.
-- `WorkspaceView` and `TranscriptView` for the empty new-session state plus the active session transcript cache.
+- `WorkspaceView` and `TranscriptView` for the empty new-session state plus compact rendering of the active structured transcript.
 - `ComposerView` for prompt drafting, backend unavailable state, and the visible per-session queue.
 - `AgentSessionModel` for app-private session lifecycle, transcript caches, per-session queues, backend availability, and ACP event routing.
 - `ShellCommands` for scene-level menu commands routed through focused values.
 
 Backend selection is explicit. By default no native agent backend is available, so agent actions are disabled and the composer shows product UI for “Agent runtime unavailable”; the active app path does not append fake local placeholder responses. In DEBUG builds only, `LEVEL5_USE_ACP_MOCK=1` selects the repo-local ACP mock backend. Release/Homebrew-style builds ignore mock env vars. Devin runtime detection, auth, and process supervision are deferred to the Devin backend issue.
 
-In mock mode, the app connects to the independently running TCP mock server through `Level5Core.AcpClient`, initializes ACP, and calls `session/list` on startup. Existing mock sessions appear in the sidebar using provider `updatedAt` plus app-observed activity for recent-first ordering. `nextCursor` renders as Load More. New Chat is only an unsent draft: it creates no hidden ACP session and appears in no sidebar row until first send. First send calls `session/new`, inserts/selects the row, appends the user prompt when the turn starts, then sends `session/prompt`. Selecting an existing row calls `session/load` and replaces that session's simple transcript cache with replayed user/agent text. Selection is not activity for sidebar ordering; live user/agent chunks sent or received after replay are activity and can move the row. Delete calls `session/delete`, refreshes the list, and returns to New Chat when the active session was deleted.
+In mock mode, the app connects to the independently running TCP mock server through `Level5Core.AcpClient`, initializes ACP, and calls `session/list` on startup. Existing mock sessions appear in the sidebar using provider `updatedAt` plus app-observed activity for recent-first ordering. `nextCursor` renders as Load More. New Chat is only an unsent draft: it creates no hidden ACP session and appears in no sidebar row until first send. First send calls `session/new`, inserts/selects the row, appends the user prompt when the turn starts, then sends `session/prompt`. Selecting an existing row calls `session/load`, clears that session's in-memory transcript state, and rebuilds it only from backend replay events. Selection is not activity for sidebar ordering; live user/agent chunks sent or received after replay are activity and can move the row. Delete calls `session/delete`, refreshes the list, and returns to New Chat when the active session was deleted.
 
-The native lifecycle model permits multiple sessions to have running turns concurrently, but only one active turn per session. Sending again while the active session is running queues the prompt in that session's in-memory FIFO queue. Queued prompts render compactly above the composer and can be removed before they start. Queued prompts move into the transcript only when they begin sending. If a queued prompt fails, the model records a status row and continues to later queued prompts.
+The native lifecycle model permits multiple sessions to have running turns concurrently, but only one active turn per session. Sending again while the active session is running queues the prompt in that session's in-memory FIFO queue. Queued prompts render compactly above the composer and can be removed before they start. Queued prompts move into the transcript only when they begin sending. If a queued prompt fails, the model records an error row and continues to later queued prompts.
 
-Transcript auto-scroll is per-session follow-tail state. Sessions follow the tail by default; user scroll-up disables auto-follow for that session, and scrolling back to the bottom re-enables it. This is intentionally in-memory for now, matching the in-memory transcript cache.
+`Level5BuildApp` owns an app-private structured transcript layer:
 
-ACP event handling is intentionally minimal in this issue. The app routes updates by `sessionId`, handles user/agent text chunks, session title/timestamp updates, diagnostics, stderr, process exits, and auto-allows temporary permission requests. Plan and tool updates become simple status rows. Rich transcript rendering belongs to #10, composer models/attachments/slash commands to #11, permission modes to #12, stop/cancel/timeout recovery to #13, structured plans/tools/usage UI to #14, and durable transcript/session persistence to #18.
+- `AgentTranscriptEvent` is the normalized event stream from ACP updates and prompt outcomes.
+- `AgentTranscriptReducer` is pure and deterministic, merging message chunks by `messageId`, falling back to contiguous same-role message merging when no ID exists, replacing the active plan row, merging tool updates by `toolCallId`, replacing the latest usage row, and storing every stop reason.
+- `AgentTranscriptState` is held per `sessionId` by `AgentSessionModel`. It stores ordered transcript items plus latest usage, latest error, and stop-reason metadata.
+- `AgentTranscriptNormalizer` converts tolerant raw ACP `session/update` JSON into transcript events while preserving unsupported non-text content as unsupported-block counts. Unsupported-only message blocks keep empty text and render from that count so the UI does not duplicate placeholder text.
+
+Transcript rendering is intentionally compact in this pass. User and agent messages render as chat rows. Plan, tool, usage, status, and error items render as inline operational cards with title/status/text only. Ordinary `end_turn` stop reasons are stored as metadata and do not render a row; notable stops such as `cancelled`, `refusal`, and `max_tokens` render compact status rows. Detailed plan/tool/usage dashboards, terminal panes, diff rendering, and expandable structured inspection remain deferred to #14.
+
+Transcript auto-scroll is per-session follow-tail state. Sessions follow the tail by default; user scroll-up disables auto-follow for that session, and scrolling back to the bottom re-enables it. Reselecting a session preserves its existing follow-tail state instead of forcing a jump to the bottom. This is intentionally in-memory for now, matching the in-memory transcript cache.
+
+`TranscriptView` renders rows with SwiftUI but uses SwiftUI Introspect to access the backing macOS `NSScrollView` for scroll state. The controller derives "at bottom" from the actual document bounds, visible rect, viewport height, and AppKit flipped-coordinate behavior; content changes settle to bottom only while the session was already following the tail. Wheel, trackpad, scrollbar-drag, and key-scroll input cancel any pending programmatic settle so manual reading is not fought by streaming updates.
+
+The session model appends an optimistic local user row only when a prompt actually starts. It tracks pending backend user echoes per session so replayed/streamed backend echo chunks can be suppressed. If a prompt fails before its backend echo arrives, the pending optimistic echo entry is removed so later successful prompts cannot duplicate user rows.
+
+ACP event handling routes updates by `sessionId`, handles structured transcript events, session title/timestamp updates, diagnostics, stderr, process exits, and auto-allows temporary permission requests. Composer models/attachments/slash commands belong to #11, permission modes to #12, stop/cancel/timeout recovery beyond rendering notable stop outcomes to #13, structured plan/tool/usage inspection UI to #14, and durable transcript/session persistence to #18.
 
 ### Native project context
 

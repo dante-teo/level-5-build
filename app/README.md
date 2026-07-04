@@ -66,6 +66,8 @@ app/
 
 `Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB and ACP protocol primitives. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native shell backed by an app-private agent session lifecycle model: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, startup session listing, selectable/deletable session rows, an unsent New Chat draft state, transcript replay, per-session prompt queues, and a new-session-only project picker.
 
+`Level5BuildApp` also depends on SwiftUI Introspect for narrow AppKit interop. It is currently used by `TranscriptView` to inspect the backing `NSScrollView` so follow-tail behavior can use real scroll metrics instead of SwiftUI layout-preference guesses.
+
 Without an available backend, agent actions are disabled and the composer shows “Agent runtime unavailable”; there is no fake local “message captured” behavior in the active app path. Devin runtime process supervision is deferred to the Devin backend issue. In DEBUG builds only, `LEVEL5_USE_ACP_MOCK=1` selects the repo-local ACP mock backend for development. Release/Homebrew-style builds ignore mock env vars.
 
 To exercise the current native mock path manually from the repo root:
@@ -76,11 +78,15 @@ To exercise the current native mock path manually from the repo root:
 
 Mock mode connects to an independently running TCP mock server. `script/run_mock_app.sh` starts `acp-mock-server/start-tcp.sh`, waits for `127.0.0.1:58945`, then launches the app with `LEVEL5_USE_ACP_MOCK=1` plus `LEVEL5_ACP_MOCK_HOST` and `LEVEL5_ACP_MOCK_PORT`. The app does not spawn or supervise the mock process. This keeps development mock lifecycle outside the macOS app process; Devin runtime process supervision remains deferred to the Devin backend issue.
 
-Once connected, the app initializes ACP and calls `session/list` so existing mock sessions appear in the sidebar. New Chat remains an unsent draft and creates no hidden ACP session until the first send. First send calls `session/new`, inserts/selects the session row, then sends `session/prompt`; later sends reuse that `sessionId`. Selecting a row calls `session/load` and replaces the simple transcript cache with replayed user/agent text. Selection itself does not change sidebar recency; only sent or received live message activity updates app-observed recency. Delete uses ACP `session/delete`, refreshes the list, and returns to New Chat if the deleted session was active.
+Once connected, the app initializes ACP and calls `session/list` so existing mock sessions appear in the sidebar. New Chat remains an unsent draft and creates no hidden ACP session until the first send. First send calls `session/new`, inserts/selects the session row, then sends `session/prompt`; later sends reuse that `sessionId`. Selecting a row calls `session/load`, clears that session's in-memory transcript state, and rebuilds it from backend replay events. Selection itself does not change sidebar recency; only sent or received live message activity updates app-observed recency. Delete uses ACP `session/delete`, refreshes the list, and returns to New Chat if the deleted session was active.
 
 The native model supports multiple sessions with running turns at once. Each session has one active turn and an in-memory FIFO queue; sending again while that same session is running queues the prompt for that session, and queued prompts render above the composer until they start or are removed. Queue and transcript caches are intentionally in-memory only for now.
 
-Transcript views follow the tail by default per session. When the user scrolls away from the bottom, that session stops auto-scrolling; it resumes only after the user scrolls back to the bottom. This state is in-memory and scoped per active session.
+Transcripts are stored as app-private structured state, not flat local role/text rows. ACP updates normalize into deterministic transcript events for message chunks, plans, tool calls, usage, statuses, errors, and stop reasons. Messages merge by `messageId` when available and fall back to contiguous same-role merging without an ID. Unsupported non-text blocks are retained as compact unsupported-block counts. Plans, tool calls, and usage render as compact inline operational cards; detailed dashboards, diffs, and terminal panes are intentionally deferred.
+
+Transcript views follow the tail by default per session. When the user scrolls away from the bottom, that session stops auto-scrolling; it resumes only after the user scrolls back to the bottom. Reselecting a session preserves its existing follow-tail state. The native scroll controller reads `NSScrollView` document bounds, visible rect, and user input events; new transcript content only settles to bottom while follow-tail was already enabled. This state is in-memory and scoped per active session.
+
+Prompt sends append an optimistic local user row only when the prompt starts. Backend user echo chunks are suppressed against a per-session pending echo queue, and failed prompts clear their pending echo entry so later sends do not duplicate user rows.
 
 ## Local persistence
 

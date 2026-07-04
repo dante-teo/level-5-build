@@ -4,9 +4,11 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a prompt composer, local project selection in the new-session footer, simple transcript rows with per-session follow-tail scrolling, per-session queued prompts, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
+`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a prompt composer, local project selection in the new-session footer, structured native transcript rows with per-session follow-tail scrolling, per-session queued prompts, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
 
-The current native shell has no production agent backend by default. When no backend is available, agent actions are disabled and the composer shows “Agent runtime unavailable”; it does not pretend a message was sent. For mock development, DEBUG builds launched with `LEVEL5_USE_ACP_MOCK=1` use the repo-local ACP mock server for the real native session lifecycle path: startup `session/list`, first-send `session/new`, prompt turns, `session/load` replay, per-session in-memory queues, and `session/delete`. Selecting a session does not change sidebar recency; only live sent or received message activity does.
+The current native shell has no production agent backend by default. When no backend is available, agent actions are disabled and the composer shows “Agent runtime unavailable”; it does not pretend a message was sent. For mock development, DEBUG builds launched with `LEVEL5_USE_ACP_MOCK=1` use the repo-local ACP mock server for the real native session lifecycle path: startup `session/list`, first-send `session/new`, prompt turns, structured `session/load` replay, per-session in-memory queues, and `session/delete`. Selecting a session does not change sidebar recency; only live sent or received message activity does.
+
+Native transcripts now keep app-private structured state for messages, plans, tool calls, usage, statuses, errors, and stop reasons. The UI renders messages as chat rows and operational events as compact inline cards. Rich plan/tool/usage dashboards, diff rendering, terminal panes, composer slash commands, attachments, and permission mode UI are still future native work.
 
 Recent project folders are persisted locally so the project picker can offer repeat selections. The active selected project itself is window-local state and is not restored on launch.
 

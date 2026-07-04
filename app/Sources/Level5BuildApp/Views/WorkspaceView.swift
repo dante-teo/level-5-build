@@ -3,7 +3,8 @@ import Level5Design
 import SwiftUI
 
 struct WorkspaceView: View {
-    let transcript: [LocalTranscriptItem]
+    let transcript: [AgentTranscriptItem]
+    let activeSessionId: String?
     let transcriptFollowsTail: Bool
     let availability: AgentAvailability
     let runtimeMessage: String?
@@ -47,9 +48,14 @@ struct WorkspaceView: View {
                     VStack(spacing: 0) {
                         TranscriptView(
                             items: transcript,
+                            scrollIdentity: activeSessionId,
                             followsTail: transcriptFollowsTail,
                             setFollowsTail: setTranscriptFollowsTailAction
                         )
+                        .id(activeSessionId)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .layoutPriority(1)
+                        .clipped()
 
                         ComposerView(
                             availability: availability,

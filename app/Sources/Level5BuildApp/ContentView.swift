@@ -28,6 +28,7 @@ public struct ContentView: View {
         } detail: {
             WorkspaceView(
                 transcript: model.transcript,
+                activeSessionId: model.activeSessionId,
                 transcriptFollowsTail: model.activeTranscriptFollowsTail,
                 availability: model.availability,
                 runtimeMessage: model.runtimeMessage,

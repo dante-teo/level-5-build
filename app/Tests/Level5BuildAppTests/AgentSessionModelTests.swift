@@ -105,23 +105,36 @@ struct AgentSessionModelTests {
 
         model.draft = "Build it"
         model.sendDraft()
-        try await waitUntil { model.transcript.contains { $0.role == .agent } }
+        try await waitUntil { model.transcript.contains { $0.messageRole == .agent } }
 
         #expect(client.newSessionCwds == ["/Users/tester"])
         #expect(client.prompts.map(\.sessionId) == ["s1"])
         #expect(client.prompts.map(\.text) == ["Build it"])
         #expect(model.activeSessionId == "s1")
         #expect(model.sessions.map(\.sessionId) == ["s1"])
-        #expect(model.transcript.first?.role == .user)
-        #expect(model.transcript.contains { $0.role == .agent })
+        #expect(model.transcript.first?.messageRole == .user)
+        #expect(model.transcript.contains { $0.messageRole == .agent })
+    }
+
+    @Test("Optimistic user echo suppresses chunked backend user replay")
+    func optimisticUserEchoSuppressesChunkedBackendUserReplay() async throws {
+        let client = FakeAgentSessionClient()
+        client.userEchoChunksByPrompt["Build it"] = ["Build", " it"]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.draft = "Build it"
+        model.sendDraft()
+        try await waitUntil { model.transcript.contains { $0.messageRole == .agent } }
+
+        #expect(model.transcript.userMessageTexts == ["Build it"])
     }
 
     @Test("Selecting a session loads replay and future sends use that session")
     func selectingSessionLoadsReplayAndSendsToSameSession() async throws {
         let client = FakeAgentSessionClient()
         client.loadReplay["s1"] = [
-            .init(role: .user, text: "Previous prompt"),
-            .init(role: .agent, text: "Previous answer")
+            .messageChunk(role: .user, messageId: "u1", text: "Previous prompt"),
+            .messageChunk(role: .agent, messageId: "a1", text: "Previous answer")
         ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
@@ -145,8 +158,8 @@ struct AgentSessionModelTests {
             ])
         ]
         client.loadReplay["older"] = [
-            .init(role: .user, text: "old prompt"),
-            .init(role: .agent, text: "old response")
+            .messageChunk(role: .user, messageId: "u-old", text: "old prompt"),
+            .messageChunk(role: .agent, messageId: "a-old", text: "old response")
         ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
@@ -174,8 +187,8 @@ struct AgentSessionModelTests {
             ])
         ]
         client.loadReplay["older"] = [
-            .init(role: .user, text: "old prompt"),
-            .init(role: .agent, text: "old response")
+            .messageChunk(role: .user, messageId: "u-old", text: "old prompt"),
+            .messageChunk(role: .agent, messageId: "a-old", text: "old response")
         ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
@@ -212,6 +225,69 @@ struct AgentSessionModelTests {
         #expect(model.activeTranscriptFollowsTail == false)
     }
 
+    @Test("Session replay keeps follow-tail enabled while loading")
+    func sessionReplayKeepsFollowTailEnabledWhileLoading() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksLoad = true
+        client.loadReplay["s1"] = [
+            .messageChunk(role: .user, messageId: "u1", text: "old prompt"),
+            .messageChunk(role: .agent, messageId: "a1", text: "old response")
+        ]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.setActiveTranscriptFollowsTail(false)
+
+        #expect(model.activeTranscriptFollowsTail)
+
+        client.releaseLoad()
+        try await waitUntil("load finished") { model.transcript.count == 2 }
+        model.setActiveTranscriptFollowsTail(false)
+
+        #expect(model.activeTranscriptFollowsTail == false)
+    }
+
+    @Test("Sending respects manual scroll-away follow-tail state")
+    func sendingRespectsManualScrollAwayFollowTailState() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.setActiveTranscriptFollowsTail(false)
+
+        model.draft = "do not jump"
+        model.sendDraft()
+        try await waitUntil("prompt sent") { client.promptSessionIds == ["s1"] }
+
+        #expect(model.activeTranscriptFollowsTail == false)
+    }
+
+    @Test("Failed prompt clears pending optimistic user echo")
+    func failedPromptClearsPendingOptimisticUserEcho() async throws {
+        let client = FakeAgentSessionClient()
+        client.failBeforeUserEchoPrompts = ["first"]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
+
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil("first failed") {
+            model.transcript.contains { $0.errorText?.contains("Prompt failed") == true }
+        }
+
+        model.draft = "second"
+        model.sendDraft()
+        try await waitUntil("second response") {
+            model.transcript.contains { $0.messageText == "response second" }
+        }
+
+        #expect(model.transcript.userMessageTexts == ["first", "second"])
+    }
+
     @Test("Concurrent sessions route streamed updates by session id")
     func concurrentSessionsRouteUpdatesBySessionId() async throws {
         let client = FakeAgentSessionClient()
@@ -229,10 +305,10 @@ struct AgentSessionModelTests {
         model.sendDraft()
         try await waitUntil("prompted s2") { client.promptSessionIds == ["s1", "s2"] }
 
-        try await waitUntil("active s2 transcript") { model.transcript.first?.text == "two" }
+        try await waitUntil("active s2 transcript") { model.transcript.first?.messageText == "two" }
 
         model.selectSession("s1")
-        try await waitUntil("active s1 transcript") { model.transcript.first?.text == "one" }
+        try await waitUntil("active s1 transcript") { model.transcript.first?.messageText == "one" }
     }
 
     @Test("Same-session sends queue FIFO and queued prompts can be removed")
@@ -250,6 +326,7 @@ struct AgentSessionModelTests {
         model.draft = "third"
         model.sendDraft()
         try await waitUntil { model.activeQueue.count == 2 }
+        #expect(model.transcript.userMessageTexts == ["first"])
 
         model.removeQueuedPrompt(model.activeQueue[1])
         #expect(model.activeQueue.map(\.text) == ["second"])
@@ -257,6 +334,7 @@ struct AgentSessionModelTests {
         client.releaseNextPrompt()
         try await waitUntil { client.prompts.count == 2 }
         #expect(client.prompts.map(\.text) == ["first", "second"])
+        #expect(model.transcript.userMessageTexts == ["first", "second"])
         client.releaseNextPrompt()
         try await waitUntil { model.isActiveSessionRunning == false }
     }
@@ -276,7 +354,7 @@ struct AgentSessionModelTests {
         model.sendDraft()
         try await waitUntil { client.prompts.map(\.text) == ["first", "second", "third"] }
 
-        #expect(model.transcript.contains { $0.role == .status && $0.text.contains("Prompt failed") })
+        #expect(model.transcript.contains { $0.errorText?.contains("Prompt failed") == true })
     }
 
     @Test("Delete refreshes list and clears active deleted session")
@@ -337,12 +415,16 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var newSessionCwds: [String] = []
     var newSessionResult = AcpSessionResult(sessionId: "s1")
     var loadedSessionIds: [String] = []
-    var loadReplay: [String: [LocalTranscriptItem]] = [:]
+    var loadReplay: [String: [AgentTranscriptEvent]] = [:]
     var deletedSessionIds: [String] = []
     var prompts: [Prompt] = []
     var promptFailures: Set<String> = []
+    var failBeforeUserEchoPrompts: Set<String> = []
     var exitOnPrompts: Set<String> = []
+    var userEchoChunksByPrompt: [String: [String]] = [:]
+    var blocksLoad = false
     var blocksPrompts = false
+    private var loadContinuation: CheckedContinuation<Void, Never>?
     private var promptContinuations: [CheckedContinuation<Void, Never>] = []
     private var promptReleasePermits = 0
 
@@ -380,15 +462,15 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
         lock.withLock { loadedSessionIds.append(sessionId) }
-        for item in lock.withLock({ loadReplay[sessionId] ?? [] }) {
-            switch item.role {
-            case .user:
-                emitUserText(sessionId, item.text)
-            case .agent:
-                emitAgentText(sessionId, item.text)
-            case .status:
-                break
+        if lock.withLock({ blocksLoad }) {
+            await withCheckedContinuation { continuation in
+                lock.withLock {
+                    loadContinuation = continuation
+                }
             }
+        }
+        for event in lock.withLock({ loadReplay[sessionId] ?? [] }) {
+            emitTranscriptEvent(event, sessionId: sessionId)
         }
         return .init(sessionId: sessionId)
     }
@@ -399,7 +481,13 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     func prompt(sessionId: String, text: String) async throws -> AcpPromptResult {
         lock.withLock { prompts.append(.init(sessionId: sessionId, text: text)) }
-        emitUserText(sessionId, text)
+        if lock.withLock({ failBeforeUserEchoPrompts.contains(text) }) {
+            throw FakeClientError.promptFailed
+        }
+        let userChunks = lock.withLock { userEchoChunksByPrompt[text] ?? [text] }
+        for chunk in userChunks {
+            emitUserText(sessionId, chunk)
+        }
         if lock.withLock({ exitOnPrompts.contains(text) }) {
             emitProcessExit()
             throw AcpTransportError.processExited(7)
@@ -424,8 +512,8 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         }
         emitAgentText(sessionId, "response \(text)")
         lock.withLock {
-            loadReplay[sessionId, default: []].append(.init(role: .user, text: text))
-            loadReplay[sessionId, default: []].append(.init(role: .agent, text: "response \(text)"))
+            loadReplay[sessionId, default: []].append(.messageChunk(role: .user, messageId: UUID().uuidString, text: text))
+            loadReplay[sessionId, default: []].append(.messageChunk(role: .agent, messageId: UUID().uuidString, text: "response \(text)"))
         }
         return .init(stopReason: "end_turn")
     }
@@ -445,6 +533,15 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         continuation?.resume()
     }
 
+    func releaseLoad() {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            let continuation = loadContinuation
+            loadContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+
     func emitUserText(_ sessionId: String, _ text: String) {
         emitText(sessionId, role: "user_message_chunk", text: text)
     }
@@ -457,17 +554,80 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         continuation.yield(.processExit(.init(status: 7, reason: "test")))
     }
 
-    private func emitText(_ sessionId: String, role: String, text: String) {
+    func emitUsage(_ sessionId: String, used: Int, size: Int) {
+        continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+            "sessionId": .string(sessionId),
+            "update": [
+                "sessionUpdate": "usage_update",
+                "used": .number(Double(used)),
+                "size": .number(Double(size))
+            ]
+        ]))
+    }
+
+    private func emitTranscriptEvent(_ transcriptEvent: AgentTranscriptEvent, sessionId: String) {
+        switch transcriptEvent {
+        case let .messageChunk(role, messageId, text, _):
+            emitText(
+                sessionId,
+                role: role == .user ? "user_message_chunk" : "agent_message_chunk",
+                messageId: messageId,
+                text: text
+            )
+        case let .plan(_, status, text):
+            continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+                "sessionId": .string(sessionId),
+                "update": [
+                    "sessionUpdate": "plan",
+                    "entries": [[
+                        "content": .string(text),
+                        "status": .string(status ?? "in_progress")
+                    ]]
+                ]
+            ]))
+        case let .tool(toolCallId, title, kind, status, text):
+            var update: [String: JSONValue] = [
+                "sessionUpdate": "tool_call",
+                "toolCallId": .string(toolCallId)
+            ]
+            if let title { update["title"] = .string(title) }
+            if let kind { update["kind"] = .string(kind) }
+            if let status { update["status"] = .string(status) }
+            if let text {
+                update["content"] = [[
+                    "type": "content",
+                    "content": [
+                        "type": "text",
+                        "text": .string(text)
+                    ]
+                ]]
+            }
+            continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+                "sessionId": .string(sessionId),
+                "update": .object(update)
+            ]))
+        case let .usage(usage):
+            emitUsage(sessionId, used: usage.used ?? 0, size: usage.size ?? 0)
+        case .status, .error, .stopReason:
+            break
+        }
+    }
+
+    private func emitText(_ sessionId: String, role: String, messageId: String? = nil, text: String) {
+        var update: [String: JSONValue] = [
+            "sessionUpdate": .string(role),
+            "content": [
+                "type": "text",
+                "text": .string(text)
+            ]
+        ]
+        if let messageId {
+            update["messageId"] = .string(messageId)
+        }
         let continuation = continuation
         let event = AcpEvent.notification(method: AcpMethod.sessionUpdate, params: [
             "sessionId": .string(sessionId),
-            "update": [
-                "sessionUpdate": .string(role),
-                "content": [
-                    "type": "text",
-                    "text": .string(text)
-                ]
-            ]
+            "update": .object(update)
         ])
         continuation.yield(event)
     }
@@ -506,4 +666,30 @@ private func waitUntil(
 
 private enum WaitError: Error {
     case timedOut(String)
+}
+
+private extension AgentTranscriptItem {
+    var messageRole: AgentTranscriptRole? {
+        guard case let .message(message) = kind else { return nil }
+        return message.role
+    }
+
+    var messageText: String? {
+        guard case let .message(message) = kind else { return nil }
+        return message.text
+    }
+
+    var errorText: String? {
+        guard case let .error(error) = kind else { return nil }
+        return error.text
+    }
+}
+
+private extension [AgentTranscriptItem] {
+    var userMessageTexts: [String] {
+        compactMap { item in
+            guard case let .message(message) = item.kind, message.role == .user else { return nil }
+            return message.text
+        }
+    }
 }

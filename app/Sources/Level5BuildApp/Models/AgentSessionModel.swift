@@ -64,7 +64,7 @@ final class AgentSessionModel {
     private(set) var nextCursor: String?
     private(set) var runtimeMessage: String?
 
-    private var transcripts: [String: [LocalTranscriptItem]] = [:]
+    private var transcriptStates: [String: AgentTranscriptState] = [:]
     private var queues: [String: [QueuedPrompt]] = [:]
     private var followTailBySessionId: [String: Bool] = [:]
     private var runningSessionIds: Set<String> = []
@@ -119,9 +119,9 @@ final class AgentSessionModel {
         )
     }
 
-    var transcript: [LocalTranscriptItem] {
+    var transcript: [AgentTranscriptItem] {
         guard let activeSessionId else { return [] }
-        return transcripts[activeSessionId] ?? []
+        return transcriptStates[activeSessionId]?.renderableItems ?? []
     }
 
     var activeQueue: [QueuedPrompt] {
@@ -223,22 +223,28 @@ final class AgentSessionModel {
 
     func setActiveTranscriptFollowsTail(_ followsTail: Bool) {
         guard let activeSessionId else { return }
+        if followsTail == false, loadingSessionIds.contains(activeSessionId) {
+            return
+        }
         followTailBySessionId[activeSessionId] = followsTail
     }
 
     func selectSession(_ sessionId: String) {
         activeSessionId = sessionId
+        if followTailBySessionId[sessionId] == nil {
+            followTailBySessionId[sessionId] = true
+        }
         Task {
             guard await ensureConnected() else { return }
             guard let client else { return }
-            transcripts[sessionId] = []
+            transcriptStates[sessionId] = AgentTranscriptState()
             loadingSessionIds.insert(sessionId)
             do {
                 _ = try await client.loadSession(sessionId: sessionId, cwd: nil)
                 await clearLoadingAfterReplayDrain(sessionId)
             } catch {
                 loadingSessionIds.remove(sessionId)
-                appendStatus("Failed to load session: \(error)", to: sessionId)
+                appendError(title: "Load failed", text: "Failed to load session: \(error)", key: "load-failed", to: sessionId)
             }
         }
     }
@@ -255,24 +261,24 @@ final class AgentSessionModel {
             guard let client else { return }
             do {
                 try await client.deleteSession(sessionId: sessionId)
-            transcripts[sessionId] = nil
-            queues[sessionId] = nil
-            followTailBySessionId[sessionId] = nil
-            runningSessionIds.remove(sessionId)
+                transcriptStates[sessionId] = nil
+                queues[sessionId] = nil
+                followTailBySessionId[sessionId] = nil
+                runningSessionIds.remove(sessionId)
                 if activeSessionId == sessionId {
                     activeSessionId = nil
                     draft = ""
                 }
                 await refreshSessions(reset: true)
             } catch {
-                appendStatus("Failed to delete session: \(error)", to: sessionId)
+                appendError(title: "Delete failed", text: "Failed to delete session: \(error)", key: "delete-failed", to: sessionId)
             }
         }
     }
 
     func clearTranscript() {
         guard let activeSessionId else { return }
-        transcripts[activeSessionId] = []
+        transcriptStates[activeSessionId] = AgentTranscriptState()
     }
 
     @discardableResult
@@ -381,7 +387,7 @@ final class AgentSessionModel {
         do {
             let result = try await client.prompt(sessionId: sessionId, text: message)
             runtimeMessage = nil
-            appendStatus("Agent turn ended: \(result.stopReason).", to: sessionId)
+            apply(.stopReason(result.stopReason), to: sessionId)
         } catch {
             if case .processExited = error as? AcpTransportError {
                 let message = "Agent runtime disconnected: \(userFacingError(error))"
@@ -389,7 +395,8 @@ final class AgentSessionModel {
                 runtimeMessage = message
                 self.client = nil
             }
-            appendStatus("Prompt failed: \(error)", to: sessionId)
+            appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(message)", to: sessionId)
+            removePendingUserEcho(message, for: sessionId)
         }
         runningSessionIds.remove(sessionId)
         updateRunningFlags()
@@ -428,15 +435,15 @@ final class AgentSessionModel {
                 try? await client?.respondToPermissionRequest(id: id, allow: true)
             }
         case let .diagnostic(diagnostic):
-            appendStatus("Diagnostic: \(diagnostic.message)", to: activeSessionId)
+            appendStatus(title: "Diagnostic", text: diagnostic.message, to: activeSessionId)
         case let .stderr(line):
-            appendStatus("Runtime stderr: \(line)", to: activeSessionId)
+            appendStatus(title: "Runtime stderr", text: line, to: activeSessionId)
         case let .processExit(exit):
             let message = "Agent runtime disconnected: status \(exit.status)"
             availability = .disconnected(message)
             runtimeMessage = message
             client = nil
-            appendStatus("Agent runtime exited with status \(exit.status).", to: activeSessionId)
+            appendError(title: "Runtime exited", text: "Agent runtime exited with status \(exit.status).", key: "process-exit-\(exit.status)", to: activeSessionId)
         case .activity:
             break
         }
@@ -450,37 +457,20 @@ final class AgentSessionModel {
 
         switch kind {
         case "user_message_chunk":
-            guard let text = contentText(from: object["content"]) else { return }
+            guard let event = AgentTranscriptNormalizer.events(from: update).first else { return }
             markLiveMessageActivity(for: sessionId)
-            if pendingUserEchoes[sessionId]?.first == text {
-                pendingUserEchoes[sessionId]?.removeFirst()
+            if case let .messageChunk(_, _, text, _) = event, suppressPendingUserEchoChunk(text, for: sessionId) {
+                return
             } else {
-                appendUser(text, to: sessionId)
+                apply(event, to: sessionId)
             }
         case "agent_message_chunk":
-            guard let text = contentText(from: object["content"]) else { return }
             markLiveMessageActivity(for: sessionId)
-            appendAgent(text, to: sessionId)
+            apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
         case "session_info_update":
             updateSessionInfo(sessionId: sessionId, object: object)
-        case "plan":
-            let active = (object["entries"]?.arrayValue ?? []).compactMap { entry -> String? in
-                guard let item = entry.objectValue, item["status"]?.stringValue == "in_progress" else { return nil }
-                return item["content"]?.stringValue
-            }
-            if let first = active.first {
-                appendStatus("Plan: \(first)", to: sessionId)
-            }
-        case "tool_call":
-            if let title = object["title"]?.stringValue {
-                appendStatus("Tool started: \(title)", to: sessionId)
-            }
-        case "tool_call_update":
-            if let status = object["status"]?.stringValue {
-                appendStatus("Tool \(status).", to: sessionId)
-            }
-        case "usage_update":
-            break
+        case "plan", "tool_call", "tool_call_update", "usage_update":
+            apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
         default:
             break
         }
@@ -561,39 +551,50 @@ final class AgentSessionModel {
     }
 
     private func appendUser(_ text: String, to sessionId: String) {
-        append(.init(role: .user, text: text), to: sessionId)
+        apply(.messageChunk(role: .user, messageId: "local-user-\(UUID().uuidString)", text: text), to: sessionId)
     }
 
-    private func appendAgent(_ text: String, to sessionId: String) {
-        appendText(text, role: .agent, to: sessionId)
-    }
-
-    private func appendStatus(_ text: String, to sessionId: String?) {
-        guard let sessionId else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        append(.init(role: .status, text: trimmed), to: sessionId)
-    }
-
-    private func append(_ item: LocalTranscriptItem, to sessionId: String) {
-        transcripts[sessionId, default: []].append(item)
-    }
-
-    private func appendText(_ text: String, role: LocalTranscriptRole, to sessionId: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        var transcript = transcripts[sessionId] ?? []
-        if transcript.last?.role == role, let last = transcript.popLast() {
-            transcript.append(.init(id: last.id, role: role, text: last.text + text))
+    private func suppressPendingUserEchoChunk(_ text: String, for sessionId: String) -> Bool {
+        guard var echoes = pendingUserEchoes[sessionId], let first = echoes.first else { return false }
+        guard first.hasPrefix(text) else { return false }
+        let remainder = String(first.dropFirst(text.count))
+        if remainder.isEmpty {
+            echoes.removeFirst()
         } else {
-            transcript.append(.init(role: role, text: trimmed))
+            echoes[0] = remainder
         }
-        transcripts[sessionId] = transcript
+        pendingUserEchoes[sessionId] = echoes.isEmpty ? nil : echoes
+        return true
     }
 
-    private func contentText(from value: JSONValue?) -> String? {
-        guard let object = value?.objectValue, object["type"]?.stringValue == "text" else { return nil }
-        return object["text"]?.stringValue
+    private func removePendingUserEcho(_ text: String, for sessionId: String) {
+        guard var echoes = pendingUserEchoes[sessionId] else { return }
+        if let index = echoes.firstIndex(of: text) {
+            echoes.remove(at: index)
+        }
+        pendingUserEchoes[sessionId] = echoes.isEmpty ? nil : echoes
+    }
+
+    private func appendStatus(title: String, text: String, to sessionId: String?) {
+        guard let sessionId else { return }
+        apply(.status(title: title, text: text), to: sessionId)
+    }
+
+    private func appendError(title: String, text: String, key: String? = nil, to sessionId: String?) {
+        guard let sessionId else { return }
+        apply(.error(title: title, text: text, replacementKey: key), to: sessionId)
+    }
+
+    private func apply(_ events: [AgentTranscriptEvent], to sessionId: String) {
+        for event in events {
+            apply(event, to: sessionId)
+        }
+    }
+
+    private func apply(_ event: AgentTranscriptEvent, to sessionId: String) {
+        var state = transcriptStates[sessionId] ?? AgentTranscriptState()
+        state.apply(event)
+        transcriptStates[sessionId] = state
     }
 
     private func folderDetail(_ path: String?) -> String {
@@ -609,12 +610,6 @@ final class AgentSessionModel {
 
     private func userFacingError(_ error: Error) -> String {
         String(describing: error)
-    }
-}
-
-private extension JSONValue {
-    var arrayValue: [JSONValue]? {
-        if case let .array(value) = self { value } else { nil }
     }
 }
 

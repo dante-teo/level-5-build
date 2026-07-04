@@ -22,12 +22,17 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0")
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0"),
+        .package(url: "https://github.com/siteline/swiftui-introspect", from: "26.0.0")
     ],
     targets: [
         .executableTarget(
             name: "Level5BuildApp",
-            dependencies: ["Level5Core", "Level5Design"],
+            dependencies: [
+                "Level5Core",
+                "Level5Design",
+                .product(name: "SwiftUIIntrospect", package: "swiftui-introspect")
+            ],
             path: "Sources/Level5BuildApp",
             resources: [
                 .process("Resources")

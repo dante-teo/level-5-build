@@ -71,10 +71,6 @@ public struct LocalShellModel: Equatable, Sendable {
     public mutating func sendDraft() -> Bool {
         guard submitDraft() != nil else { return false }
 
-        transcript.append(LocalTranscriptItem(
-            role: .status,
-            text: "Message captured."
-        ))
         return true
     }
 

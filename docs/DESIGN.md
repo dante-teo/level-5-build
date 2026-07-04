@@ -271,7 +271,8 @@ Rules:
 - Avoid decorative message chrome.
 - In the current chat workspace, the transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
-- When the composer visually overlays the tail of the scroll layer, the transcript should reserve matching space with real layout measurement rather than a static padding guess. In the legacy web implementation this used `ResizeObserver` plus `use-stick-to-bottom`; native SwiftUI should use an equivalent platform-appropriate measurement/stick-to-bottom strategy.
+- When the composer visually overlays the tail of the scroll layer, the transcript should reserve matching space with real layout measurement rather than a static padding guess. In the legacy web implementation this used `ResizeObserver` plus `use-stick-to-bottom`; the native app currently keeps SwiftUI transcript rendering but uses SwiftUI Introspect to read the backing `NSScrollView`'s visible rect and document bounds for follow-tail decisions.
+- Follow-tail must match messenger behavior: stay pinned only while the user is already at the bottom, stop immediately when the user scrolls away, preserve that state per session, and resume only after the user scrolls back to the bottom. Do not use transient SwiftUI geometry readings as the sole source of truth for this behavior.
 
 ## 15. Review Panel
 

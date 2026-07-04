@@ -40,7 +40,7 @@ struct LocalShellModelTests {
         #expect(model.transcript.isEmpty)
     }
 
-    @Test("Send appends user and placeholder status items")
+    @Test("Send appends only the user transcript item")
     func sendAppendsLocalTranscriptItems() {
         var model = LocalShellModel(draft: "Build the shell")
 
@@ -48,9 +48,8 @@ struct LocalShellModelTests {
 
         #expect(didSend)
         #expect(model.draft.isEmpty)
-        #expect(model.transcript.map(\.role) == [.user, .status])
+        #expect(model.transcript.map(\.role) == [.user])
         #expect(model.transcript.first?.text == "Build the shell")
-        #expect(model.transcript.last?.text == "Message captured.")
     }
 
     @Test("Agent text chunks merge into one transcript item")

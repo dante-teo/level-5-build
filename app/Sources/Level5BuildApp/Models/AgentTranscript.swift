@@ -100,6 +100,7 @@ enum AgentTranscriptEvent: Equatable, Sendable {
     case messageChunk(role: AgentTranscriptRole, messageId: String?, text: String, unsupportedBlockCount: Int = 0)
     case plan(title: String = "Plan", entries: [AgentPlanEntry])
     case tool(toolCallId: String, title: String?, kind: String?, status: String?, text: String?)
+    case references([AgentReference])
     case toolExpansion(toolCallId: String, isExpanded: Bool)
     case usage(AgentTranscriptUsage)
     case status(title: String, text: String, replacementKey: String? = nil)
@@ -113,6 +114,7 @@ struct AgentTranscriptState: Equatable, Sendable {
     var plan: AgentPlanState?
     var stopReasons: [String] = []
     var latestError: String?
+    var references: [AgentReference] = []
 
     private var nextLocalMessageId = 0
     fileprivate var manualToolExpansion: [String: Bool] = [:]
@@ -144,6 +146,8 @@ enum AgentTranscriptReducer {
             state.plan = AgentPlanState(title: title, entries: entries)
         case let .tool(toolCallId, title, kind, status, text):
             upsertTool(toolCallId: toolCallId, title: title, kind: kind, status: status, text: text, into: &state)
+        case let .references(references):
+            appendReferences(references, into: &state)
         case let .toolExpansion(toolCallId, isExpanded):
             state.manualToolExpansion[toolCallId] = isExpanded
             let id = "tool-\(toolCallId)"
@@ -254,6 +258,12 @@ enum AgentTranscriptReducer {
         state.items.append(.init(id: id, kind: .tool(tool)))
     }
 
+    private static func appendReferences(_ references: [AgentReference], into state: inout AgentTranscriptState) {
+        for reference in references where state.references.contains(where: { $0.hasSameIdentity(as: reference) }) == false {
+            state.references.append(reference)
+        }
+    }
+
     private static func expansionState(
         toolCallId: String,
         status: String?,
@@ -346,13 +356,18 @@ enum AgentTranscriptNormalizer {
             return [planEvent(from: object)]
         case "tool_call", "tool_call_update":
             guard let toolCallId = object["toolCallId"]?.stringValue else { return [] }
-            return [.tool(
+            var events: [AgentTranscriptEvent] = [.tool(
                 toolCallId: toolCallId,
                 title: object["title"]?.stringValue,
                 kind: object["kind"]?.stringValue,
                 status: object["status"]?.stringValue,
                 text: contentText(from: object["content"])
             )]
+            let references = references(from: object)
+            if !references.isEmpty {
+                events.append(.references(references))
+            }
+            return events
         case "usage_update":
             return [.usage(.init(
                 used: object["used"]?.intValue,
@@ -429,6 +444,111 @@ enum AgentTranscriptNormalizer {
             return normalizedBlock(from: nested)
         }
         return ("", 1)
+    }
+
+    private static func references(from object: [String: JSONValue]) -> [AgentReference] {
+        var references: [AgentReference] = []
+        appendReferences(from: object["content"], into: &references)
+        appendLocations(from: object["locations"], into: &references)
+        appendReferenceMetadata(from: object["_meta"], into: &references)
+        appendReferenceMetadata(from: object["metadata"], into: &references)
+        return references
+    }
+
+    private static func appendReferences(from value: JSONValue?, into references: inout [AgentReference]) {
+        guard let value else { return }
+        if let array = value.arrayValue {
+            for item in array {
+                appendReferences(from: item, into: &references)
+            }
+            return
+        }
+        guard let object = value.objectValue else { return }
+        if object["type"]?.stringValue == "content" {
+            appendReferences(from: object["content"], into: &references)
+            return
+        }
+        if object["type"]?.stringValue == "resource_link",
+           let uri = object["uri"]?.stringValue {
+            appendReference(
+                uri: uri,
+                title: object["title"]?.stringValue ?? object["name"]?.stringValue,
+                into: &references
+            )
+            return
+        }
+        if object["type"]?.stringValue == "resource",
+           let resource = object["resource"]?.objectValue,
+           let uri = resource["uri"]?.stringValue {
+            appendReference(
+                uri: uri,
+                title: resource["title"]?.stringValue ?? resource["name"]?.stringValue,
+                into: &references
+            )
+        }
+    }
+
+    private static func appendLocations(from value: JSONValue?, into references: inout [AgentReference]) {
+        guard let locations = value?.arrayValue else { return }
+        for location in locations.compactMap(\.objectValue) {
+            if let url = location["url"]?.stringValue {
+                appendReference(uri: url, title: location["title"]?.stringValue, into: &references)
+            }
+            if let path = location["path"]?.stringValue {
+                appendReference(uri: URL(fileURLWithPath: path).absoluteString, title: location["title"]?.stringValue, into: &references)
+            }
+            if let uri = location["uri"]?.stringValue {
+                appendReference(uri: uri, title: location["title"]?.stringValue, into: &references)
+            }
+        }
+    }
+
+    private static func appendReferenceMetadata(from value: JSONValue?, into references: inout [AgentReference]) {
+        guard let object = value?.objectValue else { return }
+        if let sources = object["sources"]?.arrayValue ?? object["references"]?.arrayValue {
+            for source in sources.compactMap(\.objectValue) {
+                let uri = source["url"]?.stringValue ?? source["uri"]?.stringValue
+                if let uri {
+                    appendReference(uri: uri, title: source["title"]?.stringValue ?? source["name"]?.stringValue, into: &references)
+                }
+            }
+        }
+        if let url = object["url"]?.stringValue {
+            appendReference(uri: url, title: object["title"]?.stringValue, into: &references)
+        }
+        if let uri = object["uri"]?.stringValue {
+            appendReference(uri: uri, title: object["title"]?.stringValue, into: &references)
+        }
+    }
+
+    private static func appendReference(uri: String, title: String?, into references: inout [AgentReference]) {
+        guard let kind = referenceKind(for: uri) else { return }
+        let fallbackTitle = referenceTitle(uri: uri)
+        let reference = AgentReference(
+            kind: kind,
+            title: title?.nonEmpty ?? fallbackTitle,
+            uri: uri
+        )
+        guard references.contains(where: { $0.hasSameIdentity(as: reference) }) == false else { return }
+        references.append(reference)
+    }
+
+    private static func referenceKind(for uri: String) -> AgentReference.Kind? {
+        if uri.hasPrefix("http://") || uri.hasPrefix("https://") {
+            return .web
+        }
+        if uri.hasPrefix("file://") || uri.hasPrefix("/") {
+            return .file
+        }
+        return nil
+    }
+
+    private static func referenceTitle(uri: String) -> String {
+        guard let url = URL(string: uri) else { return uri }
+        if url.isFileURL {
+            return url.lastPathComponent.nonEmpty ?? url.path
+        }
+        return url.host ?? uri
     }
 }
 

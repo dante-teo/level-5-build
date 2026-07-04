@@ -182,12 +182,21 @@ describe("ACP mock server", () => {
 		await prompt;
 
 		const all = JSON.stringify(messages());
-		assert.match(all, /progress demo/i);
+		assert.match(all, /dashboard progress demo/i);
 		assert.match(all, /"sessionUpdate":"plan"/);
 		assert.match(all, /"sessionUpdate":"tool_call"/);
 		assert.match(all, /"status":"completed"/);
 		assert.match(all, /"sessionUpdate":"usage_update"/);
 		assert.match(all, /session\/request_permission/);
+		assert.match(all, /https:\/\/agentclientprotocol\.com\/docs\/protocol/);
+		assert.match(all, /https:\/\/developer\.apple\.com\/documentation\/testing/);
+		assert.match(all, /file:\/\/\/tmp\/level5-dashboard-progress-runbook\.md/);
+		assert.match(all, /file:\/\/\/tmp\/level5-dashboard-reference-trace\.json/);
+		assert.match(all, /WorkspaceView\.swift/);
+		assert.match(all, /ProjectDashboardView\.swift/);
+		assert.match(all, /Duplicate ACP protocol reference/);
+		assert.match(all, /Dashboard progress runbook duplicate/);
+		assert.match(all, /Cross context usage thresholds while the dashboard remains open/);
 		assert.match(all, /"stopReason":"end_turn"/);
 	});
 
@@ -213,6 +222,9 @@ describe("ACP mock server", () => {
 		const all = JSON.stringify(messages());
 		assert.match(all, /"status":"failed"/);
 		assert.match(all, /Permission was rejected/);
+		assert.match(all, /https:\/\/agentclientprotocol\.com\/docs\/protocol/);
+		assert.match(all, /file:\/\/\/tmp\/level5-dashboard-progress-runbook\.md/);
+		assert.match(all, /existing dashboard references remain available/);
 		assert.match(all, /"stopReason":"end_turn"/);
 	});
 
@@ -284,6 +296,23 @@ describe("ACP mock server", () => {
 		assert.match(all, /"status":"failed"/);
 		assert.match(all, /"stopReason":"refusal"/);
 		assert.match(all, /"stopReason":"max_tokens"/);
+	});
+
+	test("web fetch scenario emits URL reference metadata", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+
+		await send(server, {
+			jsonrpc: "2.0",
+			id: 12,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "/web protocol" }] }
+		});
+
+		const all = JSON.stringify(messages());
+		assert.match(all, /resource_link/);
+		assert.match(all, /https:\/\/agentclientprotocol\.com\/docs\/protocol/);
 	});
 });
 

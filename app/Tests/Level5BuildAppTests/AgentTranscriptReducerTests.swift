@@ -1,4 +1,6 @@
+import Foundation
 import Testing
+import Level5Core
 @testable import Level5BuildApp
 
 @Suite("Agent transcript reducer")
@@ -96,6 +98,57 @@ struct AgentTranscriptReducerTests {
         #expect(state.renderableItems.isEmpty)
         #expect(state.latestUsage?.used == 20)
         #expect(state.latestUsage?.currency == "USD")
+    }
+
+    @Test("References dedupe by kind and URI while preserving first title")
+    func referencesDedupeByIdentity() {
+        var state = AgentTranscriptState()
+        let fileURI = URL(fileURLWithPath: "/tmp/runbook.md").absoluteString
+
+        state.apply(.references([
+            .init(kind: .web, title: "ACP docs", uri: "https://example.com/acp"),
+            .init(kind: .web, title: "Duplicate ACP docs", uri: "https://example.com/acp"),
+            .init(kind: .file, title: "Runbook", uri: fileURI),
+            .init(kind: .file, title: "Duplicate runbook", uri: fileURI)
+        ]))
+
+        #expect(state.references.map(\.title) == ["ACP docs", "Runbook"])
+        #expect(state.references.map(\.uri) == ["https://example.com/acp", fileURI])
+        #expect(Set(state.references.map(\.id)).count == state.references.count)
+    }
+
+    @Test("Tool metadata references dedupe by kind and URI")
+    func toolMetadataReferencesDedupeByIdentity() throws {
+        let payload = """
+        {
+          "sessionId": "s1",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "fetch-1",
+            "title": "Fetch docs",
+            "status": "completed",
+            "_meta": {
+              "references": [
+                { "title": "ACP docs", "uri": "https://example.com/acp" },
+                { "title": "Duplicate ACP docs", "uri": "https://example.com/acp" },
+                { "title": "Runbook", "uri": "file:///tmp/runbook.md" },
+                { "title": "Duplicate runbook", "uri": "file:///tmp/runbook.md" }
+              ]
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let update = try AcpProtocolCoding.decoder.decode(AcpSessionUpdate.self, from: payload)
+
+        let events = AgentTranscriptNormalizer.events(from: update)
+        guard case let .references(references)? = events.last else {
+            Issue.record("Expected references event")
+            return
+        }
+
+        #expect(references.map(\.title) == ["ACP docs", "Runbook"])
+        #expect(references.map(\.uri) == ["https://example.com/acp", "file:///tmp/runbook.md"])
+        #expect(Set(references.map(\.id)).count == references.count)
     }
 
     @Test("Status and error replacement keys replace matching rows")

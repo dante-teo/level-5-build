@@ -577,7 +577,23 @@ export class AcpMockServer {
 	}
 
 	private async webScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
-		await this.tool(session, "fetch", "Fetching current protocol reference", "completed", "Fetched ACP docs metadata and summarized relevant sections.", turn);
+		await this.tool(
+			session,
+			"fetch",
+			"Fetching current protocol reference",
+			"completed",
+			"Fetched ACP docs metadata and summarized relevant sections.",
+			turn,
+			undefined,
+			[
+				{
+					type: "resource_link",
+					uri: "https://agentclientprotocol.com/docs/protocol",
+					name: "ACP protocol reference",
+					title: "ACP protocol reference"
+				}
+			]
+		);
 		await this.say(session, "I simulated a web fetch. For UI testing, treat this as a current-reference answer with source-like text, but no network was used by the mock turn.");
 	}
 
@@ -626,31 +642,148 @@ export class AcpMockServer {
 	}
 
 	private async progressDemoScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
-		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "in_progress"],
-			["Render a successful tool call", "high", "pending"],
-			["Cross context usage thresholds", "medium", "pending"],
-			["Pause for a permission request", "high", "pending"],
-			["Finish with a successful end turn", "medium", "pending"]
-		]);
+		const projectSource = `${session.cwd}/app/Sources/Level5BuildApp/Views/WorkspaceView.swift`;
+		const projectDashboard = `${session.cwd}/app/Sources/Level5BuildApp/Views/ProjectDashboardView.swift`;
+		const externalRunbook = "/tmp/level5-dashboard-progress-runbook.md";
+		const externalTrace = "/tmp/level5-dashboard-reference-trace.json";
+		const protocolReference = "https://agentclientprotocol.com/docs/protocol";
+		const swiftTestingReference = "https://developer.apple.com/documentation/testing";
+		const progressPlan: Array<[string, string, string]> = [
+			["Receive the dashboard stress-test prompt and start a deterministic streamed turn with a long plan title", "high", "in_progress"],
+			["Discover project-local SwiftUI surfaces; these locations should not become noisy dashboard references", "high", "pending"],
+			["Fetch external ACP and Swift Testing references so the dashboard References section has web URLs", "high", "pending"],
+			["Read external runbook and trace files so file references outside the project root are visible", "medium", "pending"],
+			["Emit duplicate reference metadata to prove the client keeps a stable deduped list", "medium", "pending"],
+			["Cross context usage thresholds while the dashboard remains open", "medium", "pending"],
+			["Pause for a permission request with a readable protected action", "high", "pending"],
+			["Complete the protected step and update plan rows without collapsing the dashboard plan", "high", "pending"],
+			["Finish with a final answer that summarizes every dashboard section", "medium", "pending"]
+		];
+
+		this.sendPlan(session.sessionId, progressPlan);
 		await this.checkpoint(turn);
-		await this.say(session, "Starting the progress demo. I will stream plan, tool, context, permission, and final message updates in one deterministic turn.");
+		await this.say(session, "Starting the dashboard progress demo. I will stream a long plan, project-local tool locations, external URL references, external file references, usage spikes, permission state, and final completion in one deterministic turn.");
 
 		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "completed"],
-			["Render a successful tool call", "high", "in_progress"],
-			["Cross context usage thresholds", "medium", "pending"],
-			["Pause for a permission request", "high", "pending"],
-			["Finish with a successful end turn", "medium", "pending"]
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "in_progress"],
+			[progressPlan[2][0], "high", "pending"],
+			[progressPlan[3][0], "medium", "pending"],
+			[progressPlan[4][0], "medium", "pending"],
+			[progressPlan[5][0], "medium", "pending"],
+			[progressPlan[6][0], "high", "pending"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
 		]);
-		await this.tool(session, "search", "Scanning demo workspace", "completed", "Found mock fixtures, native SwiftUI views, and transcript reducer tests.", turn);
+		await this.tool(
+			session,
+			"search",
+			"Scanning dashboard SwiftUI surfaces",
+			"completed",
+			"Found WorkspaceView, ProjectDashboardView, AgentDashboard state, and transcript reducer tests. Project-local paths are intentionally included to verify the app filters them out of References.",
+			turn,
+			[
+				{ path: projectSource, line: 96, title: "Workspace adaptive container" },
+				{ path: projectDashboard, line: 1, title: "Project dashboard view" }
+			]
+		);
 
 		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "completed"],
-			["Render a successful tool call", "high", "completed"],
-			["Cross context usage thresholds", "medium", "in_progress"],
-			["Pause for a permission request", "high", "pending"],
-			["Finish with a successful end turn", "medium", "pending"]
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "in_progress"],
+			[progressPlan[3][0], "medium", "pending"],
+			[progressPlan[4][0], "medium", "pending"],
+			[progressPlan[5][0], "medium", "pending"],
+			[progressPlan[6][0], "high", "pending"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
+		]);
+		await this.tool(
+			session,
+			"fetch",
+			"Fetching dashboard reference URLs",
+			"completed",
+			"Fetched external protocol and Swift Testing references for dashboard source rendering. Duplicate protocol metadata is included deliberately.",
+			turn,
+			[
+				{ url: protocolReference, title: "ACP protocol reference" },
+				{ url: swiftTestingReference, title: "Swift Testing documentation" }
+			],
+			[
+				{ type: "resource_link", uri: protocolReference, name: "ACP protocol reference", title: "ACP protocol reference" },
+				{ type: "resource_link", uri: swiftTestingReference, name: "Swift Testing documentation", title: "Swift Testing documentation" },
+				{ type: "resource_link", uri: protocolReference, name: "Duplicate ACP protocol reference", title: "ACP protocol reference duplicate" }
+			]
+		);
+
+		this.sendPlan(session.sessionId, [
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "in_progress"],
+			[progressPlan[4][0], "medium", "pending"],
+			[progressPlan[5][0], "medium", "pending"],
+			[progressPlan[6][0], "high", "pending"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
+		]);
+		await this.tool(
+			session,
+			"read",
+			"Reading external dashboard fixtures",
+			"completed",
+			"Read two external mock artifacts. These are outside the active project root and should appear in the dashboard References list.",
+			turn,
+			[
+				{ path: externalRunbook, line: 12, title: "Dashboard progress runbook" },
+				{ path: externalTrace, line: 1, title: "Dashboard reference trace" }
+			],
+			[
+				{ type: "resource_link", uri: `file://${externalRunbook}`, name: "Dashboard progress runbook", title: "Dashboard progress runbook" },
+				{ type: "resource_link", uri: `file://${externalTrace}`, name: "Dashboard reference trace", title: "Dashboard reference trace" }
+			]
+		);
+
+		this.sendPlan(session.sessionId, [
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "completed"],
+			[progressPlan[4][0], "medium", "in_progress"],
+			[progressPlan[5][0], "medium", "pending"],
+			[progressPlan[6][0], "high", "pending"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
+		]);
+		await this.tool(
+			session,
+			"fetch",
+			"Re-emitting duplicate references",
+			"completed",
+			"Repeated the ACP URL and runbook file reference to make dashboard dedupe visible.",
+			turn,
+			[
+				{ url: protocolReference, title: "ACP protocol reference duplicate" },
+				{ path: externalRunbook, line: 21, title: "Dashboard progress runbook duplicate" },
+				{ path: projectSource, line: 210, title: "In-project file that should stay filtered" }
+			],
+			[
+				{ type: "resource_link", uri: protocolReference, name: "ACP duplicate", title: "ACP duplicate" },
+				{ type: "resource_link", uri: `file://${externalRunbook}`, name: "Runbook duplicate", title: "Runbook duplicate" }
+			]
+		);
+
+		this.sendPlan(session.sessionId, [
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "completed"],
+			[progressPlan[4][0], "medium", "completed"],
+			[progressPlan[5][0], "medium", "in_progress"],
+			[progressPlan[6][0], "high", "pending"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
 		]);
 		const contextSize = modelContextWindow(session.config.model);
 		await this.usage(session, Math.floor(contextSize * 0.32), 0.004);
@@ -658,29 +791,34 @@ export class AcpMockServer {
 		await this.usage(session, Math.floor(contextSize * 0.92), 0.021);
 
 		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "completed"],
-			["Render a successful tool call", "high", "completed"],
-			["Cross context usage thresholds", "medium", "completed"],
-			["Pause for a permission request", "high", "in_progress"],
-			["Finish with a successful end turn", "medium", "pending"]
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "completed"],
+			[progressPlan[4][0], "medium", "completed"],
+			[progressPlan[5][0], "medium", "completed"],
+			[progressPlan[6][0], "high", "in_progress"],
+			[progressPlan[7][0], "high", "pending"],
+			[progressPlan[8][0], "medium", "pending"]
 		]);
 
 		const toolCallId = this.store.nextId("tool");
-		const title = "Applying protected progress marker";
+		const title = "Applying protected dashboard marker";
 		this.sendSessionUpdate(session.sessionId, {
 			sessionUpdate: "tool_call",
 			toolCallId,
 			title,
 			kind: "edit",
 			status: "in_progress",
-			content: [{ type: "content", content: { type: "text", text: "Preparing a permission-gated mock edit." } }]
+			content: [{ type: "content", content: { type: "text", text: "Preparing a permission-gated mock edit that leaves the dashboard plan and references visible." } }],
+			locations: [{ path: projectDashboard, line: 40, title: "Dashboard protected marker target" }]
 		});
 		const outcome = await this.requestPermissionOutcome(session, turn, {
 			toolCallId,
 			title,
 			kind: "edit",
 			status: "pending",
-			content: [{ type: "content", content: { type: "text", text: "Allow the progress demo to complete its protected mock step?" } }]
+			content: [{ type: "content", content: { type: "text", text: "Allow the progress demo to complete its protected dashboard marker step?" } }]
 		});
 
 		if (outcome === "cancelled") {
@@ -688,9 +826,9 @@ export class AcpMockServer {
 				sessionUpdate: "tool_call_update",
 				toolCallId,
 				status: "failed",
-				content: [{ type: "content", content: { type: "text", text: "Permission request was cancelled." } }]
+				content: [{ type: "content", content: { type: "text", text: "Permission request was cancelled; the dashboard should keep the already gathered references." } }]
 			});
-			await this.say(session, "The progress demo permission request was cancelled, so the protected step failed cleanly.");
+			await this.say(session, "The dashboard progress demo permission request was cancelled, so the protected step failed cleanly while keeping the gathered plan, usage, and references visible.");
 			return;
 		}
 		if (outcome === "rejected") {
@@ -698,9 +836,9 @@ export class AcpMockServer {
 				sessionUpdate: "tool_call_update",
 				toolCallId,
 				status: "failed",
-				content: [{ type: "content", content: { type: "text", text: "Permission was rejected by the client." } }]
+				content: [{ type: "content", content: { type: "text", text: "Permission was rejected by the client; existing dashboard references remain available." } }]
 			});
-			await this.say(session, "The progress demo permission was rejected. The failed tool row should remain expanded and readable.");
+			await this.say(session, "The dashboard progress demo permission was rejected. The failed tool row should remain expanded and the dashboard should retain plan, usage, and reference state.");
 			return;
 		}
 
@@ -708,22 +846,41 @@ export class AcpMockServer {
 			sessionUpdate: "tool_call_update",
 			toolCallId,
 			status: "completed",
-			content: [{ type: "content", content: { type: "text", text: "Permission granted; completed the protected mock progress step." } }]
+			content: [{ type: "content", content: { type: "text", text: "Permission granted; completed the protected mock dashboard marker step." } }],
+			locations: [{ path: projectDashboard, line: 72, title: "Dashboard protected marker completed" }]
 		});
 		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "completed"],
-			["Render a successful tool call", "high", "completed"],
-			["Cross context usage thresholds", "medium", "completed"],
-			["Pause for a permission request", "high", "completed"],
-			["Finish with a successful end turn", "medium", "in_progress"]
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "completed"],
+			[progressPlan[4][0], "medium", "completed"],
+			[progressPlan[5][0], "medium", "completed"],
+			[progressPlan[6][0], "high", "completed"],
+			[progressPlan[7][0], "high", "completed"],
+			[progressPlan[8][0], "medium", "in_progress"]
 		]);
-		await this.say(session, "Progress demo complete. Plan rows moved to done, context usage crossed warning and danger, one tool succeeded, and the permission-gated tool completed.");
+		await this.say(session, [
+			"Dashboard progress demo complete.",
+			"",
+			"- Plan rows moved through pending, in-progress, and completed states.",
+			"- External web references were emitted for ACP and Swift Testing docs.",
+			"- External file references were emitted for a runbook and trace file.",
+			"- Project-local file locations were emitted and should be filtered from dashboard References.",
+			"- Duplicate references were emitted so the client can prove stable dedupe.",
+			"- Context usage crossed normal, warning, and danger-style thresholds.",
+			"- A permission-gated edit completed successfully."
+		].join("\n"));
 		this.sendPlan(session.sessionId, [
-			["Receive the demo prompt and start streaming", "high", "completed"],
-			["Render a successful tool call", "high", "completed"],
-			["Cross context usage thresholds", "medium", "completed"],
-			["Pause for a permission request", "high", "completed"],
-			["Finish with a successful end turn", "medium", "completed"]
+			[progressPlan[0][0], "high", "completed"],
+			[progressPlan[1][0], "high", "completed"],
+			[progressPlan[2][0], "high", "completed"],
+			[progressPlan[3][0], "medium", "completed"],
+			[progressPlan[4][0], "medium", "completed"],
+			[progressPlan[5][0], "medium", "completed"],
+			[progressPlan[6][0], "high", "completed"],
+			[progressPlan[7][0], "high", "completed"],
+			[progressPlan[8][0], "medium", "completed"]
 		]);
 	}
 

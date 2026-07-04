@@ -46,6 +46,29 @@ struct AppSmokeTests {
             usage: .init(used: 72_000, size: 100_000, amount: 0.012, currency: "USD")
         )
     }
+
+    @Test("Project dashboard constructs without forcing scroll content")
+    @MainActor
+    func projectDashboardConstruction() {
+        _ = ProjectDashboardView(
+            state: .init(
+                projectPath: "/tmp/level5",
+                gitStatus: .init(
+                    isAvailable: true,
+                    root: "/tmp/level5",
+                    branch: "macos",
+                    changedFiles: 12,
+                    additions: 1_087,
+                    deletions: 141
+                ),
+                references: [],
+                isRefreshing: false
+            ),
+            plan: nil,
+            refreshAction: {},
+            closeAction: {}
+        )
+    }
 }
 
 private struct ComposerSmokeHarness: View {

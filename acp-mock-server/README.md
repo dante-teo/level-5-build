@@ -81,6 +81,7 @@ The mock streams:
 - `tool_call`
 - `tool_call_update`
 - `usage_update`
+- URL/file reference metadata in tool `_meta`
 - `available_commands_update`
 - `current_mode_update`
 - `config_option_update`
@@ -130,11 +131,16 @@ Send text prompts containing these words or slash commands:
 - `/test` or `build`: emits execute-style tool output
 - `web` or `fetch`: hidden QA trigger for fetch-style tool output
 - `skills`: hidden QA trigger for mock skill text
+- `/progress-demo` or `progress demo`: hidden native dashboard fixture for plan, usage, permission, and reference states
 - `/mode code`: hidden compatibility path for mode updates
 - `permission`: sends `session/request_permission`
 - `fail`: emits a failed tool call
 - `refuse`: returns `stopReason: "refusal"`
 - `max tokens`: returns `stopReason: "max_tokens"`
+
+`/progress-demo` is the main dashboard QA scenario. It emits multiple plan states, usage updates across thresholds, permission success/rejection paths, external web references, external file references, project-local file locations that clients should filter out of dashboard sources, and duplicate references with changed titles so clients can verify stable dedupe by URI.
+
+The `web` / `fetch` scenario emits URL reference metadata from tool `_meta.references` so clients can verify reference extraction without depending on a future first-class ACP sources contract.
 
 ## Smoke Test
 

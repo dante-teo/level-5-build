@@ -161,22 +161,22 @@ Never stack heavy shadows. Shadows should create quiet depth, not a floating-car
 
 The primary layout is:
 
-`Sidebar | Workspace | Optional Review Overlay`
+`Sidebar | Workspace | Optional Project Dashboard`
 
 Rules:
 
 - Sidebar is user-resizable from `260px` to `420px`.
 - Collapsing the sidebar hides it completely (`0px`) rather than leaving an icon rail.
 - Workspace grows to fill remaining space.
-- Review panel overlays the workspace from the right.
-- Opening the review panel must never push or resize the workspace.
+- The project dashboard adapts between reserved wide layout and compact popover/overlay behavior.
+- Reserved dashboard space should still feel visually connected to the transcript area, not like a separate app column.
 - Top bar always spans the full workspace width.
-- Top bar actions remain right aligned.
+- Top bar actions remain right aligned and should be kept minimal.
 - Window controls remain native.
 
 The first screen should feel like a real app workspace, not a landing page.
 
-Current native shell note: the shell uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, structured transcript rows, a native composer, and a new-session-only project picker backed by recent local folders. The composer includes functional attachment chips, a `+` menu, backend slash-command insertion, a model selector, an approval-mode selector, permission-request takeovers, queued prompt previews, and a working Stop action while a turn is active. Review dashboards remain future surfaces and should not be shown as inert controls.
+Current native shell note: the shell uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, structured transcript rows, a native composer, a new-session-only project picker backed by recent local folders, and an adaptive project dashboard for project-backed active sessions. The composer includes functional attachment chips, a `+` menu, backend slash-command insertion, a model selector, an approval-mode selector, permission-request takeovers, queued prompt previews, and a working Stop action while a turn is active.
 
 ## 11. Sidebar
 
@@ -218,6 +218,10 @@ Rules:
 
 Height: `56`.
 
+The workspace top bar is a translucent overlay, not a second opaque app header. It should use native/material glass behavior with a top-to-bottom fade so transcript content can begin under it while remaining readable through scroll content inset. Do not hide the macOS traffic-light controls to achieve this treatment.
+
+Keep top-bar controls sparse. For the current workspace, a single dashboard button is the default right-side control. Icon-only buttons should be circular; grouped controls should be capsule-shaped. Use design tokens and native materials instead of hardcoded frames, offsets, or one-off colors.
+
 Contains:
 
 - Floating app/session capsule
@@ -235,12 +239,30 @@ Rules:
 - Use visible labels only for navigation tabs or commands that require clarity.
 - Interactive controls inside draggable regions must opt out of drag behavior.
 - A project-backed active session may show a top-right dashboard trigger. The trigger uses a rounded glass capsule with one icon button; when the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
-- The dashboard trigger and the floating app/session capsule each sit inside an invisible row of the same fixed height and top offset, centered with `items-center`. This keeps their icon buttons vertically centered on the same line even though the two capsules have different natural heights (the session capsule grows taller when it shows a title/subtitle).
-- The pinned session dashboard is a compact floating panel aligned below the trigger. It should show operational state only: current changes, branch, active plan, and sources. Avoid environment/local/session rows unless they become actionable.
-- The dashboard should reserve workspace width only when the remaining conversation pane can stay readable. On narrower windows it remains an overlay popover instead of forcing the chat column below its useful width.
-- Dashboard layout thresholds should be defined in design units such as rem or component/token sizes, not arbitrary pixel breakpoints.
+- The dashboard trigger and the floating app/session capsule should align on the same tokenized toolbar row. Keep their icon buttons vertically centered even when the session capsule grows to show a title/subtitle.
 
-## 14. Prompt Composer
+## 14. Project Dashboard
+
+The project dashboard is contextual, not a permanent inspector. It appears only for project-backed active sessions and should show operational state, not raw runtime payloads.
+
+Behavior:
+
+- Regular and wide layouts auto-open it, but users must still be able to close it.
+- Compact layouts use a temporary popover/overlay from the dashboard button.
+- Resize, session changes, or project-context changes should return the dashboard to the adaptive policy.
+- Reserve workspace width only when the remaining conversation pane can stay readable; narrower windows should use overlay/popover behavior instead of forcing the chat column below its useful width.
+- Fit content height when possible and scroll only when content would exceed available height.
+- Layout thresholds should be defined with design tokens or component-derived values, not arbitrary pixel breakpoints.
+
+Content order:
+
+- Environment summary: changes, local project, branch, and commit/pull-request actions when relevant.
+- Plan: always expanded in the dashboard; keep the composer `Plan N/M` chip.
+- Sources: references used by the agent.
+
+References should be quiet and curated. Show web URLs and external local files. Do not show project-local file reads by default; they create noise in a coding transcript. Dedupe references by kind and URI, not by title.
+
+## 15. Prompt Composer
 
 The composer is docked near the bottom of the workspace.
 
@@ -262,7 +284,7 @@ Rules:
 - When a permission request is pending for the active session in `Ask for approval`, the approval prompt takes over the composer's input/toolbar area inside the same rounded container. It does not appear as a separate transcript card, and the prompt textarea/toolbar are inaccessible until it is answered. It shows the request title, optional muted detail/raw-input text, one row per backend-provided option, arrow-key highlight movement, Enter/click to choose, and a reject-with-instructions field. Submitting instructions answers with a reject-like option and sends the text as the next prompt for that same session.
 - The approval prompt has no separate cancel/dismiss control. If responding fails for any reason, the composer must give control back: it clears the pending prompt and shows a composer status error rather than leaving the takeover stuck with no way to type or send again. The active turn Stop action also clears the takeover by answering the pending ACP permission request with a cancelled outcome.
 
-## 15. Chat
+## 16. Chat
 
 Assistant messages:
 
@@ -287,7 +309,7 @@ Rules:
 Sidebar chat rows should keep a fixed trailing state slot. State precedence is awaiting permission, running, successful completion, then idle. Delete is available only through the row context menu as `Delete Chat...` and must use native destructive confirmation before calling the backend.
 - Follow-tail must match messenger behavior: stay pinned only while the user is already at the bottom, stop immediately when the user scrolls away, preserve that state per session, and resume only after the user scrolls back to the bottom. Do not use transient SwiftUI geometry readings as the sole source of truth for this behavior.
 
-## 16. Review Panel
+## 17. Review Panel
 
 The review experience may appear in two modes:
 
@@ -312,7 +334,7 @@ Rules:
 - Persistent tool surfaces may fill height, but must read as a mode of the workspace rather than a second app shell.
 - Commit or approval actions belong at the bottom of the review surface.
 
-## 17. Diff Viewer
+## 18. Diff Viewer
 
 Rules:
 
@@ -323,7 +345,7 @@ Rules:
 - Avoid excessive background color and noisy borders.
 - File rows should show changed counts clearly.
 
-## 18. Buttons
+## 19. Buttons
 
 Variants:
 
@@ -340,7 +362,7 @@ Rules:
 - Prefer lucide icons inside icon buttons.
 - Use text or icon+text buttons only for clear commands.
 
-## 19. Inputs
+## 20. Inputs
 
 Rules:
 
@@ -350,7 +372,7 @@ Rules:
 - Focus uses the accent ring.
 - Hit target minimum is `40x40`.
 
-## 20. Cards
+## 21. Cards
 
 Rules:
 
@@ -361,7 +383,7 @@ Rules:
 - Use cards for real grouped content: plans, file summaries, metrics, and modals.
 - Do not use decorative cards as section backgrounds.
 
-## 21. Motion
+## 22. Motion
 
 Allowed durations:
 
@@ -376,7 +398,7 @@ Rules:
 - Animations should be subtle and functional.
 - Motion should clarify state changes, not entertain.
 
-## 22. Empty States
+## 23. Empty States
 
 Every empty state must explain:
 
@@ -386,7 +408,7 @@ Every empty state must explain:
 
 Never leave blank screens unless the blank space is an intentional ready state with a clear composer or primary action.
 
-## 23. Loading
+## 24. Loading
 
 Rules:
 
@@ -394,7 +416,7 @@ Rules:
 - Avoid spinners longer than 2 seconds.
 - Preserve layout dimensions during loading.
 
-## 24. Keyboard
+## 25. Keyboard
 
 Rules:
 
@@ -403,7 +425,7 @@ Rules:
 - Visible focus states are required.
 - Do not remove native focus outlines unless replacing them with accessible equivalents.
 
-## 25. Accessibility
+## 26. Accessibility
 
 Rules:
 
@@ -413,7 +435,7 @@ Rules:
 - Tooltips must name unfamiliar icon-only actions.
 - Text must not overflow, overlap, or become unreadable on supported window sizes.
 
-## 26. Implementation Rules
+## 27. Implementation Rules
 
 Before changing UI:
 
@@ -427,7 +449,7 @@ Before changing UI:
 
 If unsure, reuse the closest existing pattern.
 
-## 27. Forbidden Patterns
+## 28. Forbidden Patterns
 
 Do not:
 
@@ -443,7 +465,7 @@ Do not:
 - Create landing-page hero layouts inside the app shell.
 - Use card backgrounds behind page sections.
 
-## 28. Acceptance Checklist
+## 29. Acceptance Checklist
 
 Implementation is accepted only if:
 
@@ -459,11 +481,11 @@ Implementation is accepted only if:
 - No arbitrary styles are introduced.
 - The result feels native, calm, precise, and fast.
 
-## 29. Legacy Electrobun App Foundation
+## 30. Legacy Electrobun App Foundation
 
 The retired Electrobun proof of concept renders a code-native full-bleed white gradient background (`.app-gradient-background`) with soft blue, violet, and pink light fields. Native macOS token and component implementation is deferred to the native design follow-up.
 
-## 30. Legacy shadcn/ui Foundation
+## 31. Legacy shadcn/ui Foundation
 
 A shadcn/ui foundation exists only in the legacy Electrobun app, configured manually because Electrobun's Bun + Vite setup is not one of `shadcn init`'s recognized presets.
 
@@ -483,20 +505,20 @@ bunx shadcn@latest add <component>
 
 Double check generated imports resolve correctly against this project's aliases. Auto-detection may guess wrong because the bundler setup is non-standard.
 
-## 31. Legacy Path Aliases
+## 32. Legacy Path Aliases
 
 Aliases are configured identically in `legacy/electrobun-app/vite.config.ts` and `legacy/electrobun-app/tsconfig.json`. Update both together when adding new aliases.
 
 - `@/*` -> `legacy/electrobun-app/src/mainview/*`
 - `@shared/*` -> `legacy/electrobun-app/src/shared/*`
 
-## 32. Legacy Styling Implementation
+## 33. Legacy Styling Implementation
 
 Tailwind CSS v4 is CSS-first in this project. There is no `tailwind.config.js`.
 
 Theme tokens and the dark-mode variant live in `legacy/electrobun-app/src/mainview/index.css` as CSS custom properties plus an `@theme inline` block, following shadcn's standard v4 token set. Native macOS token primitives will live in the native app after the design-token follow-up lands.
 
-## 33. Window Chrome
+## 34. Window Chrome
 
 The window is frameless with `titleBarStyle: "hiddenInset"`:
 

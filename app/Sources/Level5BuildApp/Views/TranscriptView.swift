@@ -6,10 +6,12 @@ import SwiftUIIntrospect
 struct TranscriptView: View {
     let items: [AgentTranscriptItem]
     let scrollIdentity: String?
+    var topContentInset: CGFloat = L5Spacing.x6
     let followsTail: Bool
     let setFollowsTail: (Bool) -> Void
 
     @StateObject private var scrollController = TranscriptScrollController()
+    @State private var scrollProgress: CGFloat = 1
 
     private let bottomInset: CGFloat = L5Spacing.x6
 
@@ -24,17 +26,24 @@ struct TranscriptView: View {
                     .frame(height: bottomInset)
             }
             .padding(.horizontal, L5Spacing.x6)
-            .padding(.top, L5Spacing.x6)
+            .padding(.top, topContentInset)
             .frame(maxWidth: 900, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .overlay(alignment: .leading) {
+            TranscriptScrollRail(progress: scrollProgress)
+                .padding(.leading, L5Spacing.x4)
+                .allowsHitTesting(false)
         }
         .scrollContentBackground(.hidden)
         .introspect(.scrollView, on: .macOS(.v14, .v15, .v26)) { scrollView in
             scrollController.attach(scrollView)
             scrollController.update(followsTail: followsTail, setFollowsTail: setFollowsTail)
+            scrollController.update(setScrollProgress: { scrollProgress = $0 })
         }
         .onAppear {
             scrollController.update(followsTail: followsTail, setFollowsTail: setFollowsTail)
+            scrollController.update(setScrollProgress: { scrollProgress = $0 })
             scrollController.viewAppeared()
         }
         .onChange(of: scrollIdentity) { _, _ in
@@ -63,6 +72,23 @@ struct TranscriptView: View {
     }
 }
 
+private struct TranscriptScrollRail: View {
+    let progress: CGFloat
+
+    var body: some View {
+        let activeIndex = L5TranscriptScrollRail.activeIndex(progress: progress)
+
+        VStack(spacing: L5TranscriptScrollRail.markerSpacing) {
+            ForEach(0..<L5TranscriptScrollRail.markerCount, id: \.self) { index in
+                Capsule()
+                    .fill(index == activeIndex ? L5Color.textPrimary : L5Color.textMuted.opacity(L5TranscriptScrollRail.inactiveOpacity))
+                    .frame(width: L5TranscriptScrollRail.markerWidth, height: L5TranscriptScrollRail.markerHeight)
+            }
+        }
+        .frame(width: L5TranscriptScrollRail.railWidth)
+    }
+}
+
 @MainActor
 final class TranscriptScrollController: NSObject, ObservableObject {
     private enum SettleReason {
@@ -76,6 +102,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
     private var settleTask: Task<Void, Never>?
     private var followsTail = true
     private var setFollowsTail: ((Bool) -> Void)?
+    private var setScrollProgress: ((CGFloat) -> Void)?
     private var isProgrammaticScroll = false
     private var isSettling = false
     private var lastClipBounds: CGRect = .zero
@@ -91,6 +118,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
             removeObservers()
             self.scrollView = scrollView
             scrollView.drawsBackground = false
+            scrollView.hasVerticalScroller = false
             scrollView.hasHorizontalScroller = false
             scrollView.contentView.postsBoundsChangedNotifications = true
             lastClipBounds = scrollView.contentView.bounds
@@ -108,6 +136,11 @@ final class TranscriptScrollController: NSObject, ObservableObject {
     func update(followsTail: Bool, setFollowsTail: @escaping (Bool) -> Void) {
         self.followsTail = followsTail
         self.setFollowsTail = setFollowsTail
+    }
+
+    func update(setScrollProgress: @escaping (CGFloat) -> Void) {
+        self.setScrollProgress = setScrollProgress
+        reportScrollProgress()
     }
 
     func viewAppeared() {
@@ -196,11 +229,13 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         lastClipBounds = clipBounds
 
         if isProgrammaticScroll {
+            reportScrollProgress()
             return
         }
 
         if isUserScrollEvent {
             cancelSettle()
+            reportScrollProgress()
             reportBottomState()
             return
         }
@@ -212,6 +247,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         if sizeChanged, followsTail {
             settleToBottom(reason: .content)
         } else if originChanged || sizeChanged {
+            reportScrollProgress()
             reportBottomState()
         }
     }
@@ -228,6 +264,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         if followsTail {
             settleToBottom(reason: .content)
         } else if !isSettling {
+            reportScrollProgress()
             reportBottomState()
         }
     }
@@ -286,6 +323,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         scrollView.reflectScrolledClipView(clipView)
         lastClipBounds = clipView.bounds
         isProgrammaticScroll = false
+        reportScrollProgress()
     }
 
     private func reportBottomState() {
@@ -308,6 +346,30 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         setFollowsTail?(isAtBottom)
     }
 
+    private func reportScrollProgress() {
+        guard let scrollView else { return }
+        observeDocumentViewIfNeeded()
+        guard let documentView else { return }
+
+        let viewportHeight = scrollView.contentView.bounds.height
+        let documentHeight = documentView.bounds.height
+        let scrollableHeight = documentHeight - viewportHeight
+        guard scrollableHeight > 0 else {
+            setScrollProgress?(1)
+            return
+        }
+
+        let visibleRect = documentView.visibleRect
+        let rawProgress: CGFloat
+        if documentView.isFlipped {
+            rawProgress = visibleRect.minY / scrollableHeight
+        } else {
+            rawProgress = (documentHeight - visibleRect.maxY) / scrollableHeight
+        }
+
+        setScrollProgress?(min(max(rawProgress, 0), 1))
+    }
+
     private var isUserScrollEvent: Bool {
         guard let event = NSApp.currentEvent else { return false }
         switch event.type {
@@ -324,6 +386,21 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         default:
             return false
         }
+    }
+}
+
+private enum L5TranscriptScrollRail {
+    static let railWidth = L5Spacing.x3
+    static let markerWidth = L5Spacing.x3
+    static let markerHeight = L5Spacing.x1
+    static let markerSpacing = L5Spacing.x3
+    static let markerCount = 12
+    static let inactiveOpacity = L5Spacing.x2 / L5Spacing.x10
+
+    static func activeIndex(progress: CGFloat) -> Int {
+        guard markerCount > 1 else { return 0 }
+        let clampedProgress = min(max(progress, 0), 1)
+        return min(markerCount - 1, max(0, Int((clampedProgress * CGFloat(markerCount - 1)).rounded())))
     }
 }
 

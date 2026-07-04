@@ -1,4 +1,5 @@
 import Level5Core
+import AppKit
 import SwiftUI
 
 public struct ContentView: View {
@@ -35,6 +36,7 @@ public struct ContentView: View {
                 queuedPrompts: model.activeQueue,
                 plan: model.activePlan,
                 usage: model.activeUsage,
+                dashboard: model.dashboardState,
                 draft: $model.draft,
                 modelOptions: model.modelOptions,
                 slashCommands: model.slashCommands,
@@ -57,6 +59,7 @@ public struct ContentView: View {
                 removeAttachmentAction: model.removeAttachment,
                 acceptSlashCommandAction: model.acceptSlashCommand,
                 setTranscriptFollowsTailAction: model.setActiveTranscriptFollowsTail,
+                refreshDashboardAction: model.refreshProjectDashboard,
                 removeQueuedPromptAction: model.removeQueuedPrompt,
                 selectProjectAction: selectProject,
                 clearProjectAction: clearSelectedProject,
@@ -66,6 +69,8 @@ public struct ContentView: View {
         }
         .frame(minWidth: 860, minHeight: 560)
         .navigationTitle("Level5 Build")
+        .level5WindowChrome()
+        .background(WindowChromeConfigurator())
         .onAppear {
             columnVisibility = isSidebarCollapsed ? .detailOnly : .all
             loadRecentProjects()
@@ -135,6 +140,7 @@ public struct ContentView: View {
 
         do {
             recentProjects = try recentProjectStore.listRecentProjects()
+            model.setRecentProjects(recentProjects)
         } catch {
             assertionFailure("Failed to load recent projects: \(error)")
         }
@@ -153,6 +159,44 @@ public struct ContentView: View {
             columnVisibility = .all
         } else {
             columnVisibility = .detailOnly
+        }
+    }
+}
+
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        configureWhenAttached(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        configureWhenAttached(view)
+    }
+
+    private func configureWhenAttached(_ view: NSView) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+            window.toolbarStyle = .unifiedCompact
+            window.toolbar?.showsBaselineSeparator = false
+            window.isMovableByWindowBackground = true
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func level5WindowChrome() -> some View {
+        if #available(macOS 15.0, *) {
+            self
+                .toolbar(removing: .title)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            self
         }
     }
 }

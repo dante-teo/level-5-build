@@ -69,6 +69,8 @@ final class AgentSessionModel {
     private(set) var sessions: [AgentSessionRow] = []
     private(set) var activeSessionId: String?
     private(set) var selectedProject: RecentProject?
+    private(set) var activeSessionProjectPath: String?
+    private(set) var dashboardState: ProjectDashboardState?
     private(set) var nextCursor: String?
     private(set) var runtimeMessage: String?
     private(set) var modelOptions: [ComposerModelOption] = []
@@ -78,6 +80,9 @@ final class AgentSessionModel {
     private(set) var pendingPermissionRequests: [String: PermissionRequest] = [:]
 
     private var transcriptStates: [String: AgentTranscriptState] = [:]
+    private var sessionCwdBySessionId: [String: String] = [:]
+    private var sessionProjectPathBySessionId: [String: String] = [:]
+    private var recentProjectPaths: Set<String> = []
     private var completedTurnSessionIds: Set<String> = []
     private var queues: [String: [QueuedPrompt]] = [:]
     private var draftsBySessionId: [String: ComposerDraft] = [:]
@@ -90,6 +95,7 @@ final class AgentSessionModel {
     private var pendingModelBySessionId: [String: String] = [:]
     private var persistedNewChatModelByBackend: [AgentBackendKind: String] = [:]
     private var defaultModelId: String?
+    private var dashboardRefreshGeneration = 0
     private var client: AgentSessionClient?
     private var clientGeneration = 0
     private var connectionTask: Task<Bool, Never>?
@@ -97,6 +103,7 @@ final class AgentSessionModel {
     private let backendKind: AgentBackendKind
     private let makeClient: @Sendable () throws -> AgentSessionClient
     private let approvalModePreferenceStore: ApprovalModePreferenceStore
+    private let gitStatusProvider: @Sendable (String) async -> ProjectGitStatus
     private let now: @Sendable () -> Date
     private let turnIdleTimeoutMilliseconds: Int
     private let homeDirectoryPath: String
@@ -111,6 +118,9 @@ final class AgentSessionModel {
         backendKind: AgentBackendKind,
         makeClient: @escaping @Sendable () throws -> AgentSessionClient,
         approvalModePreferenceStore: ApprovalModePreferenceStore = .userDefaults,
+        gitStatusProvider: @escaping @Sendable (String) async -> ProjectGitStatus = { cwd in
+            await ProjectGitStatusService().status(cwd: cwd)
+        },
         now: @escaping @Sendable () -> Date = Date.init,
         homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path,
         turnIdleTimeoutMilliseconds: Int? = nil
@@ -118,6 +128,7 @@ final class AgentSessionModel {
         self.backendKind = backendKind
         self.makeClient = makeClient
         self.approvalModePreferenceStore = approvalModePreferenceStore
+        self.gitStatusProvider = gitStatusProvider
         approvalMode = approvalModePreferenceStore.load(backendKind)
         self.now = now
         self.homeDirectoryPath = homeDirectoryPath
@@ -194,6 +205,22 @@ final class AgentSessionModel {
         selectedProject?.path
     }
 
+    var activeReferences: [AgentReference] {
+        guard let activeSessionId else { return [] }
+        let references = transcriptStates[activeSessionId]?.references ?? []
+        guard let projectPath = activeSessionProjectPath else {
+            return references.filter { $0.kind == .web }
+        }
+        return references.filter { reference in
+            switch reference.kind {
+            case .web:
+                return true
+            case .file:
+                return !Self.fileReference(reference, isInside: projectPath)
+            }
+        }
+    }
+
     var canSendWithButton: Bool {
         canEditComposer
             && !isActiveSessionRunning
@@ -221,8 +248,17 @@ final class AgentSessionModel {
     func startNewChat() {
         saveActiveDraft()
         activeSessionId = nil
+        activeSessionProjectPath = nil
+        dashboardState = nil
+        dashboardRefreshGeneration += 1
         draft.clearAfterSend()
         applyNewChatPersistedModel()
+    }
+
+    func setRecentProjects(_ projects: [RecentProject]) {
+        recentProjectPaths = Set(projects.map { RecentProjectStore.normalizedPath($0.path) })
+        reconcileSessionProjectPaths()
+        updateActiveProjectPathFromSession()
     }
 
     func selectProject(_ project: RecentProject) {
@@ -233,6 +269,10 @@ final class AgentSessionModel {
     func clearSelectedProject() {
         guard isProjectSelectionAvailable else { return }
         selectedProject = nil
+    }
+
+    func refreshProjectDashboard() {
+        refreshDashboardStatus()
     }
 
     func sendDraft() {
@@ -366,6 +406,7 @@ final class AgentSessionModel {
     func selectSession(_ sessionId: String) {
         saveActiveDraft()
         activeSessionId = sessionId
+        updateActiveProjectPathFromSession()
         ensureSessionRowExists(for: sessionId)
         restoreDraft(for: sessionId)
         if followTailBySessionId[sessionId] == nil {
@@ -374,10 +415,10 @@ final class AgentSessionModel {
         Task {
             guard await ensureConnected() else { return }
             guard let client else { return }
-            transcriptStates[sessionId] = AgentTranscriptState()
-            loadingSessionIds.insert(sessionId)
-            do {
-                let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
+                transcriptStates[sessionId] = AgentTranscriptState()
+                loadingSessionIds.insert(sessionId)
+                do {
+                    let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
                 applyModelConfig(result.configOptions, sessionId: sessionId)
                 await refreshSessionSlashCommands(sessionId)
                 await clearLoadingAfterReplayDrain(sessionId)
@@ -404,12 +445,17 @@ final class AgentSessionModel {
                 queues[sessionId] = nil
                 draftsBySessionId[sessionId] = nil
                 followTailBySessionId[sessionId] = nil
+                sessionCwdBySessionId[sessionId] = nil
+                sessionProjectPathBySessionId[sessionId] = nil
                 pendingPermissionRequests[sessionId] = nil
                 completedTurnSessionIds.remove(sessionId)
                 activeTurns[sessionId]?.watchdogTask?.cancel()
                 activeTurns[sessionId] = nil
                 if activeSessionId == sessionId {
                     activeSessionId = nil
+                    activeSessionProjectPath = nil
+                    dashboardState = nil
+                    dashboardRefreshGeneration += 1
                     draft.clearAfterSend()
                     applyNewChatPersistedModel()
                 }
@@ -590,6 +636,14 @@ final class AgentSessionModel {
                 activeSessionId = nil
                 return
             }
+            if let selectedProjectPath {
+                let normalized = RecentProjectStore.normalizedPath(selectedProjectPath)
+                sessionCwdBySessionId[sessionId] = normalized
+                sessionProjectPathBySessionId[sessionId] = normalized
+            } else {
+                sessionCwdBySessionId[sessionId] = RecentProjectStore.normalizedPath(homeDirectoryPath)
+                sessionProjectPathBySessionId[sessionId] = nil
+            }
             let row = AgentSessionRow(
                 sessionId: sessionId,
                 title: "New mock agent session",
@@ -598,6 +652,7 @@ final class AgentSessionModel {
             )
             upsert(row)
             activeSessionId = sessionId
+            updateActiveProjectPathFromSession()
             followTailBySessionId[sessionId] = true
             applyModelConfig(result.configOptions, sessionId: sessionId)
             await refreshSessionSlashCommands(sessionId)
@@ -646,6 +701,7 @@ final class AgentSessionModel {
             runtimeMessage = nil
             apply(.stopReason(result.stopReason), to: sessionId)
             updateCompletionState(sessionId: sessionId, stopReason: result.stopReason)
+            refreshDashboardStatus()
             await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         } catch {
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
@@ -656,6 +712,7 @@ final class AgentSessionModel {
             completedTurnSessionIds.remove(sessionId)
             updateCompletionFlags()
             removePendingUserEcho(displayMessage, for: sessionId)
+            refreshDashboardStatus()
             await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         }
         guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
@@ -835,6 +892,7 @@ final class AgentSessionModel {
         clearActiveTurn(sessionId)
         clearPlanState(for: sessionId)
         completedTurnSessionIds.remove(sessionId)
+        refreshDashboardStatus()
         let turnId = UUID()
         activeTurns[sessionId] = ActiveTurn(
             id: turnId,
@@ -850,6 +908,7 @@ final class AgentSessionModel {
     private func reserveTurn(sessionId: String) {
         clearPlanState(for: sessionId)
         completedTurnSessionIds.remove(sessionId)
+        refreshDashboardStatus()
         activeTurns[sessionId] = ActiveTurn(
             id: UUID(),
             generation: clientGeneration,
@@ -1003,7 +1062,12 @@ final class AgentSessionModel {
     }
 
     private func row(from summary: AcpSessionSummary) -> AgentSessionRow {
-        AgentSessionRow(
+        if let cwd = summary.cwd {
+            let normalized = RecentProjectStore.normalizedPath(cwd)
+            sessionCwdBySessionId[summary.sessionId] = normalized
+            sessionProjectPathBySessionId[summary.sessionId] = recentProjectPaths.contains(normalized) ? normalized : nil
+        }
+        return AgentSessionRow(
             sessionId: summary.sessionId,
             title: summary.title?.nonEmpty ?? summary.sessionId,
             detail: folderDetail(summary.cwd),
@@ -1133,12 +1197,91 @@ final class AgentSessionModel {
         var state = transcriptStates[sessionId] ?? AgentTranscriptState()
         state.apply(event)
         transcriptStates[sessionId] = state
+        if sessionId == activeSessionId {
+            updateDashboardReferences()
+        }
     }
 
     private func clearPlanState(for sessionId: String) {
         guard var state = transcriptStates[sessionId] else { return }
         state.plan = nil
         transcriptStates[sessionId] = state
+    }
+
+    private func reconcileSessionProjectPaths() {
+        for (sessionId, cwd) in sessionCwdBySessionId {
+            sessionProjectPathBySessionId[sessionId] = recentProjectPaths.contains(cwd) ? cwd : nil
+        }
+    }
+
+    private func updateActiveProjectPathFromSession() {
+        let nextPath = activeSessionId.flatMap { sessionProjectPathBySessionId[$0] }
+        guard nextPath != activeSessionProjectPath else {
+            updateDashboardReferences()
+            return
+        }
+        activeSessionProjectPath = nextPath
+        dashboardRefreshGeneration += 1
+        if let nextPath {
+            dashboardState = ProjectDashboardState(
+                projectPath: nextPath,
+                references: activeReferences,
+                isRefreshing: true
+            )
+            refreshDashboardStatus()
+        } else {
+            dashboardState = nil
+        }
+    }
+
+    private func refreshDashboardStatus() {
+        guard let projectPath = activeSessionProjectPath else {
+            dashboardState = nil
+            dashboardRefreshGeneration += 1
+            return
+        }
+        let generation = dashboardRefreshGeneration + 1
+        dashboardRefreshGeneration = generation
+        dashboardState = ProjectDashboardState(
+            projectPath: projectPath,
+            gitStatus: dashboardState?.projectPath == projectPath ? dashboardState?.gitStatus ?? .unavailable() : .unavailable(),
+            references: activeReferences,
+            isRefreshing: true
+        )
+        Task {
+            let status = await gitStatusProvider(projectPath)
+            guard activeSessionProjectPath == projectPath, dashboardRefreshGeneration == generation else { return }
+            dashboardState = ProjectDashboardState(
+                projectPath: projectPath,
+                gitStatus: status,
+                references: activeReferences,
+                isRefreshing: false
+            )
+        }
+    }
+
+    private func updateDashboardReferences() {
+        guard let current = dashboardState else { return }
+        dashboardState = ProjectDashboardState(
+            projectPath: current.projectPath,
+            gitStatus: current.gitStatus,
+            references: activeReferences,
+            isRefreshing: current.isRefreshing
+        )
+    }
+
+    private static func fileReference(_ reference: AgentReference, isInside projectPath: String) -> Bool {
+        let referencePath: String?
+        if let url = URL(string: reference.uri), url.isFileURL {
+            referencePath = url.standardizedFileURL.path
+        } else if reference.uri.hasPrefix("/") {
+            referencePath = URL(fileURLWithPath: reference.uri).standardizedFileURL.path
+        } else {
+            referencePath = nil
+        }
+        guard let referencePath else { return false }
+        let root = URL(fileURLWithPath: projectPath).standardizedFileURL.path
+        return referencePath == root || referencePath.hasPrefix(root + "/")
     }
 
     private func folderDetail(_ path: String?) -> String {

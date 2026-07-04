@@ -1,5 +1,6 @@
 import Foundation
 import Level5Core
+import Level5Design
 import Testing
 @testable import Level5BuildApp
 
@@ -1054,6 +1055,179 @@ struct AgentSessionModelTests {
         #expect(second.initializeCount == 1)
         #expect(second.prompts.first?.sessionId == "s1")
     }
+
+    @Test("Explicit selected project creates project-backed session and home fallback does not")
+    func projectBackedEligibilityForNewSessions() async throws {
+        let client = FakeAgentSessionClient()
+        let project = RecentProject(
+            path: "/Users/tester/Project",
+            displayName: "Project",
+            createdAt: .distantPast,
+            lastOpenedAt: .distantPast
+        )
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            gitStatusProvider: { _ in .unavailable() },
+            homeDirectoryPath: "/Users/tester"
+        )
+
+        model.setRecentProjects([project])
+        model.selectProject(project)
+        model.draft = "Build it"
+        model.sendDraft()
+        try await waitUntil { model.activeSessionId == "s1" }
+
+        #expect(model.activeSessionProjectPath == "/Users/tester/Project")
+        #expect(model.dashboardState?.projectPath == "/Users/tester/Project")
+
+        model.startNewChat()
+        model.clearSelectedProject()
+        client.newSessionResult = .init(sessionId: "s2")
+        model.draft = "Home task"
+        model.sendDraft()
+        try await waitUntil { model.activeSessionId == "s2" }
+
+        #expect(client.newSessionCwds == ["/Users/tester/Project", "/Users/tester"])
+        #expect(model.activeSessionProjectPath == nil)
+        #expect(model.dashboardState == nil)
+    }
+
+    @Test("Listed sessions are project-backed only when cwd is in recents")
+    func listedSessionProjectEligibilityUsesRecents() async throws {
+        let client = FakeAgentSessionClient()
+        client.listResults = [
+            .init(sessions: [
+                .init(sessionId: "project", cwd: "/repo/project", title: "Project"),
+                .init(sessionId: "other", cwd: "/repo/other", title: "Other")
+            ])
+        ]
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        model.setRecentProjects([
+            RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        ])
+
+        model.start()
+        try await waitUntil { model.sessions.count == 2 }
+        model.selectSession("project")
+        try await waitUntil { model.activeSessionProjectPath == "/repo/project" }
+        model.selectSession("other")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["project", "other"] }
+
+        #expect(model.activeSessionProjectPath == nil)
+    }
+
+    @Test("Dashboard refresh ignores stale git result after session change")
+    func dashboardRefreshIgnoresStaleResults() async throws {
+        actor Gate {
+            var continuations: [CheckedContinuation<ProjectGitStatus, Never>] = []
+            func wait() async -> ProjectGitStatus {
+                await withCheckedContinuation { continuation in
+                    continuations.append(continuation)
+                }
+            }
+            func release(_ status: ProjectGitStatus) {
+                continuations.removeFirst().resume(returning: status)
+            }
+        }
+        let gate = Gate()
+        let client = FakeAgentSessionClient()
+        client.listResults = [
+            .init(sessions: [
+                .init(sessionId: "one", cwd: "/repo/one", title: "One"),
+                .init(sessionId: "two", cwd: "/repo/two", title: "Two")
+            ])
+        ]
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            gitStatusProvider: { _ in await gate.wait() }
+        )
+        model.setRecentProjects([
+            RecentProject(path: "/repo/one", displayName: "one", createdAt: .distantPast, lastOpenedAt: .distantPast),
+            RecentProject(path: "/repo/two", displayName: "two", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        ])
+
+        model.start()
+        try await waitUntil { model.sessions.count == 2 }
+        model.selectSession("one")
+        try await waitUntil { model.dashboardState?.projectPath == "/repo/one" }
+        model.selectSession("two")
+        try await waitUntil { model.dashboardState?.projectPath == "/repo/two" }
+
+        await gate.release(.init(isAvailable: true, root: "/repo/one", branch: "stale", changedFiles: 99))
+        await gate.release(.init(isAvailable: true, root: "/repo/two", branch: "main", changedFiles: 1))
+        try await waitUntil { model.dashboardState?.gitStatus.branch == "main" }
+
+        #expect(model.dashboardState?.projectPath == "/repo/two")
+        #expect(model.dashboardState?.gitStatus.changedFiles == 1)
+    }
+
+    @Test("References include web and external files but exclude in-project files")
+    func referencesFilterAndDedupe() async throws {
+        let client = FakeAgentSessionClient()
+        client.loadReplay["s1"] = [
+            .references([
+                .init(kind: .web, title: "Docs", uri: "https://example.com/docs"),
+                .init(kind: .web, title: "Duplicate Docs", uri: "https://example.com/docs"),
+                .init(kind: .file, title: "External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
+                .init(kind: .file, title: "Duplicate External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
+                .init(kind: .file, title: "Internal", uri: URL(fileURLWithPath: "/repo/project/Sources/App.swift").absoluteString)
+            ])
+        ]
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        model.setRecentProjects([
+            RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        ])
+        client.listResults = [.init(sessions: [.init(sessionId: "s1", cwd: "/repo/project", title: "Project")])]
+
+        model.start()
+        try await waitUntil { model.sessions.count == 1 }
+        model.selectSession("s1")
+        try await waitUntil { model.dashboardState?.references.count == 2 }
+
+        #expect(model.dashboardState?.references.map(\.uri) == [
+            "https://example.com/docs",
+            URL(fileURLWithPath: "/tmp/external.md").absoluteString
+        ])
+        #expect(Set(model.dashboardState?.references.map(\.id) ?? []).count == 2)
+    }
+
+    @Test("Adaptive dashboard policy follows width fallback and compact overlay")
+    func adaptiveDashboardPolicy() {
+        var state = ProjectDashboardAdaptiveState()
+
+        state.update(horizontalSizeClass: nil, workspaceWidth: L5Spacing.x16 * 17)
+        #expect(state.presentation == .reserved)
+
+        state.update(horizontalSizeClass: nil, workspaceWidth: L5Spacing.x16 * 8)
+        #expect(state.presentation == .hidden)
+
+        state.toggle()
+        #expect(state.presentation == .overlay)
+
+        state.update(horizontalSizeClass: nil, workspaceWidth: L5Spacing.x16 * 8)
+        #expect(state.presentation == .hidden)
+
+        state.toggle()
+        #expect(state.presentation == .overlay)
+
+        state.update(horizontalSizeClass: nil, workspaceWidth: L5Spacing.x16 * 17)
+        #expect(state.presentation == .reserved)
+
+        state.close()
+        #expect(state.presentation == .hidden)
+        state.toggle()
+        #expect(state.presentation == .reserved)
+    }
 }
 
 private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Sendable {
@@ -1447,6 +1621,25 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
             ]))
         case let .usage(usage):
             emitUsage(sessionId, used: usage.used ?? 0, size: usage.size ?? 0)
+        case let .references(references):
+            continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+                "sessionId": .string(sessionId),
+                "update": [
+                    "sessionUpdate": .string("tool_call"),
+                    "toolCallId": .string("tool-\(UUID().uuidString)"),
+                    "title": .string("References"),
+                    "kind": .string("fetch"),
+                    "status": .string("completed"),
+                    "_meta": [
+                        "references": .array(references.map { reference in
+                            [
+                                "title": .string(reference.title),
+                                "uri": .string(reference.uri)
+                            ]
+                        })
+                    ]
+                ]
+            ]))
         case .toolExpansion, .status, .error, .stopReason:
             break
         }

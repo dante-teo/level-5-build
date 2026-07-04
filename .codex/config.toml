@@ -1,5 +1,0 @@
-[plugins."build-web-apps@openai-curated"]
-enabled = true
-
-[plugins."github@openai-curated"]
-enabled = true

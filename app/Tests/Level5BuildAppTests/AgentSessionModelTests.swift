@@ -550,6 +550,208 @@ struct AgentSessionModelTests {
         #expect(model.transcript.contains { $0.errorText?.contains("Prompt failed") == true })
     }
 
+    @Test("Stop cancels active turn and clears same-session queue")
+    func stopCancelsActiveTurnAndClearsQueue() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 && model.isActiveSessionRunning }
+        model.draft = "queued"
+        model.sendDraft()
+        try await waitUntil { model.activeQueue.map(\.text) == ["queued"] }
+
+        model.cancelActiveTurn()
+        try await waitUntil { client.cancelledSessionIdsSnapshot == ["s1"] }
+
+        #expect(model.isActiveSessionRunning == false)
+        #expect(model.activeQueue.isEmpty)
+        #expect(model.canEditComposer)
+        #expect(model.transcript.contains { $0.statusText?.contains("cancelled") == true })
+
+        client.releaseNextPrompt()
+    }
+
+    @Test("Stop cancels pending permission and suppresses late output")
+    func stopCancelsPendingPermissionAndSuppressesLateOutput() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        client.emitAgentText("s1", "already streamed")
+        client.emitPermissionRequest(id: .int(44), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest != nil }
+
+        model.cancelActiveTurn()
+        try await waitUntil { client.cancelledPermissionRequestIdsSnapshot == [.int(44)] }
+        client.emitAgentText("s1", "late output")
+        client.releaseNextPrompt()
+        try await Task.sleep(for: .milliseconds(30))
+
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.canEditComposer)
+        #expect(model.transcript.contains { $0.messageText == "already streamed" })
+        #expect(model.transcript.contains { $0.messageText == "late output" } == false)
+    }
+
+    @Test("New prompt after Stop reuses selected session")
+    func newPromptAfterStopUsesSelectedSession() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        model.cancelActiveTurn()
+        try await waitUntil { model.isActiveSessionRunning == false }
+        client.releaseNextPrompt()
+
+        client.blocksPrompts = false
+        model.draft = "after stop"
+        model.sendDraft()
+        try await waitUntil { client.prompts.map(\.text).contains("after stop") }
+
+        #expect(model.activeSessionId == "s1")
+        #expect(client.prompts.last?.sessionId == "s1")
+    }
+
+    @Test("Stop suppression survives immediate re-prompt until new prompt echo")
+    func stopSuppressionSurvivesImmediateRepromptUntilNewPromptEcho() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        model.cancelActiveTurn()
+        try await waitUntil { model.isActiveSessionRunning == false }
+
+        client.blockBeforeUserEchoPrompts = ["after stop"]
+        client.blocksPrompts = false
+        model.draft = "after stop"
+        model.sendDraft()
+        try await waitUntil { client.prompts.map(\.text) == ["first", "after stop"] }
+        client.emitAgentText("s1", "late cancelled output")
+        client.releaseNextUserEcho()
+        try await waitUntil { model.transcript.contains { $0.messageText == "response after stop" } }
+
+        #expect(model.transcript.contains { $0.messageText == "late cancelled output" } == false)
+        #expect(client.prompts.last?.sessionId == "s1")
+
+        client.releaseNextPrompt()
+    }
+
+    @Test("Cancel failure disconnects and next action reconnects")
+    func cancelFailureDisconnectsAndNextActionReconnects() async throws {
+        let first = FakeAgentSessionClient()
+        first.blocksPrompts = true
+        first.cancelFailures = ["s1"]
+        let second = FakeAgentSessionClient()
+        let factory = FakeClientFactory([first, second])
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { factory.next() })
+
+        model.selectSession("s1")
+        try await waitUntil { first.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { first.prompts.count == 1 }
+        model.cancelActiveTurn()
+        try await waitUntil {
+            if case .disconnected = model.availability { return true }
+            return false
+        }
+
+        first.releaseNextPrompt()
+        model.draft = "after reconnect"
+        model.sendDraft()
+        try await waitUntil { second.prompts.count == 1 }
+
+        #expect(second.initializeCount == 1)
+        #expect(second.prompts.first?.sessionId == "s1")
+    }
+
+    @Test("Idle timeout cancels, resets runtime, and reconnects on next action")
+    func idleTimeoutCancelsResetsAndReconnects() async throws {
+        let first = FakeAgentSessionClient()
+        first.blocksPrompts = true
+        let second = FakeAgentSessionClient()
+        let factory = FakeClientFactory([first, second])
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { factory.next() },
+            turnIdleTimeoutMilliseconds: 30
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { first.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { first.prompts.count == 1 }
+        try await waitUntil(timeout: .seconds(1)) {
+            if case .disconnected = model.availability { return true }
+            return false
+        }
+
+        #expect(first.cancelledSessionIdsSnapshot == ["s1"])
+        #expect(model.isActiveSessionRunning == false)
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.transcript.contains { $0.errorText?.contains("idle") == true })
+
+        first.releaseNextPrompt()
+        model.draft = "after timeout"
+        model.sendDraft()
+        try await waitUntil { second.prompts.count == 1 }
+
+        #expect(second.initializeCount == 1)
+        #expect(second.prompts.first?.sessionId == "s1")
+    }
+
+    @Test("Pending human permission pauses idle watchdog")
+    func pendingHumanPermissionPausesIdleWatchdog() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral,
+            turnIdleTimeoutMilliseconds: 30
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "needs approval"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        client.emitPermissionRequest(id: .int(55), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest != nil }
+        try await Task.sleep(for: .milliseconds(120))
+
+        #expect(client.cancelledSessionIdsSnapshot.isEmpty)
+        #expect(model.isActiveSessionRunning)
+
+        model.cancelActiveTurn()
+        client.releaseNextPrompt()
+    }
+
     @Test("Ask approval stores active pending request and blocks composer")
     func askApprovalStoresActivePendingRequestAndBlocksComposer() async throws {
         let client = FakeAgentSessionClient()
@@ -823,6 +1025,9 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     ]
     var setModelRequests: [ModelRequest] = []
     var setModelFailures: Set<String> = []
+    var cancelledSessionIds: [String] = []
+    var cancelFailures: Set<String> = []
+    var cancelledPermissionRequestIds: [AcpRpcID] = []
     var permissionResponses: [PermissionResponse] = []
     var permissionResponseFailures: Set<AcpRpcID> = []
     var prompts: [Prompt] = []
@@ -830,12 +1035,15 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var failBeforeUserEchoPrompts: Set<String> = []
     var exitOnPrompts: Set<String> = []
     var userEchoChunksByPrompt: [String: [String]] = [:]
+    var blockBeforeUserEchoPrompts: Set<String> = []
     var blocksSetModel = false
     var blocksLoad = false
     var blocksPrompts = false
     private var setModelContinuation: CheckedContinuation<Void, Never>?
     private var setModelReleasePermits = 0
     private var loadContinuation: CheckedContinuation<Void, Never>?
+    private var userEchoContinuations: [CheckedContinuation<Void, Never>] = []
+    private var userEchoReleasePermits = 0
     private var promptContinuations: [CheckedContinuation<Void, Never>] = []
     private var promptReleasePermits = 0
 
@@ -857,6 +1065,14 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     var permissionResponsesSnapshot: [PermissionResponse] {
         lock.withLock { permissionResponses }
+    }
+
+    var cancelledSessionIdsSnapshot: [String] {
+        lock.withLock { cancelledSessionIds }
+    }
+
+    var cancelledPermissionRequestIdsSnapshot: [AcpRpcID] {
+        lock.withLock { cancelledPermissionRequestIds }
     }
 
     init() {
@@ -951,6 +1167,21 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         if lock.withLock({ failBeforeUserEchoPrompts.contains(text) }) {
             throw FakeClientError.promptFailed
         }
+        if lock.withLock({ blockBeforeUserEchoPrompts.contains(text) }) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    if userEchoReleasePermits > 0 {
+                        userEchoReleasePermits -= 1
+                        return true
+                    }
+                    userEchoContinuations.append(continuation)
+                    return false
+                }
+                if shouldResume {
+                    continuation.resume()
+                }
+            }
+        }
         let userChunks = lock.withLock { userEchoChunksByPrompt[text] ?? [text] }
         for chunk in userChunks {
             emitUserText(sessionId, chunk)
@@ -985,11 +1216,22 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         return .init(stopReason: "end_turn")
     }
 
+    func cancel(sessionId: String) async throws {
+        lock.withLock { cancelledSessionIds.append(sessionId) }
+        if lock.withLock({ cancelFailures.contains(sessionId) }) {
+            throw FakeClientError.promptFailed
+        }
+    }
+
     func respondToPermissionRequest(_ response: PermissionResponse) async throws {
         lock.withLock { permissionResponses.append(response) }
         if lock.withLock({ permissionResponseFailures.contains(response.requestId) }) {
             throw FakeClientError.promptFailed
         }
+    }
+
+    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
+        lock.withLock { cancelledPermissionRequestIds.append(requestId) }
     }
 
     func terminate() {}
@@ -1001,6 +1243,17 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 return nil
             }
             return promptContinuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    func releaseNextUserEcho() {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            if userEchoContinuations.isEmpty {
+                userEchoReleasePermits += 1
+                return nil
+            }
+            return userEchoContinuations.removeFirst()
         }
         continuation?.resume()
     }

@@ -46,6 +46,7 @@ public struct ContentView: View {
                 canEditComposer: model.canEditComposer,
                 isComposerFocused: $isComposerFocused,
                 sendAction: sendDraft,
+                cancelAction: model.cancelActiveTurn,
                 selectModelAction: model.selectModel,
                 selectApprovalModeAction: model.selectApprovalMode,
                 respondToPermissionAction: model.respondToPermission,

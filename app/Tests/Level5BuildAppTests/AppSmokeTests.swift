@@ -60,6 +60,7 @@ private struct ComposerSmokeHarness: View {
             canEditComposer: pendingPermissionRequest == nil,
             isFocused: $isFocused,
             sendAction: {},
+            cancelAction: {},
             selectModelAction: { _ in },
             selectApprovalModeAction: { _ in },
             respondToPermissionAction: { _ in },

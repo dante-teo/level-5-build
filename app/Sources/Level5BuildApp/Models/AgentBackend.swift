@@ -47,7 +47,9 @@ protocol AgentSessionClient: Sendable {
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand]
     func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult
     func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult
+    func cancel(sessionId: String) async throws
     func respondToPermissionRequest(_ response: PermissionResponse) async throws
+    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws
     func terminate()
 }
 
@@ -136,11 +138,23 @@ final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendabl
         try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
+    func cancel(sessionId: String) async throws {
+        try await client.cancel(sessionId: sessionId)
+    }
+
     func respondToPermissionRequest(_ response: PermissionResponse) async throws {
         try await client.respond(id: response.requestId, result: [
             "outcome": [
                 "outcome": "selected",
                 "optionId": .string(response.optionId)
+            ]
+        ])
+    }
+
+    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
+        try await client.respond(id: requestId, result: [
+            "outcome": [
+                "outcome": "cancelled"
             ]
         ])
     }
@@ -256,11 +270,23 @@ final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
         try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
+    func cancel(sessionId: String) async throws {
+        try await client.cancel(sessionId: sessionId)
+    }
+
     func respondToPermissionRequest(_ response: PermissionResponse) async throws {
         try await client.respond(id: response.requestId, result: [
             "outcome": [
                 "outcome": "selected",
                 "optionId": .string(response.optionId)
+            ]
+        ])
+    }
+
+    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
+        try await client.respond(id: requestId, result: [
+            "outcome": [
+                "outcome": "cancelled"
             ]
         ])
     }

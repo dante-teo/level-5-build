@@ -46,6 +46,18 @@ public enum AgentAvailability: Equatable, Sendable {
     }
 }
 
+private struct ActiveTurn {
+    let id: UUID
+    let generation: Int
+    var lastInboundActivity: Date
+    var watchdogTask: Task<Void, Never>?
+}
+
+private enum TurnCancelReason {
+    case manual
+    case idleTimeout
+}
+
 @MainActor
 @Observable
 final class AgentSessionModel {
@@ -66,7 +78,8 @@ final class AgentSessionModel {
     private var queues: [String: [QueuedPrompt]] = [:]
     private var draftsBySessionId: [String: ComposerDraft] = [:]
     private var followTailBySessionId: [String: Bool] = [:]
-    private var runningSessionIds: Set<String> = []
+    private var activeTurns: [String: ActiveTurn] = [:]
+    private var staleTurnGenerationBySessionId: [String: Int] = [:]
     private var loadingSessionIds: Set<String> = []
     private var pendingUserEchoes: [String: [String]] = [:]
     private var currentModelBySessionId: [String: String] = [:]
@@ -74,12 +87,14 @@ final class AgentSessionModel {
     private var persistedNewChatModelByBackend: [AgentBackendKind: String] = [:]
     private var defaultModelId: String?
     private var client: AgentSessionClient?
+    private var clientGeneration = 0
     private var connectionTask: Task<Bool, Never>?
     private var eventTask: Task<Void, Never>?
     private let backendKind: AgentBackendKind
     private let makeClient: @Sendable () throws -> AgentSessionClient
     private let approvalModePreferenceStore: ApprovalModePreferenceStore
     private let now: @Sendable () -> Date
+    private let turnIdleTimeoutMilliseconds: Int
     private let homeDirectoryPath: String
     private let isoFormatter = ISO8601DateFormatter()
     private let fractionalISOFormatter: ISO8601DateFormatter = {
@@ -93,7 +108,8 @@ final class AgentSessionModel {
         makeClient: @escaping @Sendable () throws -> AgentSessionClient,
         approvalModePreferenceStore: ApprovalModePreferenceStore = .userDefaults,
         now: @escaping @Sendable () -> Date = Date.init,
-        homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path
+        homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        turnIdleTimeoutMilliseconds: Int? = nil
     ) {
         self.backendKind = backendKind
         self.makeClient = makeClient
@@ -101,6 +117,9 @@ final class AgentSessionModel {
         approvalMode = approvalModePreferenceStore.load(backendKind)
         self.now = now
         self.homeDirectoryPath = homeDirectoryPath
+        self.turnIdleTimeoutMilliseconds = turnIdleTimeoutMilliseconds
+            ?? ProcessInfo.processInfo.environment["LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS"].flatMap(Int.init)
+            ?? 120_000
         switch backendKind {
         case .acpMock:
             availability = .connecting
@@ -142,7 +161,7 @@ final class AgentSessionModel {
     }
 
     var isActiveSessionRunning: Bool {
-        activeSessionId.map { runningSessionIds.contains($0) } ?? false
+        activeSessionId.map { activeTurns[$0] != nil } ?? false
     }
 
     var activePermissionRequest: PermissionRequest? {
@@ -216,18 +235,22 @@ final class AgentSessionModel {
 
         Task {
             if let activeSessionId {
-                if runningSessionIds.contains(activeSessionId) {
+                if activeTurns[activeSessionId] != nil {
                     draft.clearAfterSend()
                     enqueue(snapshot, for: activeSessionId)
                 } else {
-                    runningSessionIds.insert(activeSessionId)
-                    updateRunningFlags()
+                    reserveTurn(sessionId: activeSessionId)
                     await send(snapshot, to: activeSessionId, isAlreadyMarkedRunning: true)
                 }
             } else {
                 await createSessionAndSend(snapshot)
             }
         }
+    }
+
+    func cancelActiveTurn() {
+        guard let activeSessionId else { return }
+        cancelTurn(sessionId: activeSessionId, reason: .manual)
     }
 
     func addAttachments(urls: [URL], kind: ComposerAttachment.Kind) {
@@ -367,7 +390,8 @@ final class AgentSessionModel {
                 draftsBySessionId[sessionId] = nil
                 followTailBySessionId[sessionId] = nil
                 pendingPermissionRequests[sessionId] = nil
-                runningSessionIds.remove(sessionId)
+                activeTurns[sessionId]?.watchdogTask?.cancel()
+                activeTurns[sessionId] = nil
                 if activeSessionId == sessionId {
                     activeSessionId = nil
                     draft.clearAfterSend()
@@ -403,7 +427,8 @@ final class AgentSessionModel {
             do {
                 let client = try makeClient()
                 self.client = client
-                startEventTask(client.events)
+                clientGeneration += 1
+                startEventTask(client.events, generation: clientGeneration)
                 try await client.initialize()
                 await refreshGlobalComposerDiscovery()
                 availability = .available
@@ -586,7 +611,7 @@ final class AgentSessionModel {
     private func send(_ snapshot: ComposerDraft, to sessionId: String, isAlreadyMarkedRunning: Bool = false) async {
         guard await ensureConnected() else {
             if isAlreadyMarkedRunning {
-                runningSessionIds.remove(sessionId)
+                clearActiveTurn(sessionId)
                 updateRunningFlags()
             }
             return
@@ -595,28 +620,27 @@ final class AgentSessionModel {
         let displayMessage = snapshot.previewText
         loadingSessionIds.remove(sessionId)
         draft.clearAfterSend()
-        if !isAlreadyMarkedRunning {
-            runningSessionIds.insert(sessionId)
-            updateRunningFlags()
-        }
+        let turnId = beginTurn(sessionId: sessionId)
         pendingUserEchoes[sessionId, default: []].append(displayMessage)
         appendUser(displayMessage, to: sessionId)
         markObservedActivity(for: sessionId)
         do {
             let result = try await client.prompt(sessionId: sessionId, blocks: snapshot.promptBlocks)
+            guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
             runtimeMessage = nil
             apply(.stopReason(result.stopReason), to: sessionId)
+            await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         } catch {
+            guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
             if case .processExited = error as? AcpTransportError {
-                let message = "Agent runtime disconnected: \(userFacingError(error))"
-                availability = .disconnected(message)
-                runtimeMessage = message
-                self.client = nil
+                cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))")
             }
             appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(displayMessage)", to: sessionId)
             removePendingUserEcho(displayMessage, for: sessionId)
+            await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         }
-        runningSessionIds.remove(sessionId)
+        guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
+        clearActiveTurn(sessionId)
         updateRunningFlags()
         await startNextQueuedPromptIfNeeded(for: sessionId)
     }
@@ -627,27 +651,28 @@ final class AgentSessionModel {
     }
 
     private func startNextQueuedPromptIfNeeded(for sessionId: String) async {
-        guard runningSessionIds.contains(sessionId) == false else { return }
+        guard activeTurns[sessionId] == nil else { return }
         guard var queue = queues[sessionId], !queue.isEmpty else { return }
         let next = queue.removeFirst()
         queues[sessionId] = queue
         await send(next.snapshot, to: sessionId)
     }
 
-    private func startEventTask(_ events: AsyncStream<AcpEvent>) {
+    private func startEventTask(_ events: AsyncStream<AcpEvent>, generation: Int) {
         eventTask?.cancel()
         eventTask = Task { [weak self] in
             for await event in events {
-                await self?.handle(event)
+                await self?.handle(event, generation: generation)
             }
         }
     }
 
-    private func handle(_ event: AcpEvent) async {
+    private func handle(_ event: AcpEvent, generation: Int) async {
+        guard generation == clientGeneration else { return }
         switch event {
         case let .notification(method, params):
             guard method == AcpMethod.sessionUpdate, let params else { return }
-            handleSessionUpdate(params)
+            handleSessionUpdate(params, generation: generation)
         case let .serverRequest(id, method, params):
             if method == AcpMethod.sessionRequestPermission {
                 await handlePermissionRequest(id: id, params: params)
@@ -658,10 +683,11 @@ final class AgentSessionModel {
             appendStatus(title: "Runtime stderr", text: line, to: activeSessionId)
         case let .processExit(exit):
             let message = "Agent runtime disconnected: status \(exit.status)"
-            availability = .disconnected(message)
-            runtimeMessage = message
-            client = nil
-            appendError(title: "Runtime exited", text: "Agent runtime exited with status \(exit.status).", key: "process-exit-\(exit.status)", to: activeSessionId)
+            let activeSessionIds = Array(activeTurns.keys)
+            cleanupUnhealthyRuntime(message: message)
+            for sessionId in activeSessionIds {
+                appendError(title: "Runtime exited", text: "Agent runtime exited with status \(exit.status).", key: "process-exit-\(exit.status)-\(sessionId)", to: sessionId)
+            }
         case .activity:
             break
         }
@@ -676,6 +702,7 @@ final class AgentSessionModel {
         switch approvalMode {
         case .ask:
             pendingPermissionRequests[request.sessionId] = request
+            refreshWatchdogActivity(for: request.sessionId)
             ensureSessionRowExists(for: request.sessionId)
             updatePermissionFlags()
         case .approveForMe:
@@ -718,6 +745,7 @@ final class AgentSessionModel {
             ))
             pendingPermissionRequests[request.sessionId] = nil
             updatePermissionFlags()
+            refreshWatchdogActivity(for: request.sessionId)
             runtimeMessage = nil
             if let followUpInstruction {
                 enqueueOrSendInstruction(followUpInstruction, for: request.sessionId)
@@ -725,6 +753,7 @@ final class AgentSessionModel {
         } catch {
             pendingPermissionRequests[request.sessionId] = nil
             updatePermissionFlags()
+            refreshWatchdogActivity(for: request.sessionId)
             runtimeMessage = "Permission response failed: \(userFacingError(error))"
         }
     }
@@ -732,26 +761,35 @@ final class AgentSessionModel {
     private func enqueueOrSendInstruction(_ text: String, for sessionId: String) {
         var followUp = ComposerDraft()
         followUp.appendText(text)
-        if runningSessionIds.contains(sessionId) {
+        if activeTurns[sessionId] != nil {
             enqueue(followUp, for: sessionId)
             return
         }
         Task {
-            runningSessionIds.insert(sessionId)
-            updateRunningFlags()
+            reserveTurn(sessionId: sessionId)
             await send(followUp, to: sessionId, isAlreadyMarkedRunning: true)
         }
     }
 
-    private func handleSessionUpdate(_ params: JSONValue) {
+    private func handleSessionUpdate(_ params: JSONValue, generation: Int) {
         guard let update = try? AcpProtocolCoding.decode(AcpSessionUpdate.self, from: params) else { return }
         let sessionId = update.sessionId
+        if let activeTurn = activeTurns[sessionId], activeTurn.generation != generation {
+            return
+        }
         guard let object = update.update.objectValue else { return }
         let kind = object["sessionUpdate"]?.stringValue
 
         switch kind {
         case "user_message_chunk":
             guard let event = AgentTranscriptNormalizer.events(from: update).first else { return }
+            if isSuppressingStaleTurnOutput(for: sessionId) {
+                if case let .messageChunk(_, _, text, _) = event, suppressPendingUserEchoChunk(text, for: sessionId) {
+                    clearStaleSuppressionIfPromptEchoCompleted(for: sessionId)
+                }
+                return
+            }
+            refreshWatchdogActivity(for: sessionId)
             markLiveMessageActivity(for: sessionId)
             if case let .messageChunk(_, _, text, _) = event, suppressPendingUserEchoChunk(text, for: sessionId) {
                 return
@@ -759,15 +797,154 @@ final class AgentSessionModel {
                 apply(event, to: sessionId)
             }
         case "agent_message_chunk":
+            guard !isSuppressingStaleTurnOutput(for: sessionId) else { return }
+            refreshWatchdogActivity(for: sessionId)
             markLiveMessageActivity(for: sessionId)
             apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
         case "session_info_update":
             updateSessionInfo(sessionId: sessionId, object: object)
         case "plan", "tool_call", "tool_call_update", "usage_update":
+            guard !isSuppressingStaleTurnOutput(for: sessionId) else { return }
+            refreshWatchdogActivity(for: sessionId)
             apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
         default:
             break
         }
+    }
+
+    private func beginTurn(sessionId: String) -> UUID {
+        clearActiveTurn(sessionId)
+        let turnId = UUID()
+        activeTurns[sessionId] = ActiveTurn(
+            id: turnId,
+            generation: clientGeneration,
+            lastInboundActivity: now()
+        )
+        activeTurns[sessionId]?.watchdogTask = makeWatchdogTask(sessionId: sessionId, turnId: turnId)
+        updateRunningFlags()
+        return turnId
+    }
+
+    private func reserveTurn(sessionId: String) {
+        activeTurns[sessionId] = ActiveTurn(
+            id: UUID(),
+            generation: clientGeneration,
+            lastInboundActivity: now()
+        )
+        updateRunningFlags()
+    }
+
+    private func clearActiveTurn(_ sessionId: String) {
+        activeTurns[sessionId]?.watchdogTask?.cancel()
+        activeTurns[sessionId] = nil
+    }
+
+    private func isCurrentTurn(sessionId: String, turnId: UUID) -> Bool {
+        activeTurns[sessionId]?.id == turnId
+    }
+
+    private func drainCurrentTurnEvents(sessionId: String, turnId: UUID) async {
+        for _ in 0..<3 where isCurrentTurn(sessionId: sessionId, turnId: turnId) {
+            await Task.yield()
+        }
+    }
+
+    private func makeWatchdogTask(sessionId: String, turnId: UUID) -> Task<Void, Never> {
+        let intervalMilliseconds = max(10, min(turnIdleTimeoutMilliseconds / 4, 250))
+        return Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(intervalMilliseconds))
+                } catch {
+                    return
+                }
+                self?.checkTurnIdleTimeout(sessionId: sessionId, turnId: turnId)
+            }
+        }
+    }
+
+    private func checkTurnIdleTimeout(sessionId: String, turnId: UUID) {
+        guard let turn = activeTurns[sessionId], turn.id == turnId else { return }
+        if pendingPermissionRequests[sessionId] != nil {
+            activeTurns[sessionId]?.lastInboundActivity = now()
+            return
+        }
+        let elapsedMilliseconds = Int(now().timeIntervalSince(turn.lastInboundActivity) * 1000)
+        guard elapsedMilliseconds >= turnIdleTimeoutMilliseconds else { return }
+        cancelTurn(sessionId: sessionId, reason: .idleTimeout)
+    }
+
+    private func refreshWatchdogActivity(for sessionId: String) {
+        guard activeTurns[sessionId] != nil else { return }
+        activeTurns[sessionId]?.lastInboundActivity = now()
+    }
+
+    private func isSuppressingStaleTurnOutput(for sessionId: String) -> Bool {
+        staleTurnGenerationBySessionId[sessionId] == clientGeneration
+    }
+
+    private func clearStaleSuppressionIfPromptEchoCompleted(for sessionId: String) {
+        if pendingUserEchoes[sessionId] == nil {
+            staleTurnGenerationBySessionId[sessionId] = nil
+        }
+    }
+
+    private func cancelTurn(sessionId: String, reason: TurnCancelReason) {
+        guard activeTurns[sessionId] != nil || pendingPermissionRequests[sessionId] != nil else { return }
+        let request = pendingPermissionRequests[sessionId]
+        clearActiveTurn(sessionId)
+        pendingPermissionRequests[sessionId] = nil
+        queues[sessionId] = nil
+        updateRunningFlags()
+        updatePermissionFlags()
+
+        switch reason {
+        case .manual:
+            staleTurnGenerationBySessionId[sessionId] = clientGeneration
+            runtimeMessage = nil
+            appendStatus(title: "Cancelled", text: "Agent turn cancelled.", to: sessionId)
+        case .idleTimeout:
+            let message = "Agent runtime disconnected: turn idle timeout"
+            runtimeMessage = message
+            appendError(title: "Turn timed out", text: "Agent turn was idle for \(turnIdleTimeoutMilliseconds) ms and was cancelled.", key: "turn-timeout-\(sessionId)", to: sessionId)
+        }
+
+        let client = client
+        Task {
+            do {
+                try await client?.cancel(sessionId: sessionId)
+                if let request {
+                    try await client?.cancelPermissionRequest(request.requestId)
+                }
+                if reason == .idleTimeout {
+                    await MainActor.run {
+                        cleanupUnhealthyRuntime(message: "Agent runtime disconnected: turn idle timeout")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))")
+                }
+            }
+        }
+    }
+
+    private func cleanupUnhealthyRuntime(message: String) {
+        for sessionId in activeTurns.keys {
+            activeTurns[sessionId]?.watchdogTask?.cancel()
+        }
+        activeTurns.removeAll()
+        staleTurnGenerationBySessionId.removeAll()
+        pendingPermissionRequests.removeAll()
+        updateRunningFlags()
+        updatePermissionFlags()
+        clientGeneration += 1
+        eventTask?.cancel()
+        eventTask = nil
+        client?.terminate()
+        client = nil
+        availability = .disconnected(message)
+        runtimeMessage = message
     }
 
     private func updateSessionInfo(sessionId: String, object: [String: JSONValue]) {
@@ -788,7 +965,7 @@ final class AgentSessionModel {
                 detail: "Session",
                 updatedAt: updatedAt,
                 observedAt: nil,
-                isRunning: runningSessionIds.contains(sessionId),
+                isRunning: activeTurns[sessionId] != nil,
                 isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
             ))
         }
@@ -802,7 +979,7 @@ final class AgentSessionModel {
             detail: folderDetail(summary.cwd),
             updatedAt: summary.updatedAt.flatMap(parseDate),
             observedAt: nil,
-            isRunning: runningSessionIds.contains(summary.sessionId),
+            isRunning: activeTurns[summary.sessionId] != nil,
             isAwaitingPermission: pendingPermissionRequests[summary.sessionId] != nil
         )
     }
@@ -842,7 +1019,7 @@ final class AgentSessionModel {
 
     private func updateRunningFlags() {
         for index in sessions.indices {
-            sessions[index].isRunning = runningSessionIds.contains(sessions[index].sessionId)
+            sessions[index].isRunning = activeTurns[sessions[index].sessionId] != nil
         }
     }
 
@@ -859,7 +1036,7 @@ final class AgentSessionModel {
             title: sessionId,
             detail: "Session",
             observedAt: now(),
-            isRunning: runningSessionIds.contains(sessionId),
+            isRunning: activeTurns[sessionId] != nil,
             isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
         ))
     }

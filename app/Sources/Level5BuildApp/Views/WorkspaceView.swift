@@ -22,6 +22,7 @@ struct WorkspaceView: View {
     let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let cancelAction: () -> Void
     let selectModelAction: (String) -> Void
     let selectApprovalModeAction: (ApprovalMode) -> Void
     let respondToPermissionAction: (String) -> Void
@@ -56,6 +57,7 @@ struct WorkspaceView: View {
                     canEditComposer: canEditComposer,
                     isComposerFocused: isComposerFocused,
                     sendAction: sendAction,
+                    cancelAction: cancelAction,
                     selectModelAction: selectModelAction,
                     selectApprovalModeAction: selectApprovalModeAction,
                     respondToPermissionAction: respondToPermissionAction,
@@ -101,6 +103,7 @@ struct WorkspaceView: View {
                             canEditComposer: canEditComposer,
                             isFocused: isComposerFocused,
                             sendAction: sendAction,
+                            cancelAction: cancelAction,
                             selectModelAction: selectModelAction,
                             selectApprovalModeAction: selectApprovalModeAction,
                             respondToPermissionAction: respondToPermissionAction,
@@ -147,6 +150,7 @@ private struct NewSessionView: View {
     let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let cancelAction: () -> Void
     let selectModelAction: (String) -> Void
     let selectApprovalModeAction: (ApprovalMode) -> Void
     let respondToPermissionAction: (String) -> Void
@@ -188,6 +192,7 @@ private struct NewSessionView: View {
                     canEditComposer: canEditComposer,
                     isFocused: isComposerFocused,
                     sendAction: sendAction,
+                    cancelAction: cancelAction,
                     selectModelAction: selectModelAction,
                     selectApprovalModeAction: selectApprovalModeAction,
                     respondToPermissionAction: respondToPermissionAction,

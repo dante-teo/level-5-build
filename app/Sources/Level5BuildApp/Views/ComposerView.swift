@@ -21,6 +21,7 @@ struct ComposerView: View {
     let canEditComposer: Bool
     var isFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let cancelAction: () -> Void
     let selectModelAction: (String) -> Void
     let selectApprovalModeAction: (ApprovalMode) -> Void
     let respondToPermissionAction: (String) -> Void
@@ -131,7 +132,8 @@ struct ComposerView: View {
                     SendButton(
                         isEnabled: canSendWithButton,
                         isRunning: isActiveSessionRunning,
-                        action: sendAction
+                        sendAction: sendAction,
+                        cancelAction: cancelAction
                     )
                 }
             }
@@ -219,10 +221,11 @@ struct ComposerView: View {
 private struct SendButton: View {
     let isEnabled: Bool
     let isRunning: Bool
-    let action: () -> Void
+    let sendAction: () -> Void
+    let cancelAction: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button(action: isRunning ? cancelAction : sendAction) {
             Image(systemName: isRunning ? "stop.fill" : "arrow.up")
                 .font(.system(size: L5Size.icon, weight: .medium))
                 .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
@@ -230,10 +233,10 @@ private struct SendButton: View {
                 .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
-        .disabled(!isEnabled || isRunning)
+        .disabled(!isEnabled && !isRunning)
         .opacity((isEnabled || isRunning) ? 1 : 0.58)
         .keyboardShortcut(.return, modifiers: [])
-        .help(isRunning ? "Agent turn running" : "Send")
+        .help(isRunning ? "Stop agent turn" : "Send")
     }
 
     private var sendBackground: Color {

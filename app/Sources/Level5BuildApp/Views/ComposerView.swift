@@ -10,6 +10,8 @@ struct ComposerView: View {
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
+    let approvalMode: ApprovalMode
+    let pendingPermissionRequest: PermissionRequest?
     let isActiveSessionRunning: Bool
     let isModelSaveInFlight: Bool
     let isNewSession: Bool
@@ -20,6 +22,9 @@ struct ComposerView: View {
     var isFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
     let selectModelAction: (String) -> Void
+    let selectApprovalModeAction: (ApprovalMode) -> Void
+    let respondToPermissionAction: (String) -> Void
+    let rejectPermissionWithInstructionsAction: (String) -> Void
     let addAttachmentsAction: ([URL], ComposerAttachment.Kind) -> Void
     let removeAttachmentAction: (ComposerAttachment) -> Void
     let acceptSlashCommandAction: (ComposerCommand) -> Void
@@ -29,7 +34,9 @@ struct ComposerView: View {
     let removeRecentProjectAction: (RecentProject) -> Void
     let validateProjectAction: (RecentProject) -> Bool
     @State private var highlightedCommandIndex = 0
-    @State private var editorHeight: CGFloat = 24
+    @State private var highlightedPermissionIndex = 0
+    @State private var rejectionInstructions = ""
+    @State private var editorHeight: CGFloat = L5Spacing.x6
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,34 +53,48 @@ struct ComposerView: View {
                     RuntimeStatusView(message: statusMessage)
                 }
 
-                if !draft.attachments.isEmpty {
-                    AttachmentChipsView(
-                        chips: draft.attachmentChips(),
-                        removeAction: removeAttachmentAction
+                if let pendingPermissionRequest {
+                    PermissionTakeoverView(
+                        request: pendingPermissionRequest,
+                        highlightedIndex: $highlightedPermissionIndex,
+                        instructionText: $rejectionInstructions,
+                        respondAction: respondToPermissionAction,
+                        rejectWithInstructionsAction: rejectPermissionWithInstructionsAction
                     )
-                }
+                    .onChange(of: pendingPermissionRequest.id) { _, _ in
+                        highlightedPermissionIndex = 0
+                        rejectionInstructions = ""
+                    }
+                } else {
+                    if !draft.attachments.isEmpty {
+                        AttachmentChipsView(
+                            chips: draft.attachmentChips(),
+                            removeAction: removeAttachmentAction
+                        )
+                    }
 
-                ZStack(alignment: .topLeading) {
-                    MultilineComposerTextView(
-                        text: Binding(
-                            get: { draft.plainText },
-                            set: { draft.replacePlainTextPreservingCommandTokens($0) }
-                        ),
-                        isEditable: canEditComposer,
-                        acceptAutocompleteAction: acceptHighlightedCommand,
-                        heightChanged: { editorHeight = $0 },
-                        submitAction: sendAction
-                    )
-                    .focused(isFocused)
-                    .frame(minHeight: editorHeight, idealHeight: editorHeight, maxHeight: editorHeight)
-                    .fixedSize(horizontal: false, vertical: true)
+                    ZStack(alignment: .topLeading) {
+                        MultilineComposerTextView(
+                            text: Binding(
+                                get: { draft.plainText },
+                                set: { draft.replacePlainTextPreservingCommandTokens($0) }
+                            ),
+                            isEditable: canEditComposer,
+                            acceptAutocompleteAction: acceptHighlightedCommand,
+                            heightChanged: { editorHeight = $0 },
+                            submitAction: sendAction
+                        )
+                        .focused(isFocused)
+                        .frame(minHeight: editorHeight, idealHeight: editorHeight, maxHeight: editorHeight)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    if draft.plainText.isEmpty {
-                        Text("Do anything")
-                            .font(L5Font.body)
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 1)
-                            .allowsHitTesting(false)
+                        if draft.plainText.isEmpty {
+                            Text("Do anything")
+                                .font(L5Font.body)
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 1)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
 
@@ -84,6 +105,12 @@ struct ComposerView: View {
                         acceptSlashCommandAction: acceptSlashCommandAction
                     )
                     .disabled(!canEditComposer)
+
+                    ApprovalModeSelector(
+                        selectedMode: approvalMode,
+                        selectAction: selectApprovalModeAction
+                    )
+                    .disabled(pendingPermissionRequest != nil)
 
                     Spacer()
 
@@ -111,15 +138,15 @@ struct ComposerView: View {
             .padding(.horizontal, isNewSession ? L5Spacing.x4 : L5Spacing.x3)
             .padding(.top, isNewSession ? L5Spacing.x3 : L5Spacing.x3)
             .padding(.bottom, isNewSession ? L5Spacing.x3 : L5Spacing.x3)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: isNewSession ? L5Radius.card : 10, style: .continuous))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: isNewSession ? L5Radius.card : L5Radius.medium, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: isNewSession ? L5Radius.card : 10, style: .continuous)
+                RoundedRectangle(cornerRadius: isNewSession ? L5Radius.card : L5Radius.medium, style: .continuous)
                     .stroke(L5Color.border.opacity(0.8), lineWidth: 1)
             }
             .fixedSize(horizontal: false, vertical: true)
             .shadow(
                 color: .black.opacity(isNewSession ? 0.08 : 0),
-                radius: isNewSession ? 16 : 0,
+                radius: isNewSession ? L5Spacing.x4 : 0,
                 x: 0,
                 y: isNewSession ? 10 : 0
             )
@@ -197,8 +224,8 @@ private struct SendButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: isRunning ? "stop.fill" : "arrow.up")
-                .font(.system(size: 18, weight: .medium))
-                .frame(width: 38, height: 38)
+                .font(.system(size: L5Size.icon, weight: .medium))
+                .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
                 .background(sendBackground, in: Circle())
                 .foregroundStyle(.white)
         }
@@ -225,7 +252,7 @@ private struct PromptQueueView: View {
                 HStack(spacing: L5Spacing.x2) {
                     Image(systemName: "text.line.first.and.arrowtriangle.forward")
                         .foregroundStyle(.secondary)
-                        .frame(width: 18)
+                        .frame(width: L5Size.icon)
 
                     Text(prompt.text)
                         .font(L5Font.caption)
@@ -237,7 +264,7 @@ private struct PromptQueueView: View {
                         removeAction(prompt)
                     } label: {
                         Image(systemName: "xmark")
-                            .frame(width: 22, height: 22)
+                            .frame(width: L5Size.action, height: L5Size.action)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -245,9 +272,9 @@ private struct PromptQueueView: View {
                 }
                 .padding(.horizontal, L5Spacing.x3)
                 .padding(.vertical, L5Spacing.x2)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous)
                         .stroke(L5Color.border, lineWidth: 1)
                 }
             }
@@ -277,8 +304,8 @@ private struct MultilineComposerTextView: NSViewRepresentable {
     let acceptAutocompleteAction: () -> Bool
     let heightChanged: (CGFloat) -> Void
     let submitAction: () -> Void
-    private let minLineHeight: CGFloat = 24
-    private let maxLineCount: CGFloat = 12
+    private let minLineHeight: CGFloat = L5Spacing.x6
+    private let maxLineCount: CGFloat = L5Spacing.x3
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -442,13 +469,15 @@ private struct AddMenu: View {
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 18, weight: .regular))
-                .frame(width: 30, height: 30)
+                .font(.system(size: L5Size.icon, weight: .regular))
+                .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
                 .contentShape(Circle())
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(width: L5Size.hitTarget, height: L5Size.hitTarget, alignment: .leading)
         .help("Add")
     }
 
@@ -461,6 +490,51 @@ private struct AddMenu: View {
         panel.begin { response in
             guard response == .OK else { return }
             addAttachmentsAction(panel.urls, kind)
+        }
+    }
+}
+
+private struct ApprovalModeSelector: View {
+    let selectedMode: ApprovalMode
+    let selectAction: (ApprovalMode) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(ApprovalMode.allCases) { mode in
+                Button(mode.label) {
+                    selectAction(mode)
+                }
+            }
+        } label: {
+            HStack(spacing: L5Spacing.x1) {
+                Image(systemName: systemImage)
+                    .frame(width: L5Size.icon)
+                Text(selectedMode.label)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(L5Font.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, L5Spacing.x2)
+            .frame(height: L5Size.hitTarget)
+            .contentShape(RoundedRectangle(cornerRadius: L5Radius.button, style: .continuous))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Approval mode")
+    }
+
+    private var systemImage: String {
+        switch selectedMode {
+        case .ask:
+            "person.crop.circle.badge.questionmark"
+        case .approveForMe:
+            "checkmark.seal"
+        case .fullAccess:
+            "lock.open"
         }
     }
 }
@@ -489,12 +563,12 @@ private struct ModelSelector: View {
             .font(L5Font.caption)
             .foregroundStyle(.secondary)
             .padding(.horizontal, L5Spacing.x2)
-            .frame(height: 30)
+            .frame(height: L5Size.hitTarget)
             .contentShape(RoundedRectangle(cornerRadius: L5Radius.button, style: .continuous))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
-        .frame(maxWidth: 170)
+        .fixedSize(horizontal: true, vertical: false)
         .overlay(alignment: .trailing) {
             if isSaving {
                 ProgressView()
@@ -512,6 +586,186 @@ private struct ModelSelector: View {
     }
 }
 
+private struct PermissionTakeoverView: View {
+    let request: PermissionRequest
+    @Binding var highlightedIndex: Int
+    @Binding var instructionText: String
+    let respondAction: (String) -> Void
+    let rejectWithInstructionsAction: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: L5Spacing.x3) {
+            HStack(alignment: .top, spacing: L5Spacing.x3) {
+                Image(systemName: "hand.raised")
+                    .font(.system(size: L5Size.icon, weight: .semibold))
+                    .foregroundStyle(L5Color.warning)
+                    .frame(width: L5Size.action)
+
+                VStack(alignment: .leading, spacing: L5Spacing.x1) {
+                    Text(request.title)
+                        .font(L5Font.body)
+                        .foregroundStyle(L5Color.textPrimary)
+                        .lineLimit(2)
+
+                    if let summary {
+                        Text(summary)
+                            .font(L5Font.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            if let detailText {
+                Text(detailText)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(L5Spacing.x2)
+                    .background(Color(nsColor: .textBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
+            }
+
+            VStack(spacing: L5Spacing.x1) {
+                ForEach(Array(request.options.enumerated()), id: \.element.id) { index, option in
+                    Button {
+                        respondAction(option.optionId)
+                    } label: {
+                        HStack(spacing: L5Spacing.x3) {
+                            Image(systemName: option.isAllowLike ? "checkmark.circle" : option.isRejectLike ? "xmark.circle" : "circle")
+                                .frame(width: L5Size.icon)
+                                .foregroundStyle(option.isAllowLike ? L5Color.success : option.isRejectLike ? L5Color.warning : .secondary)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.name)
+                                    .font(L5Font.caption)
+                                    .foregroundStyle(L5Color.textPrimary)
+                                if let kind = option.kind {
+                                    Text(kind)
+                                        .font(L5Font.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, L5Spacing.x2)
+                        .frame(height: 42)
+                        .background {
+                            if index == highlightedIndex {
+                                RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous)
+                                    .fill(Color(nsColor: .controlAccentColor).opacity(0.16))
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .focusable()
+            .onMoveCommand { direction in
+                guard !request.options.isEmpty else { return }
+                switch direction {
+                case .up:
+                    highlightedIndex = max(0, highlightedIndex - 1)
+                case .down:
+                    highlightedIndex = min(request.options.count - 1, highlightedIndex + 1)
+                default:
+                    break
+                }
+            }
+            .background(
+                PermissionKeyHandler(
+                    moveUp: {
+                        highlightedIndex = max(0, highlightedIndex - 1)
+                    },
+                    moveDown: {
+                        highlightedIndex = min(max(request.options.count - 1, 0), highlightedIndex + 1)
+                    },
+                    accept: {
+                        guard request.options.indices.contains(highlightedIndex) else { return }
+                        respondAction(request.options[highlightedIndex].optionId)
+                    }
+                )
+            )
+
+            HStack(spacing: L5Spacing.x2) {
+                TextField("Instructions after rejecting", text: $instructionText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...3)
+
+                Button {
+                    rejectWithInstructionsAction(instructionText)
+                    instructionText = ""
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                        .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(instructionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Reject and send instructions")
+            }
+        }
+        .onAppear {
+            highlightedIndex = min(highlightedIndex, max(request.options.count - 1, 0))
+        }
+    }
+
+    private var summary: String? {
+        [request.toolKind, request.toolStatus].compactMap { $0 }.joined(separator: " - ").nonEmpty
+    }
+
+    private var detailText: String? {
+        request.detail?.nonEmpty ?? request.rawInput?.nonEmpty
+    }
+}
+
+private struct PermissionKeyHandler: NSViewRepresentable {
+    let moveUp: () -> Void
+    let moveDown: () -> Void
+    let accept: () -> Void
+
+    func makeNSView(context: Context) -> KeyView {
+        let view = KeyView()
+        view.moveUpAction = moveUp
+        view.moveDownAction = moveDown
+        view.acceptAction = accept
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
+        return view
+    }
+
+    func updateNSView(_ view: KeyView, context: Context) {
+        view.moveUpAction = moveUp
+        view.moveDownAction = moveDown
+        view.acceptAction = accept
+    }
+
+    final class KeyView: NSView {
+        var moveUpAction: (() -> Void)?
+        var moveDownAction: (() -> Void)?
+        var acceptAction: (() -> Void)?
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 36:
+                acceptAction?()
+            case 53:
+                break
+            case 125:
+                moveDownAction?()
+            case 126:
+                moveUpAction?()
+            default:
+                super.keyDown(with: event)
+            }
+        }
+    }
+}
+
 private struct AttachmentChipsView: View {
     let chips: [ComposerAttachmentChip]
     let removeAction: (ComposerAttachment) -> Void
@@ -522,10 +776,10 @@ private struct AttachmentChipsView: View {
                 ForEach(chips) { chip in
                     HStack(spacing: L5Spacing.x3) {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            RoundedRectangle(cornerRadius: L5Radius.medium, style: .continuous)
                                 .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
                             Image(systemName: "doc.text")
-                                .font(.system(size: 24, weight: .medium))
+                                .font(.system(size: L5Size.action, weight: .medium))
                                 .foregroundStyle(.secondary)
                         }
                         .frame(width: 56, height: 56)
@@ -576,14 +830,14 @@ private struct SlashCommandAutocomplete: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(commands.prefix(12).enumerated()), id: \.element.id) { index, command in
+                ForEach(Array(commands.prefix(maxVisibleCommands).enumerated()), id: \.element.id) { index, command in
                 Button {
                     acceptAction(command)
                 } label: {
                     HStack(spacing: L5Spacing.x3) {
                         Image(systemName: command.systemImage)
-                            .font(.system(size: 18, weight: .medium))
-                            .frame(width: 28)
+                            .font(.system(size: L5Size.icon, weight: .medium))
+                            .frame(width: L5Size.action)
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: L5Spacing.x2) {
@@ -616,13 +870,24 @@ private struct SlashCommandAutocomplete: View {
                 }
             }
         }
-        .frame(maxHeight: 350)
+        .frame(height: popupHeight)
         .padding(.vertical, L5Spacing.x1)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: L5Radius.input, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: L5Radius.input, style: .continuous)
                 .stroke(L5Color.border, lineWidth: 1)
         }
+        .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+        .zIndex(20)
+    }
+
+    private var popupHeight: CGFloat {
+        let visibleCount = min(commands.count, maxVisibleCommands)
+        return min(CGFloat(visibleCount) * 44 + L5Spacing.x2, 350)
+    }
+
+    private var maxVisibleCommands: Int {
+        Int(L5Spacing.x3)
     }
 }
 
@@ -678,6 +943,10 @@ private struct ComposerContextFooter: View {
 }
 
 private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
+    }
+
     var currentSlashToken: Substring? {
         guard let slashIndex = lastIndex(of: "/") else { return nil }
         let token = self[slashIndex...]
@@ -704,7 +973,7 @@ private struct FooterItem: View {
     var body: some View {
         HStack(spacing: L5Spacing.x2) {
             Image(systemName: systemImage)
-                .frame(width: 18)
+                .frame(width: L5Size.icon)
 
             Text(title)
                 .lineLimit(1)
@@ -789,7 +1058,7 @@ private struct RecentProjectRow: View {
             Button(action: selectAction) {
                 HStack(spacing: L5Spacing.x3) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "folder")
-                        .frame(width: 18)
+                        .frame(width: L5Size.icon)
 
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: L5Spacing.x2) {
@@ -820,7 +1089,7 @@ private struct RecentProjectRow: View {
 
             Button(action: removeAction) {
                 Image(systemName: "xmark")
-                    .frame(width: 24, height: 24)
+                    .frame(width: L5Size.action, height: L5Size.action)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -839,7 +1108,7 @@ private struct PickerCommandButton: View {
         Button(action: action) {
             HStack(spacing: L5Spacing.x3) {
                 Image(systemName: systemImage)
-                    .frame(width: 18)
+                    .frame(width: L5Size.icon)
                 Text(title)
                 Spacer()
             }

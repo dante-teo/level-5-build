@@ -60,6 +60,53 @@ struct AgentSessionModelTests {
         #expect(model.transcript.isEmpty)
     }
 
+    @Test("Default approval mode asks for approval")
+    func defaultApprovalModeAsksForApproval() {
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { FakeAgentSessionClient() },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        #expect(model.approvalMode == .ask)
+    }
+
+    @Test("Approval mode persists per backend")
+    func approvalModePersistsPerBackend() {
+        final class Box: @unchecked Sendable {
+            var values: [AgentBackendKind: ApprovalMode] = [.acpMock: .fullAccess]
+        }
+        let box = Box()
+        let store = ApprovalModePreferenceStore(
+            load: { backend in box.values[backend] ?? .ask },
+            save: { mode, backend in box.values[backend] = mode }
+        )
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { FakeAgentSessionClient() },
+            approvalModePreferenceStore: store
+        )
+
+        #expect(model.approvalMode == .fullAccess)
+        model.selectApprovalMode(.approveForMe)
+
+        let reloaded = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { FakeAgentSessionClient() },
+            approvalModePreferenceStore: store
+        )
+        #expect(reloaded.approvalMode == .approveForMe)
+    }
+
+    @Test("Allow-like option detection normalizes labels and identifiers")
+    func allowLikeOptionDetectionNormalizesValues() {
+        #expect(PermissionOption(optionId: "allow-once", name: "Proceed", kind: nil).isAllowLike)
+        #expect(PermissionOption(optionId: "tool_allow_once", name: "Proceed", kind: nil).isAllowLike)
+        #expect(PermissionOption(optionId: "continue", name: "Always Allow", kind: nil).isAllowLike)
+        #expect(PermissionOption(optionId: "continue", name: "Proceed", kind: "allow_once").isAllowLike)
+        #expect(PermissionOption(optionId: "reject-once", name: "Reject", kind: nil).isAllowLike == false)
+    }
+
     @Test("Startup initializes and loads paginated session summaries")
     func startupLoadsSessionSummaries() async throws {
         let client = FakeAgentSessionClient()
@@ -503,6 +550,199 @@ struct AgentSessionModelTests {
         #expect(model.transcript.contains { $0.errorText?.contains("Prompt failed") == true })
     }
 
+    @Test("Ask approval stores active pending request and blocks composer")
+    func askApprovalStoresActivePendingRequestAndBlocksComposer() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest?.sessionId == "s1" }
+
+        #expect(model.canEditComposer == false)
+        #expect(model.canSendWithButton == false)
+        #expect(model.sessions.first(where: { $0.sessionId == "s1" })?.isAwaitingPermission == true)
+    }
+
+    @Test("Choosing permission option sends selected ACP response")
+    func choosingPermissionOptionSendsSelectedACPResponse() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest != nil }
+
+        model.respondToPermission(optionId: "allow-always")
+        try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
+
+        #expect(client.permissionResponsesSnapshot == [.init(
+            requestId: .int(12),
+            optionId: "allow-always",
+            localInstructionText: nil
+        )])
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.canEditComposer)
+    }
+
+    @Test("Failed permission response clears takeover and restores composer")
+    func failedPermissionResponseClearsTakeoverAndRestoresComposer() async throws {
+        let client = FakeAgentSessionClient()
+        client.permissionResponseFailures = [.int(12)]
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest != nil }
+
+        model.respondToPermission(optionId: "allow-once")
+        try await waitUntil { model.runtimeMessage?.contains("Permission response failed") == true }
+
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.canEditComposer)
+    }
+
+    @Test("Background session permission does not block current session")
+    func backgroundSessionPermissionDoesNotBlockCurrentSession() async throws {
+        let client = FakeAgentSessionClient()
+        client.listResults = [
+            .init(sessions: [
+                .init(sessionId: "s1", title: "One"),
+                .init(sessionId: "s2", title: "Two")
+            ])
+        ]
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.start()
+        try await waitUntil { model.sessions.count == 2 }
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(22), sessionId: "s2")
+        try await waitUntil {
+            model.sessions.first(where: { $0.sessionId == "s2" })?.isAwaitingPermission == true
+        }
+
+        #expect(model.activeSessionId == "s1")
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.canEditComposer)
+    }
+
+    @Test("Approve for me auto-approves mock permission with status note")
+    func approveForMeAutoApprovesMockPermissionWithStatusNote() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectApprovalMode(.approveForMe)
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
+
+        #expect(client.permissionResponsesSnapshot.first?.optionId == "allow-once")
+        #expect(model.activePermissionRequest == nil)
+        #expect(model.transcript.contains { $0.statusText?.contains("Approve for me") == true })
+    }
+
+    @Test("Full access auto-approves silently")
+    func fullAccessAutoApprovesSilently() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectApprovalMode(.fullAccess)
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
+
+        #expect(client.permissionResponsesSnapshot.first?.optionId == "allow-once")
+        #expect(model.transcript.contains { $0.statusText?.contains("Approve for me") == true } == false)
+    }
+
+    @Test("Automatic approval falls back to first option")
+    func automaticApprovalFallsBackToFirstOption() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectApprovalMode(.fullAccess)
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitPermissionRequest(
+            id: .int(12),
+            sessionId: "s1",
+            options: [
+                ["optionId": "continue", "name": "Continue", "kind": "continue"],
+                ["optionId": "stop", "name": "Stop", "kind": "stop"]
+            ]
+        )
+        try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
+
+        #expect(client.permissionResponsesSnapshot.first?.optionId == "continue")
+    }
+
+    @Test("Reject with instructions responds with reject option and queues follow-up")
+    func rejectWithInstructionsRespondsAndQueuesFollowUp() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(
+            backendKind: .acpMock,
+            makeClient: { client },
+            approvalModePreferenceStore: .ephemeral
+        )
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        client.emitPermissionRequest(id: .int(12), sessionId: "s1")
+        try await waitUntil { model.activePermissionRequest != nil }
+
+        model.rejectPermissionWithInstructions("Try a safer edit")
+        try await waitUntil { client.permissionResponsesSnapshot.count == 1 && model.activeQueue.count == 1 }
+
+        #expect(client.permissionResponsesSnapshot.first == .init(
+            requestId: .int(12),
+            optionId: "reject-once",
+            localInstructionText: "Try a safer edit"
+        ))
+        #expect(model.activeQueue.map(\.text) == ["Try a safer edit"])
+
+        client.releaseNextPrompt()
+        try await waitUntil { client.prompts.map(\.text) == ["first", "Try a safer edit"] }
+        client.releaseNextPrompt()
+    }
+
     @Test("Delete refreshes list and clears active deleted session")
     func deleteRefreshesAndClearsActiveSession() async throws {
         let client = FakeAgentSessionClient()
@@ -583,6 +823,8 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     ]
     var setModelRequests: [ModelRequest] = []
     var setModelFailures: Set<String> = []
+    var permissionResponses: [PermissionResponse] = []
+    var permissionResponseFailures: Set<AcpRpcID> = []
     var prompts: [Prompt] = []
     var promptFailures: Set<String> = []
     var failBeforeUserEchoPrompts: Set<String> = []
@@ -611,6 +853,10 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     var modelOptionSessionIdsSnapshot: [String?] {
         lock.withLock { modelOptionSessionIds }
+    }
+
+    var permissionResponsesSnapshot: [PermissionResponse] {
+        lock.withLock { permissionResponses }
     }
 
     init() {
@@ -739,7 +985,12 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         return .init(stopReason: "end_turn")
     }
 
-    func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws {}
+    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
+        lock.withLock { permissionResponses.append(response) }
+        if lock.withLock({ permissionResponseFailures.contains(response.requestId) }) {
+            throw FakeClientError.promptFailed
+        }
+    }
 
     func terminate() {}
 
@@ -795,6 +1046,37 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 "used": .number(Double(used)),
                 "size": .number(Double(size))
             ]
+        ]))
+    }
+
+    func emitPermissionRequest(
+        id: AcpRpcID,
+        sessionId: String,
+        options: [JSONValue] = [
+            ["optionId": "allow-once", "name": "Allow once", "kind": "allow_once"],
+            ["optionId": "allow-always", "name": "Always allow mock edits", "kind": "allow_always"],
+            ["optionId": "reject-once", "name": "Reject", "kind": "reject_once"]
+        ]
+    ) {
+        continuation.yield(.serverRequest(id: id, method: AcpMethod.sessionRequestPermission, params: [
+            "sessionId": .string(sessionId),
+            "toolCall": [
+                "toolCallId": "tool-1",
+                "title": "Applying protected mock edit",
+                "kind": "edit",
+                "status": "pending",
+                "content": [[
+                    "type": "content",
+                    "content": [
+                        "type": "text",
+                        "text": "This is a simulated protected action."
+                    ]
+                ]],
+                "rawInput": [
+                    "reason": "exercise permission UI"
+                ]
+            ],
+            "options": .array(options)
         ]))
     }
 
@@ -935,6 +1217,11 @@ private extension AgentTranscriptItem {
     var errorText: String? {
         guard case let .error(error) = kind else { return nil }
         return error.text
+    }
+
+    var statusText: String? {
+        guard case let .status(status) = kind else { return nil }
+        return status.text
     }
 }
 

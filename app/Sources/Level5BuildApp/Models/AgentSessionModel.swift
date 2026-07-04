@@ -9,6 +9,7 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
     public var updatedAt: Date?
     public var observedAt: Date?
     public var isRunning: Bool
+    public var isAwaitingPermission: Bool
 
     public init(
         sessionId: String,
@@ -16,7 +17,8 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
         detail: String,
         updatedAt: Date? = nil,
         observedAt: Date? = nil,
-        isRunning: Bool = false
+        isRunning: Bool = false,
+        isAwaitingPermission: Bool = false
     ) {
         self.sessionId = sessionId
         self.title = title
@@ -24,6 +26,7 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.observedAt = observedAt
         self.isRunning = isRunning
+        self.isAwaitingPermission = isAwaitingPermission
     }
 }
 
@@ -56,6 +59,8 @@ final class AgentSessionModel {
     private(set) var modelOptions: [ComposerModelOption] = []
     private(set) var slashCommands: [ComposerCommand] = []
     private(set) var sessionModelSaveInFlight = false
+    private(set) var approvalMode: ApprovalMode
+    private(set) var pendingPermissionRequests: [String: PermissionRequest] = [:]
 
     private var transcriptStates: [String: AgentTranscriptState] = [:]
     private var queues: [String: [QueuedPrompt]] = [:]
@@ -73,6 +78,7 @@ final class AgentSessionModel {
     private var eventTask: Task<Void, Never>?
     private let backendKind: AgentBackendKind
     private let makeClient: @Sendable () throws -> AgentSessionClient
+    private let approvalModePreferenceStore: ApprovalModePreferenceStore
     private let now: @Sendable () -> Date
     private let homeDirectoryPath: String
     private let isoFormatter = ISO8601DateFormatter()
@@ -85,11 +91,14 @@ final class AgentSessionModel {
     init(
         backendKind: AgentBackendKind,
         makeClient: @escaping @Sendable () throws -> AgentSessionClient,
+        approvalModePreferenceStore: ApprovalModePreferenceStore = .userDefaults,
         now: @escaping @Sendable () -> Date = Date.init,
         homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path
     ) {
         self.backendKind = backendKind
         self.makeClient = makeClient
+        self.approvalModePreferenceStore = approvalModePreferenceStore
+        approvalMode = approvalModePreferenceStore.load(backendKind)
         self.now = now
         self.homeDirectoryPath = homeDirectoryPath
         switch backendKind {
@@ -136,6 +145,10 @@ final class AgentSessionModel {
         activeSessionId.map { runningSessionIds.contains($0) } ?? false
     }
 
+    var activePermissionRequest: PermissionRequest? {
+        activeSessionId.flatMap { pendingPermissionRequests[$0] }
+    }
+
     var isNewSession: Bool {
         activeSessionId == nil
     }
@@ -155,7 +168,8 @@ final class AgentSessionModel {
     }
 
     var canEditComposer: Bool {
-        switch backendKind {
+        guard activePermissionRequest == nil else { return false }
+        return switch backendKind {
         case .acpMock:
             true
         case .unavailable:
@@ -268,6 +282,37 @@ final class AgentSessionModel {
         }
     }
 
+    func selectApprovalMode(_ mode: ApprovalMode) {
+        approvalMode = mode
+        approvalModePreferenceStore.save(mode, backendKind)
+    }
+
+    func respondToPermission(optionId: String) {
+        guard let request = activePermissionRequest else { return }
+        Task {
+            await sendPermissionResponse(
+                request: request,
+                optionId: optionId,
+                localInstructionText: nil,
+                followUpInstruction: nil
+            )
+        }
+    }
+
+    func rejectPermissionWithInstructions(_ instructionText: String) {
+        guard let request = activePermissionRequest else { return }
+        guard let option = request.rejectInstructionOption else { return }
+        let trimmed = instructionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            await sendPermissionResponse(
+                request: request,
+                optionId: option.optionId,
+                localInstructionText: trimmed.nonEmpty,
+                followUpInstruction: trimmed.nonEmpty
+            )
+        }
+    }
+
     func removeQueuedPrompt(_ prompt: QueuedPrompt) {
         guard let activeSessionId else { return }
         queues[activeSessionId]?.removeAll { $0.id == prompt.id }
@@ -321,6 +366,7 @@ final class AgentSessionModel {
                 queues[sessionId] = nil
                 draftsBySessionId[sessionId] = nil
                 followTailBySessionId[sessionId] = nil
+                pendingPermissionRequests[sessionId] = nil
                 runningSessionIds.remove(sessionId)
                 if activeSessionId == sessionId {
                     activeSessionId = nil
@@ -602,9 +648,9 @@ final class AgentSessionModel {
         case let .notification(method, params):
             guard method == AcpMethod.sessionUpdate, let params else { return }
             handleSessionUpdate(params)
-        case let .serverRequest(id, method, _):
+        case let .serverRequest(id, method, params):
             if method == AcpMethod.sessionRequestPermission {
-                try? await client?.respondToPermissionRequest(id: id, allow: true)
+                await handlePermissionRequest(id: id, params: params)
             }
         case let .diagnostic(diagnostic):
             appendStatus(title: "Diagnostic", text: diagnostic.message, to: activeSessionId)
@@ -618,6 +664,82 @@ final class AgentSessionModel {
             appendError(title: "Runtime exited", text: "Agent runtime exited with status \(exit.status).", key: "process-exit-\(exit.status)", to: activeSessionId)
         case .activity:
             break
+        }
+    }
+
+    private func handlePermissionRequest(id: AcpRpcID, params: JSONValue?) async {
+        guard let request = PermissionRequest.parse(requestId: id, params: params) else {
+            runtimeMessage = "Permission request could not be read."
+            return
+        }
+
+        switch approvalMode {
+        case .ask:
+            pendingPermissionRequests[request.sessionId] = request
+            ensureSessionRowExists(for: request.sessionId)
+            updatePermissionFlags()
+        case .approveForMe:
+            guard let option = request.automaticApprovalOption else {
+                runtimeMessage = "Permission request had no available options."
+                return
+            }
+            appendStatus(title: "Permission", text: "Approved \"\(request.title)\" (Approve for me).", to: request.sessionId)
+            await sendPermissionResponse(
+                request: request,
+                optionId: option.optionId,
+                localInstructionText: nil,
+                followUpInstruction: nil
+            )
+        case .fullAccess:
+            guard let option = request.automaticApprovalOption else {
+                runtimeMessage = "Permission request had no available options."
+                return
+            }
+            await sendPermissionResponse(
+                request: request,
+                optionId: option.optionId,
+                localInstructionText: nil,
+                followUpInstruction: nil
+            )
+        }
+    }
+
+    private func sendPermissionResponse(
+        request: PermissionRequest,
+        optionId: String,
+        localInstructionText: String?,
+        followUpInstruction: String?
+    ) async {
+        do {
+            try await client?.respondToPermissionRequest(.init(
+                requestId: request.requestId,
+                optionId: optionId,
+                localInstructionText: localInstructionText
+            ))
+            pendingPermissionRequests[request.sessionId] = nil
+            updatePermissionFlags()
+            runtimeMessage = nil
+            if let followUpInstruction {
+                enqueueOrSendInstruction(followUpInstruction, for: request.sessionId)
+            }
+        } catch {
+            pendingPermissionRequests[request.sessionId] = nil
+            updatePermissionFlags()
+            runtimeMessage = "Permission response failed: \(userFacingError(error))"
+        }
+    }
+
+    private func enqueueOrSendInstruction(_ text: String, for sessionId: String) {
+        var followUp = ComposerDraft()
+        followUp.appendText(text)
+        if runningSessionIds.contains(sessionId) {
+            enqueue(followUp, for: sessionId)
+            return
+        }
+        Task {
+            runningSessionIds.insert(sessionId)
+            updateRunningFlags()
+            await send(followUp, to: sessionId, isAlreadyMarkedRunning: true)
         }
     }
 
@@ -666,7 +788,8 @@ final class AgentSessionModel {
                 detail: "Session",
                 updatedAt: updatedAt,
                 observedAt: nil,
-                isRunning: runningSessionIds.contains(sessionId)
+                isRunning: runningSessionIds.contains(sessionId),
+                isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
             ))
         }
         sortSessions()
@@ -679,7 +802,8 @@ final class AgentSessionModel {
             detail: folderDetail(summary.cwd),
             updatedAt: summary.updatedAt.flatMap(parseDate),
             observedAt: nil,
-            isRunning: runningSessionIds.contains(summary.sessionId)
+            isRunning: runningSessionIds.contains(summary.sessionId),
+            isAwaitingPermission: pendingPermissionRequests[summary.sessionId] != nil
         )
     }
 
@@ -720,6 +844,24 @@ final class AgentSessionModel {
         for index in sessions.indices {
             sessions[index].isRunning = runningSessionIds.contains(sessions[index].sessionId)
         }
+    }
+
+    private func updatePermissionFlags() {
+        for index in sessions.indices {
+            sessions[index].isAwaitingPermission = pendingPermissionRequests[sessions[index].sessionId] != nil
+        }
+    }
+
+    private func ensureSessionRowExists(for sessionId: String) {
+        guard sessions.contains(where: { $0.sessionId == sessionId }) == false else { return }
+        upsert(.init(
+            sessionId: sessionId,
+            title: sessionId,
+            detail: "Session",
+            observedAt: now(),
+            isRunning: runningSessionIds.contains(sessionId),
+            isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
+        ))
     }
 
     private func appendUser(_ text: String, to sessionId: String) {

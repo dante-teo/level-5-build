@@ -12,6 +12,8 @@ struct WorkspaceView: View {
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
+    let approvalMode: ApprovalMode
+    let pendingPermissionRequest: PermissionRequest?
     let isActiveSessionRunning: Bool
     let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
@@ -21,6 +23,9 @@ struct WorkspaceView: View {
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
     let selectModelAction: (String) -> Void
+    let selectApprovalModeAction: (ApprovalMode) -> Void
+    let respondToPermissionAction: (String) -> Void
+    let rejectPermissionWithInstructionsAction: (String) -> Void
     let addAttachmentsAction: ([URL], ComposerAttachment.Kind) -> Void
     let removeAttachmentAction: (ComposerAttachment) -> Void
     let acceptSlashCommandAction: (ComposerCommand) -> Void
@@ -41,6 +46,8 @@ struct WorkspaceView: View {
                     draft: $draft,
                     modelOptions: modelOptions,
                     slashCommands: slashCommands,
+                    approvalMode: approvalMode,
+                    pendingPermissionRequest: pendingPermissionRequest,
                     isActiveSessionRunning: isActiveSessionRunning,
                     isModelSaveInFlight: isModelSaveInFlight,
                     selectedProject: selectedProject,
@@ -50,6 +57,9 @@ struct WorkspaceView: View {
                     isComposerFocused: isComposerFocused,
                     sendAction: sendAction,
                     selectModelAction: selectModelAction,
+                    selectApprovalModeAction: selectApprovalModeAction,
+                    respondToPermissionAction: respondToPermissionAction,
+                    rejectPermissionWithInstructionsAction: rejectPermissionWithInstructionsAction,
                     addAttachmentsAction: addAttachmentsAction,
                     removeAttachmentAction: removeAttachmentAction,
                     acceptSlashCommandAction: acceptSlashCommandAction,
@@ -80,6 +90,8 @@ struct WorkspaceView: View {
                             draft: $draft,
                             modelOptions: modelOptions,
                             slashCommands: slashCommands,
+                            approvalMode: approvalMode,
+                            pendingPermissionRequest: pendingPermissionRequest,
                             isActiveSessionRunning: isActiveSessionRunning,
                             isModelSaveInFlight: isModelSaveInFlight,
                             isNewSession: false,
@@ -90,6 +102,9 @@ struct WorkspaceView: View {
                             isFocused: isComposerFocused,
                             sendAction: sendAction,
                             selectModelAction: selectModelAction,
+                            selectApprovalModeAction: selectApprovalModeAction,
+                            respondToPermissionAction: respondToPermissionAction,
+                            rejectPermissionWithInstructionsAction: rejectPermissionWithInstructionsAction,
                             addAttachmentsAction: addAttachmentsAction,
                             removeAttachmentAction: removeAttachmentAction,
                             acceptSlashCommandAction: acceptSlashCommandAction,
@@ -122,6 +137,8 @@ private struct NewSessionView: View {
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
+    let approvalMode: ApprovalMode
+    let pendingPermissionRequest: PermissionRequest?
     let isActiveSessionRunning: Bool
     let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
@@ -131,6 +148,9 @@ private struct NewSessionView: View {
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
     let selectModelAction: (String) -> Void
+    let selectApprovalModeAction: (ApprovalMode) -> Void
+    let respondToPermissionAction: (String) -> Void
+    let rejectPermissionWithInstructionsAction: (String) -> Void
     let addAttachmentsAction: ([URL], ComposerAttachment.Kind) -> Void
     let removeAttachmentAction: (ComposerAttachment) -> Void
     let acceptSlashCommandAction: (ComposerCommand) -> Void
@@ -157,6 +177,8 @@ private struct NewSessionView: View {
                     draft: $draft,
                     modelOptions: modelOptions,
                     slashCommands: slashCommands,
+                    approvalMode: approvalMode,
+                    pendingPermissionRequest: pendingPermissionRequest,
                     isActiveSessionRunning: isActiveSessionRunning,
                     isModelSaveInFlight: isModelSaveInFlight,
                     isNewSession: true,
@@ -167,6 +189,9 @@ private struct NewSessionView: View {
                     isFocused: isComposerFocused,
                     sendAction: sendAction,
                     selectModelAction: selectModelAction,
+                    selectApprovalModeAction: selectApprovalModeAction,
+                    respondToPermissionAction: respondToPermissionAction,
+                    rejectPermissionWithInstructionsAction: rejectPermissionWithInstructionsAction,
                     addAttachmentsAction: addAttachmentsAction,
                     removeAttachmentAction: removeAttachmentAction,
                     acceptSlashCommandAction: acceptSlashCommandAction,

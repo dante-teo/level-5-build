@@ -71,7 +71,7 @@ private struct Level5IdentityHeader: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
 
             VStack(alignment: .leading, spacing: L5Spacing.x1) {
                 Text("Level5")
@@ -96,7 +96,7 @@ private struct SidebarRow: View {
         HStack(spacing: L5Spacing.x3) {
             Image(systemName: systemImage)
                 .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .frame(width: L5Size.icon)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -121,9 +121,9 @@ private struct SidebarSessionRow: View {
         HStack(spacing: L5Spacing.x2) {
             Button(action: selectAction) {
                 HStack(spacing: L5Spacing.x3) {
-                    Image(systemName: session.isRunning ? "circle.dotted" : "bubble.left")
-                        .foregroundStyle(session.isRunning ? L5Color.accent : .secondary)
-                        .frame(width: 16)
+                    Image(systemName: sessionIcon)
+                        .foregroundStyle(sessionIconColor)
+                        .frame(width: L5Size.icon)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.title)
@@ -145,11 +145,21 @@ private struct SidebarSessionRow: View {
 
             Button(action: deleteAction) {
                 Image(systemName: "trash")
-                    .frame(width: 24, height: 24)
+                    .frame(width: L5Size.action, height: L5Size.action)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("Delete")
         }
+    }
+
+    private var sessionIcon: String {
+        if session.isAwaitingPermission { return "hand.raised" }
+        return session.isRunning ? "circle.dotted" : "bubble.left"
+    }
+
+    private var sessionIconColor: Color {
+        if session.isAwaitingPermission { return L5Color.warning }
+        return session.isRunning ? L5Color.accent : .secondary
     }
 }

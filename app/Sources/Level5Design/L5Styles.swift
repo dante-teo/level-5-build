@@ -87,7 +87,7 @@ public struct L5ButtonStyle: ButtonStyle {
             .font(L5Font.body.weight(.semibold))
             .foregroundStyle(foregroundStyle)
             .padding(.horizontal, L5Spacing.x4)
-            .frame(height: 32)
+            .frame(height: L5Size.control)
             .background {
                 buttonBackground(configuration)
                     .clipShape(RoundedRectangle(cornerRadius: L5Radius.button, style: .continuous))

@@ -84,6 +84,8 @@ The native model supports multiple sessions with running turns at once. Each ses
 
 The composer uses a narrow AppKit-backed `NSTextView` bridge for multiline editing and Return/Shift-Return handling, with SwiftUI owning the structured draft. The text area starts at one line, grows with content, and caps at 12 lines before internal scrolling. The `+` menu can add files through `NSOpenPanel` or insert backend slash commands. Attachments are capped at 10, deduped by standardized path, rendered as removable chips, and serialized as ACP `resource_link` blocks without reading file contents. Accepted commands are stored as tokens and serialized inline as slash text with minimal spacing. The toolbar model selector is populated from backend discovery/config; New Chat keeps the last selected model for the current backend when still available, and existing-session changes save optimistically through `session/set_config_option`, rolling back only the affected session if saving fails.
 
+The composer toolbar also owns the app-private approval mode selector. Approval mode defaults to `Ask for approval` and is persisted per backend in `UserDefaults`. In `Ask for approval`, ACP `session/request_permission` requests are stored by `sessionId`; only the active session's pending request takes over the composer, while background session requests mark that sidebar row as awaiting approval. In `Approve for me`, the mock backend chooses an allow-like option when possible, falls back to the first option, and emits a compact status note. In `Full access`, the app chooses the same allow-like fallback silently. User-selected responses use ACP's selected outcome shape, `{ "outcome": { "outcome": "selected", "optionId": "<id>" } }`. Reject-with-instructions answers with a reject-like option and sends the typed instructions as the next prompt for that same session through the normal queue/send path.
+
 Transcripts are stored as app-private structured state, not flat local role/text rows. ACP updates normalize into deterministic transcript events for message chunks, plans, tool calls, usage, statuses, errors, and stop reasons. Messages merge by `messageId` when available and fall back to contiguous same-role merging without an ID. Unsupported non-text blocks are retained as compact unsupported-block counts. Plans, tool calls, and usage render as compact inline operational cards; detailed dashboards, diffs, and terminal panes are intentionally deferred.
 
 Transcript views follow the tail by default per session. When the user scrolls away from the bottom, that session stops auto-scrolling; it resumes only after the user scrolls back to the bottom. Reselecting a session preserves its existing follow-tail state. The native scroll controller reads `NSScrollView` document bounds, visible rect, and user input events; new transcript content only settles to bottom while follow-tail was already enabled. This state is in-memory and scoped per active session.
@@ -102,7 +104,7 @@ Import `Level5Design` from app views and use the typed `L5` APIs instead of hard
 
 - `L5Color` for adaptive semantic colors.
 - `L5Font` for Barlow and Departure Mono-backed type styles.
-- `L5Spacing`, `L5Radius`, and `L5Elevation` for documented token scales.
+- `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation` for documented token scales.
 - `L5Asset.mark` for the in-app Level5 identity mark.
 - `L5ButtonStyle`, `l5Surface`, `l5InputSurface`, and `l5CompactControl` for primitive SwiftUI styling.
 

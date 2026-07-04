@@ -47,7 +47,7 @@ protocol AgentSessionClient: Sendable {
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand]
     func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult
     func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult
-    func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws
+    func respondToPermissionRequest(_ response: PermissionResponse) async throws
     func terminate()
 }
 
@@ -136,10 +136,11 @@ final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendabl
         try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
-    func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws {
-        try await client.respond(id: id, result: [
+    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
+        try await client.respond(id: response.requestId, result: [
             "outcome": [
-                "optionId": .string(allow ? "allow-once" : "reject-once")
+                "outcome": "selected",
+                "optionId": .string(response.optionId)
             ]
         ])
     }
@@ -255,10 +256,11 @@ final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
         try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
-    func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws {
-        try await client.respond(id: id, result: [
+    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
+        try await client.respond(id: response.requestId, result: [
             "outcome": [
-                "optionId": .string(allow ? "allow-once" : "reject-once")
+                "outcome": "selected",
+                "optionId": .string(response.optionId)
             ]
         ])
     }

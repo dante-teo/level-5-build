@@ -70,7 +70,7 @@ final class TranscriptScrollController: NSObject, ObservableObject {
         case content
     }
 
-    private let bottomThreshold: CGFloat = 24
+    private let bottomThreshold: CGFloat = L5Spacing.x6
     private weak var scrollView: NSScrollView?
     private weak var documentView: NSView?
     private var settleTask: Task<Void, Never>?
@@ -383,9 +383,9 @@ private struct TranscriptRow: View {
             }
             .padding(L5Spacing.x4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(rowMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(rowMaterial, in: RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous)
                     .stroke(L5Color.border, lineWidth: 1)
             }
         }

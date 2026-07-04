@@ -4,6 +4,8 @@
 
 Accepted.
 
+Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime, persistence, review, signing, and release work remain future implementation scope.
+
 ## Context
 
 Level5 Build currently ships an Electrobun proof of concept in `app/`. It has proven the product shape: a desktop coding-agent workspace with ACP chat, local session management, permissions, and review-oriented UI direction. The 1.0 product needs deeper macOS integration than the proof of concept can comfortably provide, including native process supervision, native window and menu behavior, local persistence, signed distribution, and a runtime core that can later be reused by non-GUI clients.

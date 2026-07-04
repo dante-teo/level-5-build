@@ -61,7 +61,7 @@ app/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a minimal native shell only; full workspace layout, persistence, runtime integration, signing, notarization, and packaging are deferred to follow-up issues.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native local shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a local transcript, and a focused prompt composer. Persistence, ACP/runtime integration, signing, notarization, and packaging are deferred to follow-up issues.
 
 ## Design primitives
 
@@ -77,7 +77,7 @@ Import `Level5Design` from app views and use the typed `L5` APIs instead of hard
 
 Native views should follow macOS system behavior and use adaptive materials. The legacy Electrobun CSS remains reference material only; do not copy its web gradients or Tailwind classes into SwiftUI. The primitive glass surfaces fall back to SwiftUI materials for the macOS 14 deployment target, while future SDK-specific Liquid Glass adoption should stay behind availability checks.
 
-Issue #5 should consume `Level5Design` for the real sidebar, workspace, composer, and window shell.
+The shell views in `Sources/Level5BuildApp/Views/` should continue to consume `Level5Design` primitives while keeping runtime/domain state out of the design module.
 
 ## Assets
 
@@ -85,4 +85,4 @@ The native app icon lives in `Resources/Assets.xcassets/AppIcon.appiconset`. `pr
 
 `Resources/AppIconSource.png` is the 1024x1024 source artwork used to regenerate the app icon sizes. Regenerate all files in `AppIcon.appiconset` from that source when the icon changes; do not edit only one size. The SwiftPM run script also compiles this same asset catalog, so the Xcode-built app and `dist/Level5 Build.app` stay visually aligned.
 
-`Sources/Level5BuildApp/Resources/WindowBackground.jpeg` is a temporary scaffold background for visually checking glass/material surfaces. It is app-owned, not part of `Level5Design`, and should be removed or replaced when the real issue #5 shell/workspace lands.
+`Sources/Level5BuildApp/Resources/WindowBackground.jpeg` is a leftover scaffold asset and is no longer used by the active shell UI. Do not reintroduce it as product chrome or a design-system asset.

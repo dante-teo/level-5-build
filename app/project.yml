@@ -69,8 +69,6 @@ targets:
       - path: Sources/Level5BuildApp
         excludes:
           - Resources
-      - path: Sources/Level5BuildApp/Resources/WindowBackground.jpeg
-        buildPhase: resources
       - path: Resources/Assets.xcassets
     dependencies:
       - target: Level5Core

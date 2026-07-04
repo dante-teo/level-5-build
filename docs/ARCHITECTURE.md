@@ -2,7 +2,7 @@
 
 ## Native macOS 1.0 direction
 
-[ADR 0001: Native macOS Client for 1.0](adr/0001-native-macos-client.md) defines the accepted migration direction. The native macOS client will take over `app/`, and the current Electrobun proof of concept will move to `legacy/electrobun-app/` during scaffold work.
+[ADR 0001: Native macOS Client for 1.0](adr/0001-native-macos-client.md) defines the accepted migration direction. The native macOS client owns `app/`, and the Electrobun proof of concept lives in `legacy/electrobun-app/` as reference-only migration material.
 
 `acp-mock-server/` remains active shared test infrastructure for the native client and future clients. It must not move into `legacy/` with the Electrobun proof of concept.
 
@@ -111,13 +111,27 @@ app/
 │   └── Assets.xcassets/
 ├── Sources/
 │   ├── Level5BuildApp/
+│   │   ├── Models/
+│   │   └── Views/
+│   ├── Level5Design/
 │   └── Level5Core/
 └── Tests/
     ├── Level5BuildAppTests/
+    ├── Level5DesignTests/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. `Level5BuildApp` is the SwiftUI app target. The current UI is intentionally a minimal native shell; full workspace layout, ACP runtime, persistence, signing, notarization, and packaging are follow-up work.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. `Level5Design` owns reusable SwiftUI design primitives and bundled in-app identity/font resources. `Level5BuildApp` is the SwiftUI app target.
+
+The current app UI is a native local shell. `ContentView` owns window-scoped shell state and composes:
+
+- `ShellSidebarView` for the native sidebar placeholder structure.
+- `WorkspaceView` and `TranscriptView` for the empty new-session state plus local transcript rows.
+- `ComposerView` for local prompt drafting and sending.
+- `LocalShellModel` for draft/transcript behavior before ACP integration.
+- `ShellCommands` for scene-level menu commands routed through focused values.
+
+This shell intentionally does not start ACP, load persisted sessions, choose projects, manage attachments, or run agent turns yet. Sending a draft appends local transcript items only. ACP runtime integration, durable persistence, review surfaces, signing, notarization, and packaging are follow-up work.
 
 ### Build / dev flow
 

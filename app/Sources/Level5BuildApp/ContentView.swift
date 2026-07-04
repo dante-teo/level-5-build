@@ -1,107 +1,65 @@
-import Level5Core
-import Level5Design
-import AppKit
 import SwiftUI
 
 public struct ContentView: View {
-    private let profile: BuildProfile
-    private let status: ScaffoldStatus
+    @AppStorage("shell.sidebar.isCollapsed") private var isSidebarCollapsed = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var model = LocalShellModel()
+    @FocusState private var isComposerFocused: Bool
 
-    public init(
-        profile: BuildProfile = BuildProfile(),
-        status: ScaffoldStatus = ScaffoldStatus()
-    ) {
-        self.profile = profile
-        self.status = status
-    }
+    public init() {}
 
     public var body: some View {
-        ZStack {
-            WindowBackgroundImage()
-                .ignoresSafeArea()
-
-            VStack(alignment: .leading, spacing: L5Spacing.x6) {
-                HStack(spacing: L5Spacing.x3) {
-                    L5Asset.mark
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: 38, height: 38)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: L5Spacing.x1) {
-                        Text("Level5")
-                            .font(L5Font.h2)
-                            .foregroundStyle(L5Color.textPrimary)
-
-                        Text(profile.displayTitle)
-                            .font(L5Font.caption)
-                            .foregroundStyle(L5Color.textMuted)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: L5Spacing.x4) {
-                    Text(status.title)
-                        .font(L5Font.h1)
-                        .foregroundStyle(L5Color.textPrimary)
-
-                    Text(status.detail)
-                        .font(L5Font.body)
-                        .foregroundStyle(L5Color.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: L5Spacing.x3) {
-                        Button("Design primitives ready") {}
-                            .buttonStyle(L5ButtonStyle(.primary))
-                            .disabled(true)
-
-                        Text("Native SwiftUI surface")
-                            .font(L5Font.caption)
-                            .foregroundStyle(L5Color.textMuted)
-                    }
-                }
-                .padding(L5Spacing.x6)
-                .frame(maxWidth: 480, alignment: .leading)
-                .l5Surface(.glass)
-
-                Spacer()
-
-                Text("Version \(profile.version)")
-                    .font(L5Font.mono(size: 12))
-                    .foregroundStyle(L5Color.textMuted)
-            }
-            .padding(L5Spacing.x8)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            ShellSidebarView(
+                newChatAction: startNewChat
+            )
+            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
+        } detail: {
+            WorkspaceView(
+                transcript: model.transcript,
+                draft: $model.draft,
+                isComposerFocused: $isComposerFocused,
+                sendAction: sendDraft
+            )
         }
-        .frame(minWidth: 640, minHeight: 420, alignment: .topLeading)
-    }
-}
-
-private struct WindowBackgroundImage: View {
-    var body: some View {
-        GeometryReader { proxy in
-            if let image = NSImage(named: "WindowBackground") ?? Self.resourceImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-                    .overlay(L5Color.background.opacity(0.18))
-            } else {
-                L5Color.background
-            }
+        .frame(minWidth: 860, minHeight: 560)
+        .navigationTitle("Level5 Build")
+        .onAppear {
+            columnVisibility = isSidebarCollapsed ? .detailOnly : .all
         }
+        .onChange(of: columnVisibility) { _, visibility in
+            isSidebarCollapsed = visibility == .detailOnly
+        }
+        .focusedValue(\.shellCommands, ShellCommands(
+            newChat: startNewChat,
+            toggleSidebar: toggleSidebar,
+            focusComposer: focusComposer,
+            clearTranscript: clearTranscript
+        ))
     }
 
-    private static var resourceImage: NSImage? {
-        #if SWIFT_PACKAGE
-        if let url = Bundle.module.url(forResource: "WindowBackground", withExtension: "jpeg") {
-            return NSImage(contentsOf: url)
-        }
-        #endif
+    private func startNewChat() {
+        model.startNewChat()
+        focusComposer()
+    }
 
-        guard let url = Bundle.main.url(forResource: "WindowBackground", withExtension: "jpeg") else {
-            return nil
-        }
+    private func sendDraft() {
+        _ = model.sendDraft()
+    }
 
-        return NSImage(contentsOf: url)
+    private func clearTranscript() {
+        model.clearTranscript()
+    }
+
+    private func focusComposer() {
+        isComposerFocused = true
+    }
+
+    private func toggleSidebar() {
+        if columnVisibility == .detailOnly {
+            columnVisibility = .all
+        } else {
+            columnVisibility = .detailOnly
+        }
     }
 }

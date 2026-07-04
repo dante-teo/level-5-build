@@ -58,9 +58,9 @@ App icon artwork is owned by the app target, not by `Level5Design`. The source i
 
 The retired Electrobun proof of concept remains useful for product direction, but native SwiftUI should not clone its Tailwind gradients or CSS implementation. Prefer system-adaptive macOS materials and standard controls. Where current SDKs expose Liquid Glass APIs, use them behind availability checks for custom app-specific surfaces; on the macOS 14 deployment target, fall back to SwiftUI materials such as `.regularMaterial` and `.thinMaterial`.
 
-Issue #5 should use these primitives to build the real sidebar, workspace, composer, and window shell. This design module intentionally stops at reusable primitives.
+The native shell should use these primitives for sidebar, workspace, composer, and window surfaces. This design module intentionally stops at reusable primitives.
 
-The current `ContentView` uses `app/Sources/Level5BuildApp/Resources/WindowBackground.jpeg` only as a temporary visual aid for checking the glass/material treatment. Do not treat that image as product design direction or a reusable design-system asset.
+The active shell no longer uses the old `app/Sources/Level5BuildApp/Resources/WindowBackground.jpeg` scaffold image. Do not treat that image as product design direction or a reusable design-system asset.
 
 ## 4. Color Tokens
 
@@ -164,6 +164,8 @@ Rules:
 
 The first screen should feel like a real app workspace, not a landing page.
 
+Current native shell note: the issue #5 shell is local-only. It uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, local transcript rows, and a native composer. Runtime-backed project/session controls, attachment menus, approval modes, model selection, and review dashboards are future surfaces and should not be shown as inert controls.
+
 ## 10. Sidebar
 
 Width: user-resizable from `260px` to `420px`; collapsed width is `0px`.
@@ -233,17 +235,18 @@ The composer is docked near the bottom of the workspace.
 Rules:
 
 - Large rounded container.
-- Supports text, attachments, agent selection, and send.
+- The current local shell supports text and send only.
+- Runtime-backed composer controls such as attachments, agent/model selection, approval modes, slash commands, and context indicators should appear only when they are backed by real behavior.
 - Grows with content.
 - Maximum height is 8 text lines before internal scrolling.
 - Placeholder text is muted and concise.
 - Send is the only primary action in the composer group while idle. During an active agent turn, the send button becomes a stop button with a small circular loading indicator and sends ACP cancellation; do not add a second competing stop control.
-- In the empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
+- In a future runtime-backed empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
 - Once a chat has visible transcript content, hide the project footer; project context moves to the top capsule when applicable.
-- The `+` icon button opens the composer's "Add to prompt" menu, a single popover with an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group sourced live from the connected agent. Only show a `Skills` group if a real agent surface advertises skills separately; Devin currently exposes skill-like actions as slash commands. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
+- When attachment/slash-command support lands, the `+` icon button opens the composer's "Add to prompt" menu, a single popover with an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group sourced live from the connected agent. Only show a `Skills` group if a real agent surface advertises skills separately; Devin currently exposes skill-like actions as slash commands. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
 - Slash-command and skill tokens typed or inserted into the composer (e.g. `/plan`, `/workspace-search`) are highlighted using the single accent color, keeping the rest of the typed text at its normal style — do not introduce a second highlight color for this.
-- The approval-mode control (icon + label + chevron, next to the `+` menu) opens a popover with a short header question, then one row per mode: an icon, a bold label, and a muted one-line description, with a trailing checkmark on the selected row. Use this row layout for any future single-select "mode" control instead of a native `<select>`.
-- Once a chat has visible transcript content, a small context-usage ring appears immediately to the left of the Model selector: a compact circular progress indicator (accent color, escalating to warning/danger color as usage approaches the limit) showing the fraction of the model's context window used so far. Hovering or focusing it reveals a small rounded info card ("Context window:" label plus a bold "N% used (M% left)" line) anchored above the ring with a caret pointing back at it. This hover-card is a distinct pattern from the click-toggle popovers above (no open/close state, no click target) — reuse it for any future passive, read-only hover indicator rather than adding a third tooltip mechanism alongside native `title` attributes and click-toggle popovers.
+- When approval modes are wired, the approval-mode control (icon + label + chevron, next to the `+` menu) opens a popover with a short header question, then one row per mode: an icon, a bold label, and a muted one-line description, with a trailing checkmark on the selected row. Use this row layout for any future single-select "mode" control instead of a native select-style control.
+- Once runtime usage data exists and a chat has visible transcript content, a small context-usage ring appears immediately to the left of the Model selector: a compact circular progress indicator (accent color, escalating to warning/danger color as usage approaches the limit) showing the fraction of the model's context window used so far. Hovering or focusing it reveals a small rounded info card ("Context window:" label plus a bold "N% used (M% left)" line) anchored above the ring with a caret pointing back at it. This hover-card is a distinct pattern from the click-toggle popovers above (no open/close state, no click target) — reuse it for any future passive, read-only hover indicator rather than adding a third tooltip mechanism alongside native help text and click-toggle popovers.
 - When a permission request is pending (approval mode `ask`, or any request the client couldn't auto-resolve), the approval prompt takes over the composer's input/toolbar area entirely, inside the same rounded container — it does not appear as a separate transcript card, and the prompt textarea/toolbar are inaccessible until it's answered. It shows a question, an optional muted code/detail block (collapsible past ~220 characters via an `Expand`/`Collapse` toggle), a numbered list of the request's options (arrow keys to move the highlight, Enter or click to choose), and a closing "tell the agent what to do differently" row that expands into a text field with `Skip`/`Submit`; submitting text there answers with a reject-kind option and hands the typed text to the composer as the next draft.
 - The approval prompt has no separate cancel/dismiss control — the only way out is answering it (or its own "tell the agent what to do differently" path). Because of that, if responding fails for any reason (a stale request, a dropped RPC call), the composer must still give control back: it clears the pending prompt and shows an error card rather than leaving the takeover stuck with no way to type or send again.
 
@@ -267,7 +270,7 @@ Rules:
 - Avoid decorative message chrome.
 - In the current chat workspace, the transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
-- Because the composer visually overlays the tail of the scroll layer, the transcript reserves matching space via a real spacer element sized to the composer's live height (tracked with `ResizeObserver`), not a static padding guess, and uses `use-stick-to-bottom` to stay pinned to the true bottom as content streams in or the composer resizes (e.g. an approval prompt collapsing back to the normal composer). Do not swap this for `scrollIntoView()`/`Element.scrollIntoView` on an end-of-list sentinel — it aligns to the viewport edge, not past the reserved spacer, and silently leaves the latest content tucked behind the composer.
+- When the composer visually overlays the tail of the scroll layer, the transcript should reserve matching space with real layout measurement rather than a static padding guess. In the legacy web implementation this used `ResizeObserver` plus `use-stick-to-bottom`; native SwiftUI should use an equivalent platform-appropriate measurement/stick-to-bottom strategy.
 
 ## 15. Review Panel
 

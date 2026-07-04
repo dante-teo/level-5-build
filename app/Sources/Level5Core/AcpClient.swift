@@ -50,6 +50,14 @@ public struct AcpClient: Sendable {
         try await transport.notify(method: AcpMethod.sessionCancel, params: .object(["sessionId": .string(sessionId)]))
     }
 
+    public func setConfigOption(sessionId: String, configId: String, value: String) async throws -> AcpSessionResult {
+        try await request(AcpMethod.setConfigOption, params: JSONValue.object([
+            "sessionId": .string(sessionId),
+            "configId": .string(configId),
+            "value": .string(value)
+        ]), as: AcpSessionResult.self)
+    }
+
     public func extensionRequest(method: String, params: JSONValue? = nil) async throws -> JSONValue {
         try await transport.request(method: method, params: params)
     }

@@ -80,6 +80,18 @@ struct AgentSessionModelTests {
         #expect(model.nextCursor == "2")
     }
 
+    @Test("Startup discovery populates new chat model and slash commands")
+    func startupDiscoveryPopulatesComposerState() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.start()
+        try await waitUntil { model.modelOptions.count == 2 && model.slashCommands.count == 2 }
+
+        #expect(model.draft.selectedModelId == "mock-pro")
+        #expect(model.slashCommands.map(\.name) == ["plan", "review"])
+    }
+
     @Test("New chat creates no session until first send")
     func newChatCreatesNoSessionUntilFirstSend() async throws {
         let client = FakeAgentSessionClient()
@@ -116,6 +128,119 @@ struct AgentSessionModelTests {
         #expect(model.transcript.contains { $0.messageRole == .agent })
     }
 
+    @Test("First send applies pending new chat model before prompting")
+    func firstSendAppliesPendingModel() async throws {
+        let client = FakeAgentSessionClient()
+        client.newSessionResult = .init(sessionId: "s1", configOptions: [[
+            "id": "model",
+            "currentValue": "mock-pro",
+            "options": [
+                ["value": "mock-fast", "name": "Mock Fast"],
+                ["value": "mock-pro", "name": "Mock Pro"]
+            ]
+        ]])
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.start()
+        try await waitUntil { model.modelOptions.count == 2 }
+        model.selectModel("mock-fast")
+        model.draft.appendText("Build it")
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+
+        #expect(client.setModelRequestsSnapshot == [FakeAgentSessionClient.ModelRequest(sessionId: "s1", modelId: "mock-fast")])
+    }
+
+    @Test("Existing session model change rolls back on failure")
+    func existingSessionModelChangeRollsBack() async throws {
+        let client = FakeAgentSessionClient()
+        client.setModelFailures = ["mock-fast"]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.selectModel("mock-fast")
+        try await waitUntil { model.runtimeMessage?.contains("Model change failed") == true }
+
+        #expect(model.draft.selectedModelId == "mock-pro")
+        #expect(client.setModelRequestsSnapshot == [FakeAgentSessionClient.ModelRequest(sessionId: "s1", modelId: "mock-fast")])
+    }
+
+    @Test("Existing session model change clears pending state when reconnect fails")
+    func existingSessionModelChangeClearsPendingStateWhenReconnectFails() async throws {
+        let client = FakeAgentSessionClient()
+        let factory = FailingAfterFirstClientFactory(client)
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: factory.next)
+
+        model.start()
+        try await waitUntil { model.modelOptions.count == 2 }
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.emitProcessExit()
+        try await waitUntil { if case .disconnected = model.availability { true } else { false } }
+
+        model.selectModel("mock-fast")
+        try await waitUntil { model.sessionModelSaveInFlight == false }
+
+        #expect(model.draft.selectedModelId == "mock-pro")
+        #expect(client.setModelRequestsSnapshot.isEmpty)
+    }
+
+    @Test("Existing session model rollback is scoped after switching sessions")
+    func existingSessionModelRollbackIsScopedAfterSwitchingSessions() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksSetModel = true
+        client.setModelFailures = ["mock-fast"]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft.appendText("s1 draft")
+        model.selectModel("mock-fast")
+        try await waitUntil { client.setModelRequestsSnapshot == [.init(sessionId: "s1", modelId: "mock-fast")] }
+
+        model.selectSession("s2")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
+        try await waitUntil { client.modelOptionSessionIdsSnapshot == [nil, "s1", "s2"] }
+        model.draft.selectedModelId = "mock-fast"
+        client.releaseSetModel()
+        try await waitUntil { model.runtimeMessage?.contains("Model change failed") == true }
+
+        #expect(model.activeSessionId == "s2")
+        #expect(model.draft.selectedModelId == "mock-fast")
+
+        model.selectSession("s1")
+        #expect(model.draft.selectedModelId == "mock-pro")
+        #expect(model.draft.plainText == "s1 draft")
+    }
+
+    @Test("Sending text with command and attachment emits ACP prompt blocks")
+    func sendingStructuredComposerEmitsPromptBlocks() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.draft.appendText("Please")
+        model.acceptSlashCommand(.init(name: "plan"))
+        model.draft.appendText("this")
+        model.addAttachments(urls: [URL(fileURLWithPath: "/tmp/spec.md")], kind: .file)
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+
+        #expect(client.prompts.first?.text == "Please /plan this")
+        #expect(client.prompts.first?.blocks == [
+            [
+                "type": "text",
+                "text": "Please /plan this"
+            ],
+            [
+                "type": "resource_link",
+                "uri": "file:///tmp/spec.md",
+                "name": "spec.md"
+            ]
+        ])
+        #expect(model.draft.isEmpty)
+    }
+
     @Test("Optimistic user echo suppresses chunked backend user replay")
     func optimisticUserEchoSuppressesChunkedBackendUserReplay() async throws {
         let client = FakeAgentSessionClient()
@@ -146,6 +271,27 @@ struct AgentSessionModelTests {
 
         #expect(client.loadedSessionIds == ["s1"])
         #expect(client.prompts.last?.sessionId == "s1")
+    }
+
+    @Test("Composer drafts are scoped per selected session")
+    func composerDraftsAreScopedPerSession() async throws {
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft.appendText("draft one")
+
+        model.selectSession("s2")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
+        #expect(model.draft.serializedText.isEmpty)
+        model.draft.appendText("draft two")
+
+        model.selectSession("s1")
+        #expect(model.draft.serializedText == "draft one")
+
+        model.selectSession("s2")
+        #expect(model.draft.serializedText == "draft two")
     }
 
     @Test("Selecting a session does not change sidebar recency order")
@@ -404,6 +550,12 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     struct Prompt: Equatable {
         var sessionId: String
         var text: String
+        var blocks: [JSONValue]
+    }
+
+    struct ModelRequest: Equatable {
+        var sessionId: String
+        var modelId: String
     }
 
     private let lock = NSLock()
@@ -417,13 +569,30 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var loadedSessionIds: [String] = []
     var loadReplay: [String: [AgentTranscriptEvent]] = [:]
     var deletedSessionIds: [String] = []
+    var modelOptionSessionIds: [String?] = []
+    var modelOptionsResult: (options: [ComposerModelOption], currentModelId: String?) = (
+        [
+            .init(id: "mock-fast", label: "Mock Fast"),
+            .init(id: "mock-pro", label: "Mock Pro")
+        ],
+        "mock-pro"
+    )
+    var slashCommandsResult: [ComposerCommand] = [
+        .init(name: "plan", commandDescription: "Create a plan"),
+        .init(name: "review", commandDescription: "Review code")
+    ]
+    var setModelRequests: [ModelRequest] = []
+    var setModelFailures: Set<String> = []
     var prompts: [Prompt] = []
     var promptFailures: Set<String> = []
     var failBeforeUserEchoPrompts: Set<String> = []
     var exitOnPrompts: Set<String> = []
     var userEchoChunksByPrompt: [String: [String]] = [:]
+    var blocksSetModel = false
     var blocksLoad = false
     var blocksPrompts = false
+    private var setModelContinuation: CheckedContinuation<Void, Never>?
+    private var setModelReleasePermits = 0
     private var loadContinuation: CheckedContinuation<Void, Never>?
     private var promptContinuations: [CheckedContinuation<Void, Never>] = []
     private var promptReleasePermits = 0
@@ -434,6 +603,14 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     var promptSessionIds: [String] {
         lock.withLock { prompts.map(\.sessionId) }
+    }
+
+    var setModelRequestsSnapshot: [ModelRequest] {
+        lock.withLock { setModelRequests }
+    }
+
+    var modelOptionSessionIdsSnapshot: [String?] {
+        lock.withLock { modelOptionSessionIds }
     }
 
     init() {
@@ -479,8 +656,52 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         lock.withLock { deletedSessionIds.append(sessionId) }
     }
 
-    func prompt(sessionId: String, text: String) async throws -> AcpPromptResult {
-        lock.withLock { prompts.append(.init(sessionId: sessionId, text: text)) }
+    func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+        lock.withLock {
+            modelOptionSessionIds.append(sessionId)
+            return modelOptionsResult
+        }
+    }
+
+    func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
+        lock.withLock { slashCommandsResult }
+    }
+
+    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
+        lock.withLock { setModelRequests.append(.init(sessionId: sessionId, modelId: modelId)) }
+        if lock.withLock({ blocksSetModel }) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    if setModelReleasePermits > 0 {
+                        setModelReleasePermits -= 1
+                        return true
+                    }
+                    setModelContinuation = continuation
+                    return false
+                }
+                if shouldResume {
+                    continuation.resume()
+                }
+            }
+        }
+        if lock.withLock({ setModelFailures.contains(modelId) }) {
+            throw FakeClientError.promptFailed
+        }
+        return .init(sessionId: sessionId, configOptions: [[
+            "id": "model",
+            "currentValue": .string(modelId),
+            "options": .array(modelOptionsResult.options.map { option in
+                [
+                    "value": .string(option.id),
+                    "name": .string(option.label)
+                ]
+            })
+        ]])
+    }
+
+    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
+        let text = blocks.textBlockText
+        lock.withLock { prompts.append(.init(sessionId: sessionId, text: text, blocks: blocks)) }
         if lock.withLock({ failBeforeUserEchoPrompts.contains(text) }) {
             throw FakeClientError.promptFailed
         }
@@ -529,6 +750,18 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 return nil
             }
             return promptContinuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    func releaseSetModel() {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            guard let continuation = setModelContinuation else {
+                setModelReleasePermits += 1
+                return nil
+            }
+            setModelContinuation = nil
+            return continuation
         }
         continuation?.resume()
     }
@@ -650,6 +883,26 @@ private final class FakeClientFactory: @unchecked Sendable {
     }
 }
 
+private final class FailingAfterFirstClientFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private let client: FakeAgentSessionClient
+    private var callCount = 0
+
+    init(_ client: FakeAgentSessionClient) {
+        self.client = client
+    }
+
+    func next() throws -> FakeAgentSessionClient {
+        try lock.withLock {
+            callCount += 1
+            if callCount == 1 {
+                return client
+            }
+            throw FakeClientError.promptFailed
+        }
+    }
+}
+
 private func waitUntil(
     _ label: String = "condition",
     timeout: Duration = .seconds(2),
@@ -691,5 +944,16 @@ private extension [AgentTranscriptItem] {
             guard case let .message(message) = item.kind, message.role == .user else { return nil }
             return message.text
         }
+    }
+}
+
+private extension [JSONValue] {
+    var textBlockText: String {
+        compactMap { value -> String? in
+            guard let object = value.objectValue else { return nil }
+            guard object["type"]?.stringValue == "text" else { return nil }
+            return object["text"]?.stringValue
+        }
+        .joined()
     }
 }

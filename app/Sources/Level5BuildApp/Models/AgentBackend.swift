@@ -2,7 +2,7 @@ import Foundation
 import Level5Core
 import Network
 
-enum AgentBackendKind: Equatable, Sendable {
+enum AgentBackendKind: Equatable, Hashable, Sendable {
     case acpMock
     case unavailable
 }
@@ -43,7 +43,10 @@ protocol AgentSessionClient: Sendable {
     func newSession(cwd: String) async throws -> AcpSessionResult
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult
     func deleteSession(sessionId: String) async throws
-    func prompt(sessionId: String, text: String) async throws -> AcpPromptResult
+    func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?)
+    func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand]
+    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult
+    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult
     func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws
     func terminate()
 }
@@ -117,13 +120,20 @@ final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendabl
         try await client.deleteSession(.init(sessionId: sessionId))
     }
 
-    func prompt(sessionId: String, text: String) async throws -> AcpPromptResult {
-        try await client.prompt(.init(sessionId: sessionId, prompt: [
-            [
-                "type": "text",
-                "text": .string(text)
-            ]
-        ]))
+    func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+        try await modelOptions(client: client, sessionId: sessionId)
+    }
+
+    func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
+        try await slashCommands(client: client, sessionId: sessionId)
+    }
+
+    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
+        try await client.setConfigOption(sessionId: sessionId, configId: "model", value: modelId)
+    }
+
+    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
+        try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
     func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws {
@@ -229,13 +239,20 @@ final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
         try await client.deleteSession(.init(sessionId: sessionId))
     }
 
-    func prompt(sessionId: String, text: String) async throws -> AcpPromptResult {
-        try await client.prompt(.init(sessionId: sessionId, prompt: [
-            [
-                "type": "text",
-                "text": .string(text)
-            ]
-        ]))
+    func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+        try await modelOptions(client: client, sessionId: sessionId)
+    }
+
+    func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
+        try await slashCommands(client: client, sessionId: sessionId)
+    }
+
+    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
+        try await client.setConfigOption(sessionId: sessionId, configId: "model", value: modelId)
+    }
+
+    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
+        try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
     }
 
     func respondToPermissionRequest(id: AcpRpcID, allow: Bool) async throws {
@@ -248,6 +265,53 @@ final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
 
     func terminate() {
         socket.cancel()
+    }
+}
+
+private func modelOptions(client: AcpClient, sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+    var params: [String: JSONValue] = [:]
+    if let sessionId {
+        params["sessionId"] = .string(sessionId)
+    }
+    let result = try await client.extensionRequest(method: "_mock/list_models", params: .object(params))
+    guard let object = result.objectValue else {
+        return ([], nil)
+    }
+    let options = object["models"]?.arrayValue?.compactMap { value -> ComposerModelOption? in
+        guard let object = value.objectValue else { return nil }
+        guard let id = object["id"]?.stringValue ?? object["value"]?.stringValue else { return nil }
+        return ComposerModelOption(
+            id: id,
+            label: object["name"]?.stringValue,
+            modelDescription: object["description"]?.stringValue
+        )
+    } ?? []
+    return (options, object["currentModel"]?.stringValue)
+}
+
+private func slashCommands(client: AcpClient, sessionId: String?) async throws -> [ComposerCommand] {
+    var params: [String: JSONValue] = [:]
+    if let sessionId {
+        params["sessionId"] = .string(sessionId)
+    }
+    let result = try await client.extensionRequest(method: "_mock/list_slash_commands", params: .object(params))
+    let values = result.objectValue?["availableCommands"]?.arrayValue ?? result.objectValue?["commands"]?.arrayValue ?? []
+    return values.compactMap { value -> ComposerCommand? in
+        guard let object = value.objectValue else { return nil }
+        guard let name = object["name"]?.stringValue else { return nil }
+        let input = object["input"]?.objectValue
+        return ComposerCommand(
+            name: name,
+            displayName: object["displayName"]?.stringValue ?? object["title"]?.stringValue,
+            commandDescription: object["description"]?.stringValue,
+            inputHint: input?["hint"]?.stringValue
+        )
+    }
+}
+
+private extension JSONValue {
+    var arrayValue: [JSONValue]? {
+        if case let .array(value) = self { value } else { nil }
     }
 }
 

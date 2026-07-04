@@ -134,7 +134,7 @@ The current app UI is a native shell. `ContentView` owns window-scoped shell sta
 
 - `ShellSidebarView` for New Chat, ACP-backed session rows, Load More, and delete actions.
 - `WorkspaceView` and `TranscriptView` for the empty new-session state plus compact rendering of the active structured transcript.
-- `ComposerView` for prompt drafting, backend unavailable state, and the visible per-session queue.
+- `ComposerView` for native prompt drafting, file attachments, model selection, slash-command insertion, backend unavailable state, and the visible per-session queue.
 - `AgentSessionModel` for app-private session lifecycle, transcript caches, per-session queues, backend availability, and ACP event routing.
 - `ShellCommands` for scene-level menu commands routed through focused values.
 
@@ -142,7 +142,11 @@ Backend selection is explicit. By default no native agent backend is available, 
 
 In mock mode, the app connects to the independently running TCP mock server through `Level5Core.AcpClient`, initializes ACP, and calls `session/list` on startup. Existing mock sessions appear in the sidebar using provider `updatedAt` plus app-observed activity for recent-first ordering. `nextCursor` renders as Load More. New Chat is only an unsent draft: it creates no hidden ACP session and appears in no sidebar row until first send. First send calls `session/new`, inserts/selects the row, appends the user prompt when the turn starts, then sends `session/prompt`. Selecting an existing row calls `session/load`, clears that session's in-memory transcript state, and rebuilds it only from backend replay events. Selection is not activity for sidebar ordering; live user/agent chunks sent or received after replay are activity and can move the row. Delete calls `session/delete`, refreshes the list, and returns to New Chat when the active session was deleted.
 
-The native lifecycle model permits multiple sessions to have running turns concurrently, but only one active turn per session. Sending again while the active session is running queues the prompt in that session's in-memory FIFO queue. Queued prompts render compactly above the composer and can be removed before they start. Queued prompts move into the transcript only when they begin sending. If a queued prompt fails, the model records an error row and continues to later queued prompts.
+The native lifecycle model permits multiple sessions to have running turns concurrently, but only one active turn per session. Sending again while the active session is running queues an immutable structured composer snapshot in that session's in-memory FIFO queue. Queued prompts render compactly above the composer and can be removed before they start. Queued prompts move into the transcript only when they begin sending. If a queued prompt fails, the model records an error row and continues to later queued prompts.
+
+The composer draft is an app-private value model. It stores text segments, accepted slash-command tokens, selected model, and up to 10 deduped standardized file attachment URLs. Attachments are not read by the client; prompt serialization sends one ACP text block when serialized text is non-empty followed by `resource_link` blocks with `file://` URIs and basename names. Empty text with attachments is valid; empty text with no attachments is not sent. The editor starts at one text line, grows from measured `NSTextView` content, and caps at 12 lines before the scroll view handles overflow.
+
+ACP model and slash-command discovery is backend-driven. On startup, mock mode initializes ACP and calls the mock discovery extensions (`_mock/list_models` and `_mock/list_slash_commands`) so New Chat can render the selector and command menu before first send. Session load/create reads model config from ACP `configOptions` where `id == "model"` and treats backend config updates as authoritative unless a local model change is in flight. Existing-session model changes call `session/set_config_option`, update the selector optimistically, and roll back with a composer status error on failure. Rollbacks are scoped by session id, so reconnect failures clear the pending save state and async failures after a session switch do not mutate the visible draft for a different session. First send applies a pending New Chat model only when it differs from the session's reported model, then sends the structured prompt blocks.
 
 `Level5BuildApp` owns an app-private structured transcript layer:
 
@@ -159,7 +163,7 @@ Transcript auto-scroll is per-session follow-tail state. Sessions follow the tai
 
 The session model appends an optimistic local user row only when a prompt actually starts. It tracks pending backend user echoes per session so replayed/streamed backend echo chunks can be suppressed. If a prompt fails before its backend echo arrives, the pending optimistic echo entry is removed so later successful prompts cannot duplicate user rows.
 
-ACP event handling routes updates by `sessionId`, handles structured transcript events, session title/timestamp updates, diagnostics, stderr, process exits, and auto-allows temporary permission requests. Composer models/attachments/slash commands belong to #11, permission modes to #12, stop/cancel/timeout recovery beyond rendering notable stop outcomes to #13, structured plan/tool/usage inspection UI to #14, and durable transcript/session persistence to #18.
+ACP event handling routes updates by `sessionId`, handles structured transcript events, session title/timestamp updates, diagnostics, stderr, process exits, and auto-allows temporary permission requests. Permission modes belong to #12, real prompt cancellation and timeout recovery beyond the disabled stop/progress visual belong to #13, structured plan/tool/usage inspection UI to #14, and durable transcript/session persistence to #18.
 
 ### Native project context
 

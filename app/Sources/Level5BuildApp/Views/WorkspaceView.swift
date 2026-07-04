@@ -9,13 +9,21 @@ struct WorkspaceView: View {
     let availability: AgentAvailability
     let runtimeMessage: String?
     let queuedPrompts: [QueuedPrompt]
-    @Binding var draft: String
+    @Binding var draft: ComposerDraft
+    let modelOptions: [ComposerModelOption]
+    let slashCommands: [ComposerCommand]
+    let isActiveSessionRunning: Bool
+    let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
     let recentProjects: [RecentProject]
     let canSendWithButton: Bool
     let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let selectModelAction: (String) -> Void
+    let addAttachmentsAction: ([URL], ComposerAttachment.Kind) -> Void
+    let removeAttachmentAction: (ComposerAttachment) -> Void
+    let acceptSlashCommandAction: (ComposerCommand) -> Void
     let setTranscriptFollowsTailAction: (Bool) -> Void
     let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
@@ -31,12 +39,20 @@ struct WorkspaceView: View {
                     runtimeMessage: runtimeMessage,
                     queuedPrompts: queuedPrompts,
                     draft: $draft,
+                    modelOptions: modelOptions,
+                    slashCommands: slashCommands,
+                    isActiveSessionRunning: isActiveSessionRunning,
+                    isModelSaveInFlight: isModelSaveInFlight,
                     selectedProject: selectedProject,
                     recentProjects: recentProjects,
                     canSendWithButton: canSendWithButton,
                     canEditComposer: canEditComposer,
                     isComposerFocused: isComposerFocused,
                     sendAction: sendAction,
+                    selectModelAction: selectModelAction,
+                    addAttachmentsAction: addAttachmentsAction,
+                    removeAttachmentAction: removeAttachmentAction,
+                    acceptSlashCommandAction: acceptSlashCommandAction,
                     removeQueuedPromptAction: removeQueuedPromptAction,
                     selectProjectAction: selectProjectAction,
                     clearProjectAction: clearProjectAction,
@@ -62,6 +78,10 @@ struct WorkspaceView: View {
                             runtimeMessage: runtimeMessage,
                             queuedPrompts: queuedPrompts,
                             draft: $draft,
+                            modelOptions: modelOptions,
+                            slashCommands: slashCommands,
+                            isActiveSessionRunning: isActiveSessionRunning,
+                            isModelSaveInFlight: isModelSaveInFlight,
                             isNewSession: false,
                             selectedProject: selectedProject,
                             recentProjects: recentProjects,
@@ -69,6 +89,10 @@ struct WorkspaceView: View {
                             canEditComposer: canEditComposer,
                             isFocused: isComposerFocused,
                             sendAction: sendAction,
+                            selectModelAction: selectModelAction,
+                            addAttachmentsAction: addAttachmentsAction,
+                            removeAttachmentAction: removeAttachmentAction,
+                            acceptSlashCommandAction: acceptSlashCommandAction,
                             removeQueuedPromptAction: removeQueuedPromptAction,
                             selectProjectAction: selectProjectAction,
                             clearProjectAction: clearProjectAction,
@@ -95,13 +119,21 @@ private struct NewSessionView: View {
     let availability: AgentAvailability
     let runtimeMessage: String?
     let queuedPrompts: [QueuedPrompt]
-    @Binding var draft: String
+    @Binding var draft: ComposerDraft
+    let modelOptions: [ComposerModelOption]
+    let slashCommands: [ComposerCommand]
+    let isActiveSessionRunning: Bool
+    let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
     let recentProjects: [RecentProject]
     let canSendWithButton: Bool
     let canEditComposer: Bool
     var isComposerFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
+    let selectModelAction: (String) -> Void
+    let addAttachmentsAction: ([URL], ComposerAttachment.Kind) -> Void
+    let removeAttachmentAction: (ComposerAttachment) -> Void
+    let acceptSlashCommandAction: (ComposerCommand) -> Void
     let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
@@ -109,10 +141,10 @@ private struct NewSessionView: View {
     let validateProjectAction: (RecentProject) -> Bool
 
     var body: some View {
-        VStack(spacing: L5Spacing.x8) {
+        VStack(spacing: L5Spacing.x6) {
             Spacer(minLength: L5Spacing.x16)
 
-            VStack(spacing: L5Spacing.x8) {
+            VStack(spacing: L5Spacing.x6) {
                 Text(title)
                     .font(L5Font.h2)
                     .foregroundStyle(L5Color.textPrimary)
@@ -123,6 +155,10 @@ private struct NewSessionView: View {
                     runtimeMessage: runtimeMessage,
                     queuedPrompts: queuedPrompts,
                     draft: $draft,
+                    modelOptions: modelOptions,
+                    slashCommands: slashCommands,
+                    isActiveSessionRunning: isActiveSessionRunning,
+                    isModelSaveInFlight: isModelSaveInFlight,
                     isNewSession: true,
                     selectedProject: selectedProject,
                     recentProjects: recentProjects,
@@ -130,6 +166,10 @@ private struct NewSessionView: View {
                     canEditComposer: canEditComposer,
                     isFocused: isComposerFocused,
                     sendAction: sendAction,
+                    selectModelAction: selectModelAction,
+                    addAttachmentsAction: addAttachmentsAction,
+                    removeAttachmentAction: removeAttachmentAction,
+                    acceptSlashCommandAction: acceptSlashCommandAction,
                     removeQueuedPromptAction: removeQueuedPromptAction,
                     selectProjectAction: selectProjectAction,
                     clearProjectAction: clearProjectAction,
@@ -137,7 +177,7 @@ private struct NewSessionView: View {
                     validateProjectAction: validateProjectAction
                 )
             }
-            .frame(maxWidth: 760)
+            .frame(maxWidth: 820)
 
             Spacer(minLength: L5Spacing.x16)
         }

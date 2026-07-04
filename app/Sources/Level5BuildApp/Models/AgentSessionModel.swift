@@ -27,16 +27,6 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct QueuedPrompt: Identifiable, Equatable, Sendable {
-    public let id: UUID
-    public let text: String
-
-    public init(id: UUID = UUID(), text: String) {
-        self.id = id
-        self.text = text
-    }
-}
-
 public enum AgentAvailability: Equatable, Sendable {
     case connecting
     case available
@@ -56,20 +46,28 @@ public enum AgentAvailability: Equatable, Sendable {
 @MainActor
 @Observable
 final class AgentSessionModel {
-    var draft = ""
+    var draft = ComposerDraft()
     private(set) var availability: AgentAvailability
     private(set) var sessions: [AgentSessionRow] = []
     private(set) var activeSessionId: String?
     private(set) var selectedProject: RecentProject?
     private(set) var nextCursor: String?
     private(set) var runtimeMessage: String?
+    private(set) var modelOptions: [ComposerModelOption] = []
+    private(set) var slashCommands: [ComposerCommand] = []
+    private(set) var sessionModelSaveInFlight = false
 
     private var transcriptStates: [String: AgentTranscriptState] = [:]
     private var queues: [String: [QueuedPrompt]] = [:]
+    private var draftsBySessionId: [String: ComposerDraft] = [:]
     private var followTailBySessionId: [String: Bool] = [:]
     private var runningSessionIds: Set<String> = []
     private var loadingSessionIds: Set<String> = []
     private var pendingUserEchoes: [String: [String]] = [:]
+    private var currentModelBySessionId: [String: String] = [:]
+    private var pendingModelBySessionId: [String: String] = [:]
+    private var persistedNewChatModelByBackend: [AgentBackendKind: String] = [:]
+    private var defaultModelId: String?
     private var client: AgentSessionClient?
     private var connectionTask: Task<Bool, Never>?
     private var eventTask: Task<Void, Never>?
@@ -153,7 +151,7 @@ final class AgentSessionModel {
     var canSendWithButton: Bool {
         canEditComposer
             && !isActiveSessionRunning
-            && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !draft.isEmpty
     }
 
     var canEditComposer: Bool {
@@ -174,8 +172,10 @@ final class AgentSessionModel {
     }
 
     func startNewChat() {
+        saveActiveDraft()
         activeSessionId = nil
-        draft = ""
+        draft.clearAfterSend()
+        applyNewChatPersistedModel()
     }
 
     func selectProject(_ project: RecentProject) {
@@ -189,9 +189,9 @@ final class AgentSessionModel {
     }
 
     func sendDraft() {
-        let message = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else {
-            draft = ""
+        let snapshot = draft
+        guard !snapshot.isEmpty else {
+            draft.clearAfterSend()
             return
         }
         guard case .acpMock = backendKind else {
@@ -203,15 +203,67 @@ final class AgentSessionModel {
         Task {
             if let activeSessionId {
                 if runningSessionIds.contains(activeSessionId) {
-                    draft = ""
-                    enqueue(message, for: activeSessionId)
+                    draft.clearAfterSend()
+                    enqueue(snapshot, for: activeSessionId)
                 } else {
                     runningSessionIds.insert(activeSessionId)
                     updateRunningFlags()
-                    await send(message, to: activeSessionId, isAlreadyMarkedRunning: true)
+                    await send(snapshot, to: activeSessionId, isAlreadyMarkedRunning: true)
                 }
             } else {
-                await createSessionAndSend(message)
+                await createSessionAndSend(snapshot)
+            }
+        }
+    }
+
+    func addAttachments(urls: [URL], kind: ComposerAttachment.Kind) {
+        draft.addAttachments(urls: urls, kind: kind)
+    }
+
+    func removeAttachment(_ attachment: ComposerAttachment) {
+        draft.removeAttachment(id: attachment.id)
+    }
+
+    func acceptSlashCommand(_ command: ComposerCommand) {
+        if case let .text(id, text)? = draft.parts.last, let range = text.currentSlashTokenRange {
+            let remaining = String(text[..<range.lowerBound])
+            if remaining.isEmpty {
+                draft.parts.removeLast()
+            } else {
+                draft.parts[draft.parts.count - 1] = .text(id: id, remaining)
+            }
+        }
+        draft.insertCommand(command)
+        draft.appendText(" ")
+    }
+
+    func selectModel(_ modelId: String) {
+        guard modelOptions.contains(where: { $0.id == modelId }) else { return }
+        if isNewSession {
+            draft.selectedModelId = modelId
+            persistedNewChatModelByBackend[backendKind] = modelId
+            return
+        }
+        guard let activeSessionId else { return }
+        let sessionId = activeSessionId
+        let previous = currentModelBySessionId[sessionId] ?? defaultModelId
+        currentModelBySessionId[sessionId] = modelId
+        draft.selectedModelId = modelId
+        pendingModelBySessionId[sessionId] = modelId
+        sessionModelSaveInFlight = true
+        Task {
+            guard await ensureConnected(), let client else {
+                rollbackModelChange(sessionId: sessionId, previous: previous)
+                return
+            }
+            do {
+                let result = try await client.setModel(sessionId: sessionId, modelId: modelId)
+                clearPendingModelChange(sessionId: sessionId)
+                applyModelConfig(result.configOptions, sessionId: sessionId)
+                runtimeMessage = nil
+            } catch {
+                rollbackModelChange(sessionId: sessionId, previous: previous)
+                runtimeMessage = "Model change failed: \(userFacingError(error))"
             }
         }
     }
@@ -230,7 +282,9 @@ final class AgentSessionModel {
     }
 
     func selectSession(_ sessionId: String) {
+        saveActiveDraft()
         activeSessionId = sessionId
+        restoreDraft(for: sessionId)
         if followTailBySessionId[sessionId] == nil {
             followTailBySessionId[sessionId] = true
         }
@@ -240,7 +294,9 @@ final class AgentSessionModel {
             transcriptStates[sessionId] = AgentTranscriptState()
             loadingSessionIds.insert(sessionId)
             do {
-                _ = try await client.loadSession(sessionId: sessionId, cwd: nil)
+                let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
+                applyModelConfig(result.configOptions, sessionId: sessionId)
+                await refreshSessionSlashCommands(sessionId)
                 await clearLoadingAfterReplayDrain(sessionId)
             } catch {
                 loadingSessionIds.remove(sessionId)
@@ -263,11 +319,13 @@ final class AgentSessionModel {
                 try await client.deleteSession(sessionId: sessionId)
                 transcriptStates[sessionId] = nil
                 queues[sessionId] = nil
+                draftsBySessionId[sessionId] = nil
                 followTailBySessionId[sessionId] = nil
                 runningSessionIds.remove(sessionId)
                 if activeSessionId == sessionId {
                     activeSessionId = nil
-                    draft = ""
+                    draft.clearAfterSend()
+                    applyNewChatPersistedModel()
                 }
                 await refreshSessions(reset: true)
             } catch {
@@ -301,6 +359,7 @@ final class AgentSessionModel {
                 self.client = client
                 startEventTask(client.events)
                 try await client.initialize()
+                await refreshGlobalComposerDiscovery()
                 availability = .available
                 runtimeMessage = nil
                 return true
@@ -338,7 +397,104 @@ final class AgentSessionModel {
         }
     }
 
-    private func createSessionAndSend(_ message: String) async {
+    private func saveActiveDraft() {
+        guard let activeSessionId else { return }
+        draftsBySessionId[activeSessionId] = draft
+    }
+
+    private func restoreDraft(for sessionId: String) {
+        if let stored = draftsBySessionId[sessionId] {
+            draft = stored
+        } else {
+            draft = ComposerDraft()
+            draft.selectedModelId = currentModelBySessionId[sessionId] ?? defaultModelId ?? modelOptions.first?.id
+        }
+    }
+
+    private func rollbackModelChange(sessionId: String, previous: String?) {
+        currentModelBySessionId[sessionId] = previous
+        if activeSessionId == sessionId {
+            draft.selectedModelId = previous
+        } else if var stored = draftsBySessionId[sessionId] {
+            stored.selectedModelId = previous
+            draftsBySessionId[sessionId] = stored
+        }
+        clearPendingModelChange(sessionId: sessionId)
+    }
+
+    private func clearPendingModelChange(sessionId: String) {
+        pendingModelBySessionId[sessionId] = nil
+        sessionModelSaveInFlight = !pendingModelBySessionId.isEmpty
+    }
+
+    private func refreshGlobalComposerDiscovery() async {
+        guard let client else { return }
+        async let modelsResult = try? client.listModelOptions(sessionId: nil)
+        async let commandsResult = try? client.listSlashCommands(sessionId: nil)
+        let discoveredModels = await modelsResult
+        let discoveredCommands = await commandsResult
+        if let discoveredModels {
+            modelOptions = discoveredModels.options
+            defaultModelId = discoveredModels.currentModelId
+            applyNewChatPersistedModel()
+        }
+        if let discoveredCommands {
+            slashCommands = discoveredCommands
+        }
+    }
+
+    private func refreshSessionSlashCommands(_ sessionId: String) async {
+        guard let client else { return }
+        if let commands = try? await client.listSlashCommands(sessionId: sessionId) {
+            slashCommands = commands
+        }
+        if let models = try? await client.listModelOptions(sessionId: sessionId) {
+            modelOptions = models.options
+            if let current = models.currentModelId {
+                currentModelBySessionId[sessionId] = current
+                if activeSessionId == sessionId {
+                    draft.selectedModelId = current
+                }
+            }
+        }
+    }
+
+    private func applyNewChatPersistedModel() {
+        let candidate = persistedNewChatModelByBackend[backendKind] ?? defaultModelId ?? modelOptions.first?.id
+        if let candidate, modelOptions.contains(where: { $0.id == candidate }) {
+            draft.selectedModelId = candidate
+        } else {
+            draft.selectedModelId = modelOptions.first?.id
+        }
+    }
+
+    private func applyModelConfig(_ configOptions: [JSONValue], sessionId: String) {
+        guard pendingModelBySessionId[sessionId] == nil else { return }
+        guard
+            let modelConfig = configOptions.compactMap(\.objectValue).first(where: { $0["id"]?.stringValue == "model" })
+        else { return }
+
+        let options = modelConfig["options"]?.arrayValue?.compactMap { value -> ComposerModelOption? in
+            guard let object = value.objectValue else { return nil }
+            guard let id = object["value"]?.stringValue ?? object["id"]?.stringValue else { return nil }
+            return ComposerModelOption(
+                id: id,
+                label: object["name"]?.stringValue,
+                modelDescription: object["description"]?.stringValue
+            )
+        } ?? []
+        if !options.isEmpty {
+            modelOptions = options
+        }
+        if let current = modelConfig["currentValue"]?.stringValue {
+            currentModelBySessionId[sessionId] = current
+            if activeSessionId == sessionId {
+                draft.selectedModelId = current
+            }
+        }
+    }
+
+    private func createSessionAndSend(_ snapshot: ComposerDraft) async {
         guard await ensureConnected() else { return }
         guard let client else { return }
         do {
@@ -356,8 +512,23 @@ final class AgentSessionModel {
             upsert(row)
             activeSessionId = sessionId
             followTailBySessionId[sessionId] = true
-            draft = ""
-            await send(message, to: sessionId)
+            applyModelConfig(result.configOptions, sessionId: sessionId)
+            await refreshSessionSlashCommands(sessionId)
+            let targetModelId = snapshot.selectedModelId ?? draft.selectedModelId
+            if
+                let targetModelId,
+                targetModelId != currentModelBySessionId[sessionId],
+                modelOptions.contains(where: { $0.id == targetModelId })
+            {
+                do {
+                    let configResult = try await client.setModel(sessionId: sessionId, modelId: targetModelId)
+                    applyModelConfig(configResult.configOptions, sessionId: sessionId)
+                } catch {
+                    runtimeMessage = "Model change failed: \(userFacingError(error))"
+                }
+            }
+            draft.clearAfterSend()
+            await send(snapshot, to: sessionId)
         } catch {
             activeSessionId = nil
             let message = "Agent runtime disconnected: \(userFacingError(error))"
@@ -366,7 +537,7 @@ final class AgentSessionModel {
         }
     }
 
-    private func send(_ message: String, to sessionId: String, isAlreadyMarkedRunning: Bool = false) async {
+    private func send(_ snapshot: ComposerDraft, to sessionId: String, isAlreadyMarkedRunning: Bool = false) async {
         guard await ensureConnected() else {
             if isAlreadyMarkedRunning {
                 runningSessionIds.remove(sessionId)
@@ -375,17 +546,18 @@ final class AgentSessionModel {
             return
         }
         guard let client else { return }
+        let displayMessage = snapshot.previewText
         loadingSessionIds.remove(sessionId)
-        draft = ""
+        draft.clearAfterSend()
         if !isAlreadyMarkedRunning {
             runningSessionIds.insert(sessionId)
             updateRunningFlags()
         }
-        pendingUserEchoes[sessionId, default: []].append(message)
-        appendUser(message, to: sessionId)
+        pendingUserEchoes[sessionId, default: []].append(displayMessage)
+        appendUser(displayMessage, to: sessionId)
         markObservedActivity(for: sessionId)
         do {
-            let result = try await client.prompt(sessionId: sessionId, text: message)
+            let result = try await client.prompt(sessionId: sessionId, blocks: snapshot.promptBlocks)
             runtimeMessage = nil
             apply(.stopReason(result.stopReason), to: sessionId)
         } catch {
@@ -395,16 +567,16 @@ final class AgentSessionModel {
                 runtimeMessage = message
                 self.client = nil
             }
-            appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(message)", to: sessionId)
-            removePendingUserEcho(message, for: sessionId)
+            appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(displayMessage)", to: sessionId)
+            removePendingUserEcho(displayMessage, for: sessionId)
         }
         runningSessionIds.remove(sessionId)
         updateRunningFlags()
         await startNextQueuedPromptIfNeeded(for: sessionId)
     }
 
-    private func enqueue(_ message: String, for sessionId: String) {
-        queues[sessionId, default: []].append(QueuedPrompt(text: message))
+    private func enqueue(_ snapshot: ComposerDraft, for sessionId: String) {
+        queues[sessionId, default: []].append(QueuedPrompt(snapshot: snapshot))
         markObservedActivity(for: sessionId)
     }
 
@@ -413,7 +585,7 @@ final class AgentSessionModel {
         guard var queue = queues[sessionId], !queue.isEmpty else { return }
         let next = queue.removeFirst()
         queues[sessionId] = queue
-        await send(next.text, to: sessionId)
+        await send(next.snapshot, to: sessionId)
     }
 
     private func startEventTask(_ events: AsyncStream<AcpEvent>) {
@@ -616,5 +788,22 @@ final class AgentSessionModel {
 private extension String {
     var nonEmpty: String? {
         isEmpty ? nil : self
+    }
+
+    var currentSlashTokenRange: Range<String.Index>? {
+        guard let slashIndex = lastIndex(of: "/") else { return nil }
+        let token = self[slashIndex...]
+        guard token.dropFirst().allSatisfy({ !$0.isWhitespace }) else { return nil }
+        if slashIndex > startIndex {
+            let previous = index(before: slashIndex)
+            guard self[previous].isWhitespace else { return nil }
+        }
+        return slashIndex..<endIndex
+    }
+}
+
+private extension JSONValue {
+    var arrayValue: [JSONValue]? {
+        if case let .array(value) = self { value } else { nil }
     }
 }

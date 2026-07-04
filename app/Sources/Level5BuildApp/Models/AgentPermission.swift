@@ -165,6 +165,8 @@ private extension AgentBackendKind {
         switch self {
         case .acpMock:
             "acpMock"
+        case .devin:
+            "devin"
         case .unavailable:
             "unavailable"
         }

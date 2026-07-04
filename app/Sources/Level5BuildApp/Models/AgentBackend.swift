@@ -4,26 +4,40 @@ import Network
 
 enum AgentBackendKind: Equatable, Hashable, Sendable {
     case acpMock
+    case devin
     case unavailable
 }
 
 struct AgentBackendSelector: Sendable {
     var environment: [String: String]
     var allowsMockBackend: Bool
+    var homeDirectoryPath: String
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        allowsMockBackend: Bool = AgentBackendSelector.defaultAllowsMockBackend
+        allowsMockBackend: Bool = AgentBackendSelector.defaultAllowsMockBackend,
+        homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path
     ) {
         self.environment = environment
         self.allowsMockBackend = allowsMockBackend
+        self.homeDirectoryPath = homeDirectoryPath
     }
 
     var selectedBackend: AgentBackendKind {
         if allowsMockBackend, environment["LEVEL5_USE_ACP_MOCK"] == "1" {
             return .acpMock
         }
+        if DevinRuntime.isAvailable(environment: environment, homeDirectoryPath: homeDirectoryPath) {
+            return .devin
+        }
         return .unavailable
+    }
+
+    /// User-facing explanation for why no backend is available. `nil` when a
+    /// backend was successfully selected.
+    var unavailableReason: String? {
+        guard selectedBackend == .unavailable else { return nil }
+        return DevinRuntime.missingCliMessage
     }
 
     static var defaultAllowsMockBackend: Bool {
@@ -53,13 +67,83 @@ protocol AgentSessionClient: Sendable {
     func terminate()
 }
 
-final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendable {
-    private let process: AcpProcessTransport
-    private let client: AcpClient
+/// Shared ACP request plumbing for `AgentSessionClient` implementations that
+/// speak to their backing agent purely through an `AcpClient`. Conformers
+/// need to supply `client` and `terminate()`; this extension does not
+/// default `listModelOptions`/`listSlashCommands` because backends differ
+/// significantly in how (or whether) discovery works — e.g. real Devin has
+/// no request/response API for either and must throw rather than delegate
+/// (see `DevinAgentSessionClient`).
+protocol AcpClientBackedSessionClient: AgentSessionClient {
+    var client: AcpClient { get }
+}
 
+extension AcpClientBackedSessionClient {
     var events: AsyncStream<AcpEvent> {
         client.events
     }
+
+    func initialize() async throws {
+        _ = try await client.initialize(.init(
+            clientInfo: .init(name: "Level5 Build", version: "0.0.0")
+        ))
+    }
+
+    func listSessions(cursor: String?) async throws -> AcpSessionListResult {
+        try await client.listSessions(cursor: cursor)
+    }
+
+    func newSession(cwd: String) async throws -> AcpSessionResult {
+        try await client.newSession(.init(cwd: cwd))
+    }
+
+    func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
+        // Real Devin's `session/load`, like `session/new`, requires
+        // `mcpServers` in params — without it the call fails outright with
+        // a deserialization error, silently breaking every existing-session
+        // reconnect (mock is not strict here so this is harmless there).
+        var extra: [String: JSONValue] = ["mcpServers": .array([])]
+        if let cwd { extra["cwd"] = .string(cwd) }
+        return try await client.loadSession(.init(sessionId: sessionId, extra: extra))
+    }
+
+    func deleteSession(sessionId: String) async throws {
+        try await client.deleteSession(.init(sessionId: sessionId))
+    }
+
+    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
+        try await client.setConfigOption(sessionId: sessionId, configId: "model", value: modelId)
+    }
+
+    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
+        try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
+    }
+
+    func cancel(sessionId: String) async throws {
+        try await client.cancel(sessionId: sessionId)
+    }
+
+    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
+        try await client.respond(id: response.requestId, result: [
+            "outcome": [
+                "outcome": "selected",
+                "optionId": .string(response.optionId)
+            ]
+        ])
+    }
+
+    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
+        try await client.respond(id: requestId, result: [
+            "outcome": [
+                "outcome": "cancelled"
+            ]
+        ])
+    }
+}
+
+final class AcpProcessAgentSessionClient: AcpClientBackedSessionClient, @unchecked Sendable {
+    private let process: AcpProcessTransport
+    let client: AcpClient
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -97,66 +181,12 @@ final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendabl
         client = AcpClient(transport: process.transport)
     }
 
-    func initialize() async throws {
-        _ = try await client.initialize(.init(
-            clientInfo: .init(name: "Level5 Build", version: "0.0.0")
-        ))
-    }
-
-    func listSessions(cursor: String?) async throws -> AcpSessionListResult {
-        try await client.listSessions(cursor: cursor)
-    }
-
-    func newSession(cwd: String) async throws -> AcpSessionResult {
-        try await client.newSession(.init(cwd: cwd))
-    }
-
-    func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
-        try await client.loadSession(.init(
-            sessionId: sessionId,
-            extra: cwd.map { ["cwd": .string($0)] } ?? [:]
-        ))
-    }
-
-    func deleteSession(sessionId: String) async throws {
-        try await client.deleteSession(.init(sessionId: sessionId))
-    }
-
     func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
         try await modelOptions(client: client, sessionId: sessionId)
     }
 
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
         try await slashCommands(client: client, sessionId: sessionId)
-    }
-
-    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
-        try await client.setConfigOption(sessionId: sessionId, configId: "model", value: modelId)
-    }
-
-    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
-        try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
-    }
-
-    func cancel(sessionId: String) async throws {
-        try await client.cancel(sessionId: sessionId)
-    }
-
-    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
-        try await client.respond(id: response.requestId, result: [
-            "outcome": [
-                "outcome": "selected",
-                "optionId": .string(response.optionId)
-            ]
-        ])
-    }
-
-    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
-        try await client.respond(id: requestId, result: [
-            "outcome": [
-                "outcome": "cancelled"
-            ]
-        ])
     }
 
     func terminate() {
@@ -207,15 +237,75 @@ final class AcpProcessAgentSessionClient: AgentSessionClient, @unchecked Sendabl
 
 enum AgentBackendError: Error, Equatable {
     case missingMockStartScript
+    case missingDevinExecutable
+    /// Thrown by discovery methods (`listModelOptions`/`listSlashCommands`)
+    /// that a backend has no request/response API for. Callers use `try?`
+    /// and skip updating state on failure, so this must be thrown rather
+    /// than returning an empty success — an empty *success* would stomp
+    /// over state a backend already populated another way (e.g. Devin's
+    /// live `session/update` notifications).
+    case discoveryUnsupported
 }
 
-final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
-    private let socket: AcpTcpLineTransport
-    private let client: AcpClient
+/// Spawns and speaks ACP to a real `devin acp` process for a single project
+/// directory. One instance exists per project `cwd` so that projects can run
+/// fully concurrent, isolated Devin sessions (see `AgentSessionModel`).
+final class DevinAgentSessionClient: AcpClientBackedSessionClient, @unchecked Sendable {
+    private let process: AcpProcessTransport
+    let client: AcpClient
 
-    var events: AsyncStream<AcpEvent> {
-        client.events
+    let spawnedCwd: String
+    let spawnedPermissionMode: String
+
+    init(
+        cwd: String,
+        approvalMode: ApprovalMode,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        requestTimeout: Duration = .seconds(30)
+    ) throws {
+        guard let executableURL = DevinRuntime.resolveExecutableURL(environment: environment) else {
+            throw AgentBackendError.missingDevinExecutable
+        }
+        let permissionMode = DevinRuntime.permissionMode(for: approvalMode)
+        spawnedCwd = RecentProjectStore.normalizedPath(cwd)
+        spawnedPermissionMode = permissionMode
+
+        process = AcpProcessTransport(
+            executableURL: executableURL,
+            arguments: ["--permission-mode", permissionMode, "acp"],
+            environment: environment,
+            currentDirectoryURL: URL(fileURLWithPath: cwd, isDirectory: true),
+            eventBufferLimit: 500,
+            requestTimeout: requestTimeout
+        )
+        try process.start()
+        client = AcpClient(transport: process.transport)
     }
+
+    /// Real Devin has no request/response API for listing models or slash
+    /// commands (including skills, which arrive as slash commands too)
+    /// outside of a session; both arrive as `session/update` notifications
+    /// (`config_option_update`, `available_commands_update`) once a session
+    /// exists, which `AgentSessionModel` applies live. These must throw
+    /// rather than return an empty list/tuple, or callers using `try?`
+    /// would treat "unsupported" as a successful empty result and wipe out
+    /// whatever the live notifications already populated.
+    func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+        throw AgentBackendError.discoveryUnsupported
+    }
+
+    func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
+        throw AgentBackendError.discoveryUnsupported
+    }
+
+    func terminate() {
+        process.terminate()
+    }
+}
+
+final class AcpTcpAgentSessionClient: AcpClientBackedSessionClient, @unchecked Sendable {
+    private let socket: AcpTcpLineTransport
+    let client: AcpClient
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -235,60 +325,12 @@ final class AcpTcpAgentSessionClient: AgentSessionClient, @unchecked Sendable {
         ))
     }
 
-    func listSessions(cursor: String?) async throws -> AcpSessionListResult {
-        try await client.listSessions(cursor: cursor)
-    }
-
-    func newSession(cwd: String) async throws -> AcpSessionResult {
-        try await client.newSession(.init(cwd: cwd))
-    }
-
-    func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
-        try await client.loadSession(.init(
-            sessionId: sessionId,
-            extra: cwd.map { ["cwd": .string($0)] } ?? [:]
-        ))
-    }
-
-    func deleteSession(sessionId: String) async throws {
-        try await client.deleteSession(.init(sessionId: sessionId))
-    }
-
     func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
         try await modelOptions(client: client, sessionId: sessionId)
     }
 
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
         try await slashCommands(client: client, sessionId: sessionId)
-    }
-
-    func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
-        try await client.setConfigOption(sessionId: sessionId, configId: "model", value: modelId)
-    }
-
-    func prompt(sessionId: String, blocks: [JSONValue]) async throws -> AcpPromptResult {
-        try await client.prompt(.init(sessionId: sessionId, prompt: blocks))
-    }
-
-    func cancel(sessionId: String) async throws {
-        try await client.cancel(sessionId: sessionId)
-    }
-
-    func respondToPermissionRequest(_ response: PermissionResponse) async throws {
-        try await client.respond(id: response.requestId, result: [
-            "outcome": [
-                "outcome": "selected",
-                "optionId": .string(response.optionId)
-            ]
-        ])
-    }
-
-    func cancelPermissionRequest(_ requestId: AcpRpcID) async throws {
-        try await client.respond(id: requestId, result: [
-            "outcome": [
-                "outcome": "cancelled"
-            ]
-        ])
     }
 
     func terminate() {
@@ -324,7 +366,14 @@ private func slashCommands(client: AcpClient, sessionId: String?) async throws -
     }
     let result = try await client.extensionRequest(method: "_mock/list_slash_commands", params: .object(params))
     let values = result.objectValue?["availableCommands"]?.arrayValue ?? result.objectValue?["commands"]?.arrayValue ?? []
-    return values.compactMap { value -> ComposerCommand? in
+    return parseComposerCommands(values)
+}
+
+/// Shared parsing for the `availableCommands`/`commands` shape used both by
+/// the mock server's `_mock/list_slash_commands` extension response and real
+/// Devin's `available_commands_update` session/update notification payload.
+func parseComposerCommands(_ values: [JSONValue]) -> [ComposerCommand] {
+    values.compactMap { value -> ComposerCommand? in
         guard let object = value.objectValue else { return nil }
         guard let name = object["name"]?.stringValue else { return nil }
         let input = object["input"]?.objectValue

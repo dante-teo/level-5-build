@@ -162,6 +162,7 @@ private struct SidebarSessionRow: View {
             Image(systemName: "circle.dotted")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(L5Color.accent)
+                .symbolEffect(.pulse, options: .repeating, isActive: true)
         } else if session.hasCompletedTurn {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 11, weight: .semibold))

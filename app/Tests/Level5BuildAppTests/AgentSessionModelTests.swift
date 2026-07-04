@@ -9,19 +9,60 @@ import Testing
 struct AgentSessionModelTests {
     @Test("Backend selector honors mock only when mock backends are allowed")
     func backendSelectorHonorsDebugGate() {
-        let environment = ["LEVEL5_USE_ACP_MOCK": "1"]
+        let environment = ["LEVEL5_USE_ACP_MOCK": "1", "PATH": "/nonexistent"]
 
-        #expect(AgentBackendSelector(environment: environment, allowsMockBackend: true).selectedBackend == .acpMock)
-        #expect(AgentBackendSelector(environment: environment, allowsMockBackend: false).selectedBackend == .unavailable)
+        #expect(AgentBackendSelector(environment: environment, allowsMockBackend: true, homeDirectoryPath: "/nonexistent-home").selectedBackend == .acpMock)
+        #expect(AgentBackendSelector(environment: environment, allowsMockBackend: false, homeDirectoryPath: "/nonexistent-home").selectedBackend == .unavailable)
     }
 
     @Test("Default backend selector allows mock in debug builds")
     func defaultBackendSelectorAllowsMockInDebugBuilds() {
+        let environment = ["LEVEL5_USE_ACP_MOCK": "1", "PATH": "/nonexistent"]
         #if DEBUG
-        #expect(AgentBackendSelector(environment: ["LEVEL5_USE_ACP_MOCK": "1"]).selectedBackend == .acpMock)
+        #expect(AgentBackendSelector(environment: environment, homeDirectoryPath: "/nonexistent-home").selectedBackend == .acpMock)
         #else
-        #expect(AgentBackendSelector(environment: ["LEVEL5_USE_ACP_MOCK": "1"]).selectedBackend == .unavailable)
+        #expect(AgentBackendSelector(environment: environment, homeDirectoryPath: "/nonexistent-home").selectedBackend == .unavailable)
         #endif
+    }
+
+    @Test("Backend selector picks Devin when the CLI resolves and mock is not requested")
+    func backendSelectorPicksDevinWhenCliResolves() throws {
+        let (binDirectory, environment) = try Self.makeFakeDevinInstall()
+        defer { try? FileManager.default.removeItem(at: binDirectory.deletingLastPathComponent()) }
+
+        let selector = AgentBackendSelector(environment: environment, allowsMockBackend: true, homeDirectoryPath: "/nonexistent-home")
+        #expect(selector.selectedBackend == .devin)
+        #expect(selector.unavailableReason == nil)
+    }
+
+    @Test("Backend selector reports unavailable reason when no CLI and no mock")
+    func backendSelectorReportsUnavailableReason() {
+        let selector = AgentBackendSelector(
+            environment: ["PATH": "/nonexistent"],
+            allowsMockBackend: false,
+            homeDirectoryPath: "/nonexistent-home"
+        )
+        #expect(selector.selectedBackend == .unavailable)
+        #expect(selector.unavailableReason == DevinRuntime.missingCliMessage)
+    }
+
+    @Test("Mock still wins over Devin when explicitly requested")
+    func mockWinsOverDevinWhenRequested() throws {
+        let (_, environment) = try Self.makeFakeDevinInstall(extra: ["LEVEL5_USE_ACP_MOCK": "1"])
+        let selector = AgentBackendSelector(environment: environment, allowsMockBackend: true, homeDirectoryPath: "/nonexistent-home")
+        #expect(selector.selectedBackend == .acpMock)
+    }
+
+    private static func makeFakeDevinInstall(extra: [String: String] = [:]) throws -> (binDirectory: URL, environment: [String: String]) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let binDirectory = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let executable = binDirectory.appendingPathComponent("devin")
+        try "#!/bin/sh\nexit 0\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        var environment = extra
+        environment["PATH"] = binDirectory.path
+        return (binDirectory, environment)
     }
 
     @Test("No backend disables agent actions")
@@ -34,6 +75,22 @@ struct AgentSessionModelTests {
 
         #expect(model.availability.disablesAgentActions)
         #expect(model.canSendWithButton == false)
+    }
+
+    @Test("Missing Devin CLI surfaces the actionable install message, not a generic one")
+    func missingDevinCliSurfacesActionableMessage() {
+        let selector = AgentBackendSelector(
+            environment: ["PATH": "/nonexistent"],
+            allowsMockBackend: false,
+            homeDirectoryPath: "/nonexistent-home"
+        )
+        let model = AgentSessionModel(selector: selector)
+
+        guard case let .unavailable(message) = model.availability else {
+            Issue.record("Expected .unavailable availability")
+            return
+        }
+        #expect(message == DevinRuntime.missingCliMessage)
     }
 
     @Test("Failed first-send connection preserves draft and shows unavailable reason")
@@ -1228,6 +1285,320 @@ struct AgentSessionModelTests {
         state.toggle()
         #expect(state.presentation == .reserved)
     }
+
+    // MARK: - Devin multi-project isolation
+
+    @Test("Two projects get independent Devin clients spawned with that project's cwd")
+    func multiProjectClientsSpawnPerProject() async throws {
+        let clientA = FakeAgentSessionClient()
+        clientA.newSessionResult = .init(sessionId: "a1")
+        let clientB = FakeAgentSessionClient()
+        clientB.newSessionResult = .init(sessionId: "b1")
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
+            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        // Selecting a project eagerly connects and silently primes a
+        // session for the composer (models/slash-commands); wait for that
+        // to land before sending so the send path reuses it rather than
+        // racing a second `session/new`.
+        model.selectProject(projectA)
+        try await waitUntil { clientA.newSessionCwds == ["/repo/project-a"] }
+        model.draft = "hello a"
+        model.sendDraft()
+        try await waitUntil { clientA.prompts.count == 1 }
+
+        model.startNewChat()
+        model.selectProject(projectB)
+        try await waitUntil { clientB.newSessionCwds == ["/repo/project-b"] }
+        model.draft = "hello b"
+        model.sendDraft()
+        try await waitUntil { clientB.prompts.count == 1 }
+
+        // Exactly one `session/new` per project: the priming call is reused
+        // as the real session rather than creating a second one.
+        #expect(clientA.newSessionCwds == ["/repo/project-a"])
+        #expect(clientB.newSessionCwds == ["/repo/project-b"])
+        #expect(clientA.prompts.map(\.text) == ["hello a"])
+        #expect(clientB.prompts.map(\.text) == ["hello b"])
+        #expect(clientA.initializeCount == 1)
+        #expect(clientB.initializeCount == 1)
+    }
+
+    @Test("One project's process exit does not disrupt another project's active turn")
+    func multiProjectProcessExitIsIsolated() async throws {
+        let clientA = FakeAgentSessionClient()
+        clientA.newSessionResult = .init(sessionId: "a1")
+        // Mirrors the session the fake will report back once created, so a
+        // concurrent sidebar refresh for project A can't race the creation
+        // and wipe the row back out.
+        clientA.listResults = [.init(sessions: [.init(sessionId: "a1", cwd: "/repo/project-a", title: "A session")])]
+        clientA.blocksPrompts = true
+        let clientB = FakeAgentSessionClient()
+        clientB.newSessionResult = .init(sessionId: "b1")
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
+            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        model.selectProject(projectA)
+        try await waitUntil { clientA.initializeCount == 1 }
+        model.draft = "hello a"
+        model.sendDraft()
+        try await waitUntil { clientA.prompts.count == 1 }
+        let sessionAId = try #require(model.activeSessionId)
+
+        model.startNewChat()
+        model.selectProject(projectB)
+        try await waitUntil { clientB.initializeCount == 1 }
+        model.draft = "hello b"
+        model.sendDraft()
+        try await waitUntil { model.activeSessionId == "b1" }
+
+        clientB.emitProcessExit()
+        try await waitUntil { if case .disconnected = model.availability { true } else { false } }
+
+        // Project A's turn (on a separate, still-healthy process) keeps running.
+        #expect(model.sessions.first { $0.sessionId == sessionAId }?.isRunning == true)
+
+        clientA.releaseNextPrompt()
+        try await waitUntil { model.sessions.first { $0.sessionId == sessionAId }?.isRunning == false }
+    }
+
+    @Test("Selecting a project loads its sessions without evicting other projects' rows")
+    func selectingProjectLoadsItsOwnSessionsForDevin() async throws {
+        let clientA = FakeAgentSessionClient()
+        clientA.listResults = [.init(sessions: [.init(sessionId: "a1", cwd: "/repo/project-a", title: "A session")])]
+        let clientB = FakeAgentSessionClient()
+        clientB.listResults = [.init(sessions: [.init(sessionId: "b1", cwd: "/repo/project-b", title: "B session")])]
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
+            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        model.selectProject(projectA)
+        try await waitUntil { model.sessions.map(\.sessionId) == ["a1"] }
+
+        // Switching the "new chat" project to B loads B's own sessions too,
+        // but must not evict A's row: with true multi-project concurrency,
+        // A's process (and any work happening there) is still alive.
+        model.selectProject(projectB)
+        try await waitUntil { Set(model.sessions.map(\.sessionId)) == ["a1", "b1"] }
+    }
+
+    @Test("A background project's idle-timeout cancellation does not clobber the foreground project's status")
+    func backgroundProjectIdleTimeoutDoesNotLeakIntoForegroundStatus() async throws {
+        let clientA = FakeAgentSessionClient()
+        clientA.newSessionResult = .init(sessionId: "a1")
+        let clientB = FakeAgentSessionClient()
+        clientB.newSessionResult = .init(sessionId: "b1")
+        clientB.blocksPrompts = true
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
+            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() },
+            turnIdleTimeoutMilliseconds: 30
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        model.selectProject(projectA)
+        try await waitUntil { clientA.initializeCount == 1 }
+
+        // Start a turn on project B (background), then switch focus back to
+        // A before B's turn idle-times-out.
+        model.startNewChat()
+        model.selectProject(projectB)
+        try await waitUntil { clientB.initializeCount == 1 }
+        model.draft = "hello b"
+        model.sendDraft()
+        try await waitUntil { clientB.prompts.count == 1 }
+
+        model.startNewChat()
+        model.selectProject(projectA)
+        try await waitUntil { model.availability == .available }
+
+        // Give B's watchdog time to fire its idle timeout in the background.
+        try await Task.sleep(for: .milliseconds(120))
+
+        // A is healthy and in the foreground: its status must not be
+        // clobbered by B's background idle-timeout disconnect.
+        #expect(model.availability == .available)
+        #expect(model.runtimeMessage == nil)
+
+        clientB.releaseNextPrompt()
+    }
+
+    @Test("Starting up eagerly connects and primes the home-directory composer with real models")
+    func startPrimesHomeComposerEagerly() async throws {
+        let client = FakeAgentSessionClient()
+        client.newSessionResult = .init(sessionId: "home1", configOptions: [[
+            "id": "model",
+            "currentValue": "real-model",
+            "options": [["value": "real-model", "name": "Real Model"]]
+        ]])
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { _, _ in client },
+            gitStatusProvider: { _ in .unavailable() },
+            homeDirectoryPath: "/Users/tester"
+        )
+
+        model.start()
+
+        // The composer should already reflect a real model before the user
+        // has typed or sent anything.
+        try await waitUntil { model.modelOptions.map(\.id) == ["real-model"] }
+        #expect(client.newSessionCwds == ["/Users/tester"])
+        #expect(model.activeSessionId == nil)
+        #expect(model.sessions.isEmpty)
+    }
+
+    @Test("Selecting a project eagerly primes that project's composer, independent of home")
+    func selectingProjectPrimesItsOwnComposerEagerly() async throws {
+        let homeClient = FakeAgentSessionClient()
+        homeClient.newSessionResult = .init(sessionId: "home1", configOptions: [[
+            "id": "model",
+            "currentValue": "home-model",
+            "options": [["value": "home-model", "name": "Home Model"]]
+        ]])
+        let projectClient = FakeAgentSessionClient()
+        projectClient.newSessionResult = .init(sessionId: "proj1", configOptions: [[
+            "id": "model",
+            "currentValue": "project-model",
+            "options": [["value": "project-model", "name": "Project Model"]]
+        ]])
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/Users/tester"): homeClient,
+            RecentProjectStore.normalizedPath("/repo/project"): projectClient
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() },
+            homeDirectoryPath: "/Users/tester"
+        )
+
+        model.start()
+        try await waitUntil { model.modelOptions.map(\.id) == ["home-model"] }
+
+        let project = RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model.selectProject(project)
+        try await waitUntil { model.modelOptions.map(\.id) == ["project-model"] }
+
+        #expect(projectClient.newSessionCwds == ["/repo/project"])
+        #expect(model.activeSessionId == nil)
+    }
+
+    @Test("loadSession request includes mcpServers, which real Devin requires or rejects the call")
+    func loadSessionIncludesMcpServers() async throws {
+        final class LineCapture: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _lines: [String] = []
+            var lines: [String] { lock.withLock { _lines } }
+            func record(_ line: String) { lock.withLock { _lines.append(line) } }
+        }
+        struct TestClient: AcpClientBackedSessionClient {
+            let client: AcpClient
+
+            func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
+                ([], nil)
+            }
+
+            func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] { [] }
+
+            func terminate() {}
+        }
+
+        let capture = LineCapture()
+        let transport = AcpJsonRpcTransport(requestTimeout: .seconds(2)) { line in
+            capture.record(line)
+        }
+        let testClient = TestClient(client: AcpClient(transport: transport))
+
+        let resultTask = Task { try await testClient.loadSession(sessionId: "abc", cwd: nil) }
+        try await waitUntil { capture.lines.count == 1 }
+
+        let line = capture.lines[0]
+        let json = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+        #expect(json?["method"] as? String == "session/load")
+        let params = json?["params"] as? [String: Any]
+        #expect(params?["mcpServers"] != nil)
+
+        let id = json?["id"] as? Int ?? -1
+        await transport.handleLine(#"{"jsonrpc":"2.0","id":\#(id),"result":{"sessionId":"abc"}}"#)
+        let result = try await resultTask.value
+        #expect(result.sessionId == "abc")
+    }
+
+    @Test("Slash commands and skills from a live update survive a backend with no discovery API")
+    func slashCommandsSurviveThrowingDiscoveryClient() async throws {
+        let client = FakeAgentSessionClient()
+        client.throwsOnDiscovery = true
+        client.newSessionResult = .init(sessionId: "s1")
+        // Real Devin has no request/response API for slash commands or
+        // skills; they only arrive as an `available_commands_update`
+        // notification that streams in *before* the session/new RPC
+        // response, the way the real ACP wire order behaves.
+        client.availableCommandNamesOnNewSession = ["grill-me", "code-review", "find-skills"]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.draft = "Build it"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+
+        // A backend client whose `listSlashCommands`/`listModelOptions`
+        // throw (rather than succeeding with an empty list) must not let
+        // those calls wipe out what the notification already populated.
+        #expect(model.slashCommands.map(\.name) == ["grill-me", "code-review", "find-skills"])
+    }
 }
 
 private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Sendable {
@@ -1265,6 +1636,13 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         .init(name: "plan", commandDescription: "Create a plan"),
         .init(name: "review", commandDescription: "Review code")
     ]
+    /// Mirrors real Devin's lack of a request/response discovery API: when
+    /// set, `listModelOptions`/`listSlashCommands` throw instead of
+    /// returning an empty success.
+    var throwsOnDiscovery = false
+    /// When set, `newSession` emits `available_commands_update` for these
+    /// names before returning its result, mirroring real Devin's wire order.
+    var availableCommandNamesOnNewSession: [String]?
     var setModelRequests: [ModelRequest] = []
     var setModelFailures: Set<String> = []
     var cancelledSessionIds: [String] = []
@@ -1338,6 +1716,13 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     func newSession(cwd: String) async throws -> AcpSessionResult {
         lock.withLock { newSessionCwds.append(cwd) }
+        // Real Devin streams `session/update` notifications (including
+        // `available_commands_update`) on the wire *before* the session/new
+        // RPC response arrives. Mirror that ordering here so tests can
+        // exercise the same race a real backend produces.
+        if let names = lock.withLock({ availableCommandNamesOnNewSession }) {
+            emitAvailableCommands(newSessionResult.sessionId ?? "", names: names)
+        }
         return newSessionResult
     }
 
@@ -1361,14 +1746,20 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     }
 
     func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
-        lock.withLock {
+        if lock.withLock({ throwsOnDiscovery }) {
+            throw AgentBackendError.discoveryUnsupported
+        }
+        return lock.withLock {
             modelOptionSessionIds.append(sessionId)
             return modelOptionsResult
         }
     }
 
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand] {
-        lock.withLock { slashCommandsResult }
+        if lock.withLock({ throwsOnDiscovery }) {
+            throw AgentBackendError.discoveryUnsupported
+        }
+        return lock.withLock { slashCommandsResult }
     }
 
     func setModel(sessionId: String, modelId: String) async throws -> AcpSessionResult {
@@ -1540,6 +1931,21 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 "sessionUpdate": "usage_update",
                 "used": .number(Double(used)),
                 "size": .number(Double(size))
+            ]
+        ]))
+    }
+
+    /// Mirrors real Devin's `available_commands_update` `session/update`
+    /// notification, which is how slash commands (including skills) arrive
+    /// for a backend with no discovery request/response API.
+    func emitAvailableCommands(_ sessionId: String, names: [String]) {
+        continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+            "sessionId": .string(sessionId),
+            "update": [
+                "sessionUpdate": "available_commands_update",
+                "availableCommands": .array(names.map { name in
+                    ["name": .string(name), "description": .string("\(name) description")]
+                })
             ]
         ]))
     }

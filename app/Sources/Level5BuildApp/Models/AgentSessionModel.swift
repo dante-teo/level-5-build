@@ -82,6 +82,7 @@ final class AgentSessionModel {
     private var transcriptStates: [String: AgentTranscriptState] = [:]
     private var sessionCwdBySessionId: [String: String] = [:]
     private var sessionProjectPathBySessionId: [String: String] = [:]
+    private var sessionProjectKeyBySessionId: [String: String] = [:]
     private var recentProjectPaths: Set<String> = []
     private var completedTurnSessionIds: Set<String> = []
     private var queues: [String: [QueuedPrompt]] = [:]
@@ -96,12 +97,23 @@ final class AgentSessionModel {
     private var persistedNewChatModelByBackend: [AgentBackendKind: String] = [:]
     private var defaultModelId: String?
     private var dashboardRefreshGeneration = 0
-    private var client: AgentSessionClient?
-    private var clientGeneration = 0
-    private var connectionTask: Task<Bool, Never>?
-    private var eventTask: Task<Void, Never>?
+    /// One ACP client per project. Keyed by `Self.sharedClientKey` for the
+    /// mock backend (a single shared server handles every project), or by
+    /// the normalized project path for Devin (one spawned `devin acp`
+    /// process per project directory, enabling true concurrent sessions).
+    private var clients: [String: AgentSessionClient] = [:]
+    private var clientGenerationByProjectKey: [String: Int] = [:]
+    private var connectionTasksByProjectKey: [String: Task<Bool, Never>] = [:]
+    private var eventTasksByProjectKey: [String: Task<Void, Never>] = [:]
+    private var pendingApprovalModeRestartProjectKeys: Set<String> = []
+    /// A session created eagerly (before the user sent anything) purely to
+    /// discover models/slash-commands for a "new chat" composer targeting
+    /// that project. Reused as the real session on first send. Empty string
+    /// means "creation in flight" (reservation to avoid duplicate creates).
+    private var primingSessionIdByProjectKey: [String: String] = [:]
     private let backendKind: AgentBackendKind
     private let makeClient: @Sendable () throws -> AgentSessionClient
+    private let makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)?
     private let approvalModePreferenceStore: ApprovalModePreferenceStore
     private let gitStatusProvider: @Sendable (String) async -> ProjectGitStatus
     private let now: @Sendable () -> Date
@@ -114,19 +126,24 @@ final class AgentSessionModel {
         return formatter
     }()
 
+    private static let sharedClientKey = "shared"
+
     init(
         backendKind: AgentBackendKind,
         makeClient: @escaping @Sendable () throws -> AgentSessionClient,
+        makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)? = nil,
         approvalModePreferenceStore: ApprovalModePreferenceStore = .userDefaults,
         gitStatusProvider: @escaping @Sendable (String) async -> ProjectGitStatus = { cwd in
             await ProjectGitStatusService().status(cwd: cwd)
         },
         now: @escaping @Sendable () -> Date = Date.init,
         homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path,
-        turnIdleTimeoutMilliseconds: Int? = nil
+        turnIdleTimeoutMilliseconds: Int? = nil,
+        unavailableReason: String? = nil
     ) {
         self.backendKind = backendKind
         self.makeClient = makeClient
+        self.makeProjectClient = makeProjectClient
         self.approvalModePreferenceStore = approvalModePreferenceStore
         self.gitStatusProvider = gitStatusProvider
         approvalMode = approvalModePreferenceStore.load(backendKind)
@@ -136,10 +153,10 @@ final class AgentSessionModel {
             ?? ProcessInfo.processInfo.environment["LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS"].flatMap(Int.init)
             ?? 120_000
         switch backendKind {
-        case .acpMock:
+        case .acpMock, .devin:
             availability = .connecting
         case .unavailable:
-            availability = .unavailable("Agent runtime unavailable")
+            availability = .unavailable(unavailableReason ?? "Agent runtime unavailable")
         }
     }
 
@@ -147,17 +164,59 @@ final class AgentSessionModel {
         selector: AgentBackendSelector = AgentBackendSelector()
     ) {
         let kind = selector.selectedBackend
+        let makeClient: @Sendable () throws -> AgentSessionClient = {
+            switch kind {
+            case .acpMock:
+                return AcpTcpAgentSessionClient(environment: selector.environment)
+            case .devin, .unavailable:
+                throw AgentBackendError.missingMockStartScript
+            }
+        }
+        let devinProjectClient: @Sendable (String, ApprovalMode) throws -> AgentSessionClient = { cwd, approvalMode in
+            try DevinAgentSessionClient(cwd: cwd, approvalMode: approvalMode, environment: selector.environment)
+        }
+        let makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)?
+        if kind == .devin {
+            makeProjectClient = devinProjectClient
+        } else {
+            makeProjectClient = nil
+        }
         self.init(
             backendKind: kind,
-            makeClient: {
-                switch kind {
-                case .acpMock:
-                    return AcpTcpAgentSessionClient(environment: selector.environment)
-                case .unavailable:
-                    throw AgentBackendError.missingMockStartScript
-                }
-            }
+            makeClient: makeClient,
+            makeProjectClient: makeProjectClient,
+            unavailableReason: selector.unavailableReason
         )
+    }
+
+    /// Routing key for the client that owns `projectPath` (or the home
+    /// directory, when no project is selected). Mock always resolves to the
+    /// single shared client; Devin resolves to that project's own process.
+    private func projectKey(for projectPath: String?) -> String {
+        guard backendKind == .devin else { return Self.sharedClientKey }
+        return RecentProjectStore.normalizedPath(projectPath ?? homeDirectoryPath)
+    }
+
+    private func projectKey(forSessionId sessionId: String) -> String {
+        sessionProjectKeyBySessionId[sessionId] ?? projectKey(for: selectedProjectPath)
+    }
+
+    /// The project whose sessions the sidebar currently represents: the
+    /// active session's project when one is open, otherwise the project
+    /// picked for the next new chat (or home).
+    private var currentSidebarProjectKey: String {
+        if let activeSessionId, let key = sessionProjectKeyBySessionId[activeSessionId] {
+            return key
+        }
+        return projectKey(for: selectedProjectPath)
+    }
+
+    /// Whether `key` is the project the user is currently looking at, i.e.
+    /// whether global `availability`/`runtimeMessage` should reflect that
+    /// project's client state. Mock only ever has one project in play.
+    private func isActiveProjectKey(_ key: String) -> Bool {
+        guard backendKind == .devin else { return true }
+        return key == currentSidebarProjectKey
     }
 
     var transcript: [AgentTranscriptItem] {
@@ -230,7 +289,7 @@ final class AgentSessionModel {
     var canEditComposer: Bool {
         guard activePermissionRequest == nil else { return false }
         return switch backendKind {
-        case .acpMock:
+        case .acpMock, .devin:
             true
         case .unavailable:
             false
@@ -238,10 +297,14 @@ final class AgentSessionModel {
     }
 
     func start() {
-        guard case .acpMock = backendKind else { return }
+        guard backendKind == .acpMock || backendKind == .devin else { return }
+        let key = currentSidebarProjectKey
         Task {
-            await ensureConnected()
-            await refreshSessions(reset: true)
+            await ensureConnected(projectKey: key)
+            await refreshSessions(reset: true, projectKey: key)
+            if isNewSession {
+                await primeComposerSession(forProjectKey: key)
+            }
         }
     }
 
@@ -264,11 +327,69 @@ final class AgentSessionModel {
     func selectProject(_ project: RecentProject) {
         guard isProjectSelectionAvailable else { return }
         selectedProject = project
+        refreshSessionsForSelectedProjectIfNeeded()
     }
 
     func clearSelectedProject() {
         guard isProjectSelectionAvailable else { return }
         selectedProject = nil
+        refreshSessionsForSelectedProjectIfNeeded()
+    }
+
+    /// Devin spawns one process per project, so switching the "new chat"
+    /// project needs to (re)load that project's own session list and get a
+    /// live agent connection ready (see `primeComposerSession`). Mock has a
+    /// single shared server that already lists and discovers everything, so
+    /// this is a no-op there.
+    private func refreshSessionsForSelectedProjectIfNeeded() {
+        guard backendKind == .devin, isNewSession else { return }
+        let key = projectKey(for: selectedProjectPath)
+        Task {
+            await ensureConnected(projectKey: key)
+            await refreshSessions(reset: true, projectKey: key)
+            await primeComposerSession(forProjectKey: key)
+        }
+    }
+
+    /// Real Devin has no way to discover models or slash commands/skills
+    /// without an active session (see `DevinAgentSessionClient`), so a "new
+    /// chat" composer would otherwise show nothing until the user's first
+    /// send. To make the composer feel already-connected — matching what a
+    /// user expects when they open a new chat or pick a project — silently
+    /// create a session as soon as the project's client connects, and reuse
+    /// it as the real session once the user actually sends (see
+    /// `createSessionAndSend`). An un-messaged session is never persisted by
+    /// Devin's own session store, so an abandoned priming session (e.g. the
+    /// user switches projects before sending) costs nothing and never shows
+    /// up in `session/list`.
+    private func primeComposerSession(forProjectKey key: String) async {
+        guard backendKind == .devin else { return }
+        guard primingSessionIdByProjectKey[key] == nil else { return }
+        guard let client = clients[key] else { return }
+        primingSessionIdByProjectKey[key] = ""
+        do {
+            let result = try await client.newSession(cwd: key)
+            guard let sessionId = result.sessionId else {
+                primingSessionIdByProjectKey[key] = nil
+                return
+            }
+            guard clients[key] != nil else {
+                // The client was torn down (approval-mode restart, crash,
+                // project switch) while we awaited; the priming session is
+                // moot.
+                primingSessionIdByProjectKey[key] = nil
+                return
+            }
+            primingSessionIdByProjectKey[key] = sessionId
+            sessionProjectKeyBySessionId[sessionId] = key
+            applyModelConfig(result.configOptions, sessionId: sessionId)
+            if isNewSession, projectKey(for: selectedProjectPath) == key {
+                defaultModelId = currentModelBySessionId[sessionId] ?? defaultModelId
+                applyNewChatPersistedModel()
+            }
+        } catch {
+            primingSessionIdByProjectKey[key] = nil
+        }
     }
 
     func refreshProjectDashboard() {
@@ -281,7 +402,7 @@ final class AgentSessionModel {
             draft.clearAfterSend()
             return
         }
-        guard case .acpMock = backendKind else {
+        guard backendKind == .acpMock || backendKind == .devin else {
             runtimeMessage = "Agent runtime unavailable"
             return
         }
@@ -337,13 +458,14 @@ final class AgentSessionModel {
         }
         guard let activeSessionId else { return }
         let sessionId = activeSessionId
+        let key = projectKey(forSessionId: sessionId)
         let previous = currentModelBySessionId[sessionId] ?? defaultModelId
         currentModelBySessionId[sessionId] = modelId
         draft.selectedModelId = modelId
         pendingModelBySessionId[sessionId] = modelId
         sessionModelSaveInFlight = true
         Task {
-            guard await ensureConnected(), let client else {
+            guard await ensureConnected(projectKey: key), let client = clients[key] else {
                 rollbackModelChange(sessionId: sessionId, previous: previous)
                 return
             }
@@ -360,8 +482,44 @@ final class AgentSessionModel {
     }
 
     func selectApprovalMode(_ mode: ApprovalMode) {
+        let previous = approvalMode
         approvalMode = mode
         approvalModePreferenceStore.save(mode, backendKind)
+        guard backendKind == .devin, mode != previous else { return }
+        restartClientsForApprovalModeChange()
+    }
+
+    /// Real Devin's permission mode is fixed at process startup (empirically,
+    /// `session/set_mode` only affects the agent's Normal/Plan/Ask mode, not
+    /// tool-approval enforcement), so changing approval mode restarts the
+    /// affected project's `devin acp` process. Projects with a turn in
+    /// flight are restarted once that turn finishes instead of killing it.
+    private func restartClientsForApprovalModeChange() {
+        for key in clients.keys {
+            let hasActiveTurn = activeTurns.keys.contains { sessionProjectKeyBySessionId[$0] == key }
+            if hasActiveTurn {
+                pendingApprovalModeRestartProjectKeys.insert(key)
+            } else {
+                terminateClient(forProjectKey: key)
+            }
+        }
+    }
+
+    private func terminateClient(forProjectKey key: String) {
+        eventTasksByProjectKey[key]?.cancel()
+        eventTasksByProjectKey[key] = nil
+        clients[key]?.terminate()
+        clients[key] = nil
+        clientGenerationByProjectKey[key, default: 0] += 1
+        pendingApprovalModeRestartProjectKeys.remove(key)
+        primingSessionIdByProjectKey[key] = nil
+    }
+
+    private func applyDeferredApprovalModeRestartIfNeeded(projectKey key: String) {
+        guard pendingApprovalModeRestartProjectKeys.contains(key) else { return }
+        let stillRunning = activeTurns.keys.contains { sessionProjectKeyBySessionId[$0] == key }
+        guard !stillRunning else { return }
+        terminateClient(forProjectKey: key)
     }
 
     func respondToPermission(optionId: String) {
@@ -412,15 +570,17 @@ final class AgentSessionModel {
         if followTailBySessionId[sessionId] == nil {
             followTailBySessionId[sessionId] = true
         }
+        let key = projectKey(forSessionId: sessionId)
         Task {
-            guard await ensureConnected() else { return }
-            guard let client else { return }
+            guard await ensureConnected(projectKey: key) else { return }
+            guard let client = clients[key] else { return }
                 transcriptStates[sessionId] = AgentTranscriptState()
                 loadingSessionIds.insert(sessionId)
                 do {
                     let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
+                sessionProjectKeyBySessionId[sessionId] = key
                 applyModelConfig(result.configOptions, sessionId: sessionId)
-                await refreshSessionSlashCommands(sessionId)
+                await refreshSessionSlashCommands(sessionId, projectKey: key)
                 await clearLoadingAfterReplayDrain(sessionId)
             } catch {
                 loadingSessionIds.remove(sessionId)
@@ -430,15 +590,17 @@ final class AgentSessionModel {
     }
 
     func loadMoreSessions() {
+        let key = currentSidebarProjectKey
         Task {
-            await refreshSessions(reset: false)
+            await refreshSessions(reset: false, projectKey: key)
         }
     }
 
     func deleteSession(_ sessionId: String) {
+        let key = projectKey(forSessionId: sessionId)
         Task {
-            guard await ensureConnected() else { return }
-            guard let client else { return }
+            guard await ensureConnected(projectKey: key) else { return }
+            guard let client = clients[key] else { return }
             do {
                 try await client.deleteSession(sessionId: sessionId)
                 transcriptStates[sessionId] = nil
@@ -447,10 +609,12 @@ final class AgentSessionModel {
                 followTailBySessionId[sessionId] = nil
                 sessionCwdBySessionId[sessionId] = nil
                 sessionProjectPathBySessionId[sessionId] = nil
+                sessionProjectKeyBySessionId[sessionId] = nil
                 pendingPermissionRequests[sessionId] = nil
                 completedTurnSessionIds.remove(sessionId)
                 activeTurns[sessionId]?.watchdogTask?.cancel()
                 activeTurns[sessionId] = nil
+                sessions.removeAll { $0.sessionId == sessionId }
                 if activeSessionId == sessionId {
                     activeSessionId = nil
                     activeSessionProjectPath = nil
@@ -459,7 +623,7 @@ final class AgentSessionModel {
                     draft.clearAfterSend()
                     applyNewChatPersistedModel()
                 }
-                await refreshSessions(reset: true)
+                await refreshSessions(reset: true, projectKey: key)
             } catch {
                 appendError(title: "Delete failed", text: "Failed to delete session: \(error)", key: "delete-failed", to: sessionId)
             }
@@ -471,52 +635,78 @@ final class AgentSessionModel {
         transcriptStates[activeSessionId] = AgentTranscriptState()
     }
 
-    @discardableResult
-    private func ensureConnected() async -> Bool {
-        if client != nil { return true }
-        if let connectionTask {
-            return await connectionTask.value
+    private func makeAgentClient(projectKey: String) throws -> AgentSessionClient {
+        switch backendKind {
+        case .acpMock:
+            return try makeClient()
+        case .devin:
+            guard let makeProjectClient else { throw AgentBackendError.missingDevinExecutable }
+            return try makeProjectClient(projectKey, approvalMode)
+        case .unavailable:
+            throw AgentBackendError.missingMockStartScript
         }
-        guard case .acpMock = backendKind else {
+    }
+
+    @discardableResult
+    private func ensureConnected(projectKey: String) async -> Bool {
+        if clients[projectKey] != nil { return true }
+        if let task = connectionTasksByProjectKey[projectKey] {
+            return await task.value
+        }
+        guard backendKind == .acpMock || backendKind == .devin else {
             availability = .unavailable("Agent runtime unavailable")
             return false
         }
 
-        availability = .connecting
-        runtimeMessage = "Starting agent runtime..."
+        if isActiveProjectKey(projectKey) {
+            availability = .connecting
+            runtimeMessage = "Starting agent runtime..."
+        }
         let task = Task { @MainActor in
-            defer { connectionTask = nil }
+            defer { connectionTasksByProjectKey[projectKey] = nil }
             do {
-                let client = try makeClient()
-                self.client = client
-                clientGeneration += 1
-                startEventTask(client.events, generation: clientGeneration)
+                let client = try makeAgentClient(projectKey: projectKey)
+                clients[projectKey] = client
+                let generation = (clientGenerationByProjectKey[projectKey] ?? 0) + 1
+                clientGenerationByProjectKey[projectKey] = generation
+                startEventTask(client.events, generation: generation, projectKey: projectKey)
                 try await client.initialize()
-                await refreshGlobalComposerDiscovery()
-                availability = .available
-                runtimeMessage = nil
+                await refreshGlobalComposerDiscovery(projectKey: projectKey)
+                if isActiveProjectKey(projectKey) {
+                    availability = .available
+                    runtimeMessage = nil
+                }
                 return true
             } catch {
                 let message = "Agent runtime unavailable: \(userFacingError(error))"
-                availability = .unavailable(message)
-                runtimeMessage = message
-                self.client = nil
+                if isActiveProjectKey(projectKey) {
+                    availability = .unavailable(message)
+                    runtimeMessage = message
+                }
+                clients[projectKey] = nil
                 return false
             }
         }
-        connectionTask = task
+        connectionTasksByProjectKey[projectKey] = task
         return await task.value
     }
 
-    private func refreshSessions(reset: Bool) async {
-        guard await ensureConnected() else { return }
-        guard let client else { return }
+    private func refreshSessions(reset: Bool, projectKey: String) async {
+        guard await ensureConnected(projectKey: projectKey) else { return }
+        guard let client = clients[projectKey] else { return }
         do {
             let result = try await client.listSessions(cursor: reset ? nil : nextCursor)
-            runtimeMessage = nil
-            let incoming = result.sessions.map(row)
+            if isActiveProjectKey(projectKey) {
+                runtimeMessage = nil
+            }
+            let incoming = result.sessions.map { row(from: $0, projectKey: projectKey) }
             if reset {
-                sessions = incoming
+                // Only replace this project's own rows: other projects' rows
+                // (e.g. one with a Devin turn still running in the
+                // background) must survive switching the sidebar's context.
+                let incomingIds = Set(incoming.map(\.sessionId))
+                sessions.removeAll { sessionProjectKeyBySessionId[$0.sessionId] == projectKey && !incomingIds.contains($0.sessionId) }
+                incoming.forEach(upsert)
             } else {
                 let existing = Set(sessions.map(\.sessionId))
                 sessions.append(contentsOf: incoming.filter { !existing.contains($0.sessionId) })
@@ -524,6 +714,7 @@ final class AgentSessionModel {
             nextCursor = result.nextCursor
             sortSessions()
         } catch {
+            guard isActiveProjectKey(projectKey) else { return }
             let message = "Agent runtime disconnected: \(userFacingError(error))"
             availability = .disconnected(message)
             runtimeMessage = message
@@ -560,8 +751,8 @@ final class AgentSessionModel {
         sessionModelSaveInFlight = !pendingModelBySessionId.isEmpty
     }
 
-    private func refreshGlobalComposerDiscovery() async {
-        guard let client else { return }
+    private func refreshGlobalComposerDiscovery(projectKey: String) async {
+        guard let client = clients[projectKey] else { return }
         async let modelsResult = try? client.listModelOptions(sessionId: nil)
         async let commandsResult = try? client.listSlashCommands(sessionId: nil)
         let discoveredModels = await modelsResult
@@ -576,8 +767,8 @@ final class AgentSessionModel {
         }
     }
 
-    private func refreshSessionSlashCommands(_ sessionId: String) async {
-        guard let client else { return }
+    private func refreshSessionSlashCommands(_ sessionId: String, projectKey: String) async {
+        guard let client = clients[projectKey] else { return }
         if let commands = try? await client.listSlashCommands(sessionId: sessionId) {
             slashCommands = commands
         }
@@ -628,14 +819,34 @@ final class AgentSessionModel {
     }
 
     private func createSessionAndSend(_ snapshot: ComposerDraft) async {
-        guard await ensureConnected() else { return }
-        guard let client else { return }
+        let key = projectKey(for: selectedProjectPath)
+        guard await ensureConnected(projectKey: key) else { return }
+        guard let client = clients[key] else { return }
         do {
-            let result = try await client.newSession(cwd: selectedProjectPath ?? homeDirectoryPath)
-            guard let sessionId = result.sessionId else {
-                activeSessionId = nil
-                return
+            let sessionId: String
+            let configOptions: [JSONValue]
+            if let primedSessionId = primingSessionIdByProjectKey[key], !primedSessionId.isEmpty {
+                // Reuse the session `primeComposerSession` already created
+                // silently for this project so the composer felt connected
+                // before the user sent anything; don't create a second one.
+                primingSessionIdByProjectKey[key] = nil
+                sessionId = primedSessionId
+                configOptions = []
+            } else {
+                let result = try await client.newSession(cwd: selectedProjectPath ?? homeDirectoryPath)
+                guard let newSessionId = result.sessionId else {
+                    // Only reset the composer's "new chat" state if the user
+                    // is still looking at it: they may have already switched
+                    // to a different session/project while this awaited.
+                    if isNewSession {
+                        activeSessionId = nil
+                    }
+                    return
+                }
+                sessionId = newSessionId
+                configOptions = result.configOptions
             }
+            sessionProjectKeyBySessionId[sessionId] = key
             if let selectedProjectPath {
                 let normalized = RecentProjectStore.normalizedPath(selectedProjectPath)
                 sessionCwdBySessionId[sessionId] = normalized
@@ -646,7 +857,7 @@ final class AgentSessionModel {
             }
             let row = AgentSessionRow(
                 sessionId: sessionId,
-                title: "New mock agent session",
+                title: backendKind == .devin ? "New Devin session" : "New mock agent session",
                 detail: folderDetail(selectedProjectPath ?? homeDirectoryPath),
                 observedAt: now()
             )
@@ -654,8 +865,8 @@ final class AgentSessionModel {
             activeSessionId = sessionId
             updateActiveProjectPathFromSession()
             followTailBySessionId[sessionId] = true
-            applyModelConfig(result.configOptions, sessionId: sessionId)
-            await refreshSessionSlashCommands(sessionId)
+            applyModelConfig(configOptions, sessionId: sessionId)
+            await refreshSessionSlashCommands(sessionId, projectKey: key)
             let targetModelId = snapshot.selectedModelId ?? draft.selectedModelId
             if
                 let targetModelId,
@@ -672,22 +883,30 @@ final class AgentSessionModel {
             draft.clearAfterSend()
             await send(snapshot, to: sessionId)
         } catch {
-            activeSessionId = nil
+            // Same rationale as above: don't stomp on state the user has
+            // since navigated to while this project's session creation was
+            // in flight.
+            if isNewSession {
+                activeSessionId = nil
+            }
             let message = "Agent runtime disconnected: \(userFacingError(error))"
-            availability = .disconnected(message)
-            runtimeMessage = message
+            if isActiveProjectKey(key) {
+                availability = .disconnected(message)
+                runtimeMessage = message
+            }
         }
     }
 
     private func send(_ snapshot: ComposerDraft, to sessionId: String, isAlreadyMarkedRunning: Bool = false) async {
-        guard await ensureConnected() else {
+        let key = projectKey(forSessionId: sessionId)
+        guard await ensureConnected(projectKey: key) else {
             if isAlreadyMarkedRunning {
                 clearActiveTurn(sessionId)
                 updateRunningFlags()
             }
             return
         }
-        guard let client else { return }
+        guard let client = clients[key] else { return }
         let displayMessage = snapshot.previewText
         loadingSessionIds.remove(sessionId)
         draft.clearAfterSend()
@@ -698,7 +917,9 @@ final class AgentSessionModel {
         do {
             let result = try await client.prompt(sessionId: sessionId, blocks: snapshot.promptBlocks)
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
-            runtimeMessage = nil
+            if isActiveProjectKey(key) {
+                runtimeMessage = nil
+            }
             apply(.stopReason(result.stopReason), to: sessionId)
             updateCompletionState(sessionId: sessionId, stopReason: result.stopReason)
             refreshDashboardStatus()
@@ -706,7 +927,7 @@ final class AgentSessionModel {
         } catch {
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
             if case .processExited = error as? AcpTransportError {
-                cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))")
+                cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))", projectKey: key)
             }
             appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(displayMessage)", to: sessionId)
             completedTurnSessionIds.remove(sessionId)
@@ -718,6 +939,7 @@ final class AgentSessionModel {
         guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
         clearActiveTurn(sessionId)
         updateRunningFlags()
+        applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
         await startNextQueuedPromptIfNeeded(for: sessionId)
     }
 
@@ -734,34 +956,36 @@ final class AgentSessionModel {
         await send(next.snapshot, to: sessionId)
     }
 
-    private func startEventTask(_ events: AsyncStream<AcpEvent>, generation: Int) {
-        eventTask?.cancel()
-        eventTask = Task { [weak self] in
+    private func startEventTask(_ events: AsyncStream<AcpEvent>, generation: Int, projectKey: String) {
+        eventTasksByProjectKey[projectKey]?.cancel()
+        eventTasksByProjectKey[projectKey] = Task { [weak self] in
             for await event in events {
-                await self?.handle(event, generation: generation)
+                await self?.handle(event, generation: generation, projectKey: projectKey)
             }
         }
     }
 
-    private func handle(_ event: AcpEvent, generation: Int) async {
-        guard generation == clientGeneration else { return }
+    private func handle(_ event: AcpEvent, generation: Int, projectKey: String) async {
+        guard generation == clientGenerationByProjectKey[projectKey] else { return }
         switch event {
         case let .notification(method, params):
             guard method == AcpMethod.sessionUpdate, let params else { return }
-            handleSessionUpdate(params, generation: generation)
+            handleSessionUpdate(params, generation: generation, projectKey: projectKey)
         case let .serverRequest(id, method, params):
             if method == AcpMethod.sessionRequestPermission {
-                await handlePermissionRequest(id: id, params: params)
+                await handlePermissionRequest(id: id, params: params, projectKey: projectKey)
             }
         case let .diagnostic(diagnostic):
+            guard isActiveProjectKey(projectKey) else { return }
             appendStatus(title: "Diagnostic", text: diagnostic.message, to: activeSessionId)
         case let .stderr(line):
+            guard isActiveProjectKey(projectKey) else { return }
             appendStatus(title: "Runtime stderr", text: line, to: activeSessionId)
         case let .processExit(exit):
             let message = "Agent runtime disconnected: status \(exit.status)"
-            let activeSessionIds = Array(activeTurns.keys)
-            cleanupUnhealthyRuntime(message: message)
-            for sessionId in activeSessionIds {
+            let affectedSessionIds = activeTurns.keys.filter { sessionProjectKeyBySessionId[$0] == projectKey }
+            cleanupUnhealthyRuntime(message: message, projectKey: projectKey)
+            for sessionId in affectedSessionIds {
                 appendError(title: "Runtime exited", text: "Agent runtime exited with status \(exit.status).", key: "process-exit-\(exit.status)-\(sessionId)", to: sessionId)
             }
         case .activity:
@@ -769,9 +993,11 @@ final class AgentSessionModel {
         }
     }
 
-    private func handlePermissionRequest(id: AcpRpcID, params: JSONValue?) async {
+    private func handlePermissionRequest(id: AcpRpcID, params: JSONValue?, projectKey: String) async {
         guard let request = PermissionRequest.parse(requestId: id, params: params) else {
-            runtimeMessage = "Permission request could not be read."
+            if isActiveProjectKey(projectKey) {
+                runtimeMessage = "Permission request could not be read."
+            }
             return
         }
 
@@ -783,7 +1009,9 @@ final class AgentSessionModel {
             updatePermissionFlags()
         case .approveForMe:
             guard let option = request.automaticApprovalOption else {
-                runtimeMessage = "Permission request had no available options."
+                if isActiveProjectKey(projectKey) {
+                    runtimeMessage = "Permission request had no available options."
+                }
                 return
             }
             appendStatus(title: "Permission", text: "Approved \"\(request.title)\" (Approve for me).", to: request.sessionId)
@@ -795,7 +1023,9 @@ final class AgentSessionModel {
             )
         case .fullAccess:
             guard let option = request.automaticApprovalOption else {
-                runtimeMessage = "Permission request had no available options."
+                if isActiveProjectKey(projectKey) {
+                    runtimeMessage = "Permission request had no available options."
+                }
                 return
             }
             await sendPermissionResponse(
@@ -813,8 +1043,9 @@ final class AgentSessionModel {
         localInstructionText: String?,
         followUpInstruction: String?
     ) async {
+        let key = projectKey(forSessionId: request.sessionId)
         do {
-            try await client?.respondToPermissionRequest(.init(
+            try await clients[key]?.respondToPermissionRequest(.init(
                 requestId: request.requestId,
                 optionId: optionId,
                 localInstructionText: localInstructionText
@@ -822,7 +1053,9 @@ final class AgentSessionModel {
             pendingPermissionRequests[request.sessionId] = nil
             updatePermissionFlags()
             refreshWatchdogActivity(for: request.sessionId)
-            runtimeMessage = nil
+            if isActiveProjectKey(key) {
+                runtimeMessage = nil
+            }
             if let followUpInstruction {
                 enqueueOrSendInstruction(followUpInstruction, for: request.sessionId)
             }
@@ -830,7 +1063,9 @@ final class AgentSessionModel {
             pendingPermissionRequests[request.sessionId] = nil
             updatePermissionFlags()
             refreshWatchdogActivity(for: request.sessionId)
-            runtimeMessage = "Permission response failed: \(userFacingError(error))"
+            if isActiveProjectKey(key) {
+                runtimeMessage = "Permission response failed: \(userFacingError(error))"
+            }
         }
     }
 
@@ -847,9 +1082,12 @@ final class AgentSessionModel {
         }
     }
 
-    private func handleSessionUpdate(_ params: JSONValue, generation: Int) {
+    private func handleSessionUpdate(_ params: JSONValue, generation: Int, projectKey: String) {
         guard let update = try? AcpProtocolCoding.decode(AcpSessionUpdate.self, from: params) else { return }
         let sessionId = update.sessionId
+        if sessionProjectKeyBySessionId[sessionId] == nil {
+            sessionProjectKeyBySessionId[sessionId] = projectKey
+        }
         if let activeTurn = activeTurns[sessionId], activeTurn.generation != generation {
             return
         }
@@ -883,6 +1121,10 @@ final class AgentSessionModel {
             guard !isSuppressingStaleTurnOutput(for: sessionId) else { return }
             refreshWatchdogActivity(for: sessionId)
             apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
+        case "config_option_update":
+            applyModelConfig(object["configOptions"]?.arrayValue ?? [], sessionId: sessionId)
+        case "available_commands_update":
+            slashCommands = parseComposerCommands(object["availableCommands"]?.arrayValue ?? [])
         default:
             break
         }
@@ -896,7 +1138,7 @@ final class AgentSessionModel {
         let turnId = UUID()
         activeTurns[sessionId] = ActiveTurn(
             id: turnId,
-            generation: clientGeneration,
+            generation: clientGenerationByProjectKey[projectKey(forSessionId: sessionId)] ?? 0,
             lastInboundActivity: now()
         )
         activeTurns[sessionId]?.watchdogTask = makeWatchdogTask(sessionId: sessionId, turnId: turnId)
@@ -911,7 +1153,7 @@ final class AgentSessionModel {
         refreshDashboardStatus()
         activeTurns[sessionId] = ActiveTurn(
             id: UUID(),
-            generation: clientGeneration,
+            generation: clientGenerationByProjectKey[projectKey(forSessionId: sessionId)] ?? 0,
             lastInboundActivity: now()
         )
         updateRunningFlags()
@@ -964,7 +1206,7 @@ final class AgentSessionModel {
     }
 
     private func isSuppressingStaleTurnOutput(for sessionId: String) -> Bool {
-        staleTurnGenerationBySessionId[sessionId] == clientGeneration
+        staleTurnGenerationBySessionId[sessionId] == clientGenerationByProjectKey[projectKey(forSessionId: sessionId)]
     }
 
     private func clearStaleSuppressionIfPromptEchoCompleted(for sessionId: String) {
@@ -976,6 +1218,7 @@ final class AgentSessionModel {
     private func cancelTurn(sessionId: String, reason: TurnCancelReason) {
         guard activeTurns[sessionId] != nil || pendingPermissionRequests[sessionId] != nil else { return }
         let request = pendingPermissionRequests[sessionId]
+        let key = projectKey(forSessionId: sessionId)
         clearActiveTurn(sessionId)
         pendingPermissionRequests[sessionId] = nil
         queues[sessionId] = nil
@@ -986,16 +1229,20 @@ final class AgentSessionModel {
 
         switch reason {
         case .manual:
-            staleTurnGenerationBySessionId[sessionId] = clientGeneration
-            runtimeMessage = nil
+            staleTurnGenerationBySessionId[sessionId] = clientGenerationByProjectKey[key]
+            if isActiveProjectKey(key) {
+                runtimeMessage = nil
+            }
             appendStatus(title: "Cancelled", text: "Agent turn cancelled.", to: sessionId)
         case .idleTimeout:
             let message = "Agent runtime disconnected: turn idle timeout"
-            runtimeMessage = message
+            if isActiveProjectKey(key) {
+                runtimeMessage = message
+            }
             appendError(title: "Turn timed out", text: "Agent turn was idle for \(turnIdleTimeoutMilliseconds) ms and was cancelled.", key: "turn-timeout-\(sessionId)", to: sessionId)
         }
 
-        let client = client
+        let client = clients[key]
         Task {
             do {
                 try await client?.cancel(sessionId: sessionId)
@@ -1004,35 +1251,44 @@ final class AgentSessionModel {
                 }
                 if reason == .idleTimeout {
                     await MainActor.run {
-                        cleanupUnhealthyRuntime(message: "Agent runtime disconnected: turn idle timeout")
+                        cleanupUnhealthyRuntime(message: "Agent runtime disconnected: turn idle timeout", projectKey: key)
+                    }
+                } else {
+                    await MainActor.run {
+                        applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
                     }
                 }
             } catch {
                 await MainActor.run {
-                    cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))")
+                    cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))", projectKey: key)
                 }
             }
         }
     }
 
-    private func cleanupUnhealthyRuntime(message: String) {
-        for sessionId in activeTurns.keys {
+    private func cleanupUnhealthyRuntime(message: String, projectKey: String) {
+        let sessionIdsForProject = sessionProjectKeyBySessionId.filter { $0.value == projectKey }.map(\.key)
+        for sessionId in sessionIdsForProject {
             activeTurns[sessionId]?.watchdogTask?.cancel()
+            activeTurns[sessionId] = nil
+            staleTurnGenerationBySessionId[sessionId] = nil
+            pendingPermissionRequests[sessionId] = nil
+            completedTurnSessionIds.remove(sessionId)
         }
-        activeTurns.removeAll()
-        staleTurnGenerationBySessionId.removeAll()
-        pendingPermissionRequests.removeAll()
-        completedTurnSessionIds.removeAll()
         updateRunningFlags()
         updatePermissionFlags()
         updateCompletionFlags()
-        clientGeneration += 1
-        eventTask?.cancel()
-        eventTask = nil
-        client?.terminate()
-        client = nil
-        availability = .disconnected(message)
-        runtimeMessage = message
+        pendingApprovalModeRestartProjectKeys.remove(projectKey)
+        primingSessionIdByProjectKey[projectKey] = nil
+        clientGenerationByProjectKey[projectKey, default: 0] += 1
+        eventTasksByProjectKey[projectKey]?.cancel()
+        eventTasksByProjectKey[projectKey] = nil
+        clients[projectKey]?.terminate()
+        clients[projectKey] = nil
+        if isActiveProjectKey(projectKey) {
+            availability = .disconnected(message)
+            runtimeMessage = message
+        }
     }
 
     private func updateSessionInfo(sessionId: String, object: [String: JSONValue]) {
@@ -1061,12 +1317,13 @@ final class AgentSessionModel {
         sortSessions()
     }
 
-    private func row(from summary: AcpSessionSummary) -> AgentSessionRow {
+    private func row(from summary: AcpSessionSummary, projectKey: String) -> AgentSessionRow {
         if let cwd = summary.cwd {
             let normalized = RecentProjectStore.normalizedPath(cwd)
             sessionCwdBySessionId[summary.sessionId] = normalized
             sessionProjectPathBySessionId[summary.sessionId] = recentProjectPaths.contains(normalized) ? normalized : nil
         }
+        sessionProjectKeyBySessionId[summary.sessionId] = projectKey
         return AgentSessionRow(
             sessionId: summary.sessionId,
             title: summary.title?.nonEmpty ?? summary.sessionId,

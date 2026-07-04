@@ -6,6 +6,6 @@ struct AppSmokeTests {
     @Test("Content view can be constructed")
     @MainActor
     func contentViewConstruction() {
-        _ = ContentView()
+        _ = ContentView(recentProjectStore: nil)
     }
 }

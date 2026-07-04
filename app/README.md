@@ -61,7 +61,13 @@ app/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native local shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a local transcript, and a focused prompt composer. Persistence, ACP/runtime integration, signing, notarization, and packaging are deferred to follow-up issues.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It currently owns recent-project persistence through GRDB. `Level5Design` owns native SwiftUI design primitives and reusable design resources. `Level5BuildApp` is the SwiftUI app target. The current UI is a native local shell: a `NavigationSplitView` sidebar/detail layout, native window titlebar and command menus, an empty new-session workspace, a local transcript, a focused prompt composer, and a new-session-only project picker. ACP/runtime integration, durable session history, signing, notarization, and packaging are deferred to follow-up issues.
+
+## Local persistence
+
+The native shell persists recent project folders in SQLite via GRDB at `~/.level5build/level5.sqlite`. Runtime code uses that default path; tests inject temporary database URLs.
+
+Recent projects are keyed by normalized absolute path, store display name plus created/opened timestamps, and are pruned to the 10 most recently opened folders. Selecting a project does not restore across launches: the selected project is window-local shell state, available only for the current new chat until the first message is sent. Missing recent folders remain listed as disabled rows so users can remove them explicitly.
 
 ## Design primitives
 

@@ -1,4 +1,5 @@
 import Foundation
+import Level5Core
 
 public enum LocalTranscriptRole: Equatable, Sendable {
     case user
@@ -24,18 +25,45 @@ public struct LocalTranscriptItem: Identifiable, Equatable, Sendable {
 public struct LocalShellModel: Equatable, Sendable {
     public var draft: String
     public private(set) var transcript: [LocalTranscriptItem]
+    public private(set) var selectedProject: RecentProject?
 
     public init(
         draft: String = "",
-        transcript: [LocalTranscriptItem] = []
+        transcript: [LocalTranscriptItem] = [],
+        selectedProject: RecentProject? = nil
     ) {
         self.draft = draft
         self.transcript = transcript
+        self.selectedProject = selectedProject
+    }
+
+    public var isNewSession: Bool {
+        transcript.isEmpty
+    }
+
+    public var isProjectSelectionAvailable: Bool {
+        isNewSession
+    }
+
+    public var selectedProjectPath: String? {
+        selectedProject?.path
     }
 
     public mutating func startNewChat() {
         draft = ""
         transcript = []
+    }
+
+    public mutating func selectProject(_ project: RecentProject) {
+        guard isProjectSelectionAvailable else { return }
+
+        selectedProject = project
+    }
+
+    public mutating func clearSelectedProject() {
+        guard isProjectSelectionAvailable else { return }
+
+        selectedProject = nil
     }
 
     @discardableResult

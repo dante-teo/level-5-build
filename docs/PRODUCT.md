@@ -4,9 +4,11 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a local prompt composer, local transcript rows after sending, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
+`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a local prompt composer, local project selection in the new-session footer, local transcript rows after sending, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
 
-The current native shell is local-only. It does not connect to Devin ACP, list persisted sessions, choose projects, expose attachment menus, or stream agent progress yet. Sending a prompt appends the local user message and a placeholder status response so the workspace and transcript layout can be exercised without runtime behavior.
+The current native shell is local-only. It does not connect to Devin ACP, list persisted sessions, expose attachment menus, prepare sessions for selected projects, or stream agent progress yet. Sending a prompt appends the local user message and a placeholder status response so the workspace and transcript layout can be exercised without runtime behavior.
+
+Recent project folders are persisted locally so the project picker can offer repeat selections. The active selected project itself is window-local state and is not restored on launch.
 
 The retired Electrobun app in `legacy/electrobun-app/` remains the reference for the previous Devin-backed ACP workflow, including project selection, persisted sessions, attachment menus, slash commands, permission prompts, and streamed agent updates. That behavior should be ported deliberately into the native app rather than treated as present in `app/`.
 

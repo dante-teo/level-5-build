@@ -21,6 +21,9 @@ let package = Package(
             targets: ["Level5Design"]
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0")
+    ],
     targets: [
         .executableTarget(
             name: "Level5BuildApp",
@@ -39,6 +42,9 @@ let package = Package(
         ),
         .target(
             name: "Level5Core",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: "Sources/Level5Core"
         ),
         .testTarget(

@@ -13,6 +13,10 @@ settings:
     CODE_SIGNING_ALLOWED: "NO"
     CODE_SIGNING_REQUIRED: "NO"
     CODE_SIGN_IDENTITY: ""
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    from: 7.5.0
 targets:
   Level5Core:
     type: framework
@@ -20,6 +24,9 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Sources/Level5Core
+    dependencies:
+      - package: GRDB
+        product: GRDB
     info:
       path: Generated/Level5Core-Info.plist
       properties:

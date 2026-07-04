@@ -131,7 +131,17 @@ The current app UI is a native local shell. `ContentView` owns window-scoped she
 - `LocalShellModel` for draft/transcript behavior before ACP integration.
 - `ShellCommands` for scene-level menu commands routed through focused values.
 
-This shell intentionally does not start ACP, load persisted sessions, choose projects, manage attachments, or run agent turns yet. Sending a draft appends local transcript items only. ACP runtime integration, durable persistence, review surfaces, signing, notarization, and packaging are follow-up work.
+This shell intentionally does not start ACP, load persisted sessions, manage attachments, or run agent turns yet. Sending a draft appends local transcript items only. ACP runtime integration, durable session persistence, review surfaces, signing, notarization, and packaging are follow-up work.
+
+### Native project context
+
+The native app supports local project context selection only in the new-session composer footer. The selected project is window-local `LocalShellModel` state, is not restored on launch, and becomes locked after the first message because the composer footer is hidden once transcript content exists. Starting a New Chat clears the draft/transcript and makes project selection available again while preserving the current window-local project selection.
+
+Recent project folders are persisted by `Level5Core.RecentProjectStore` with GRDB in a SQLite database at `~/.level5build/level5.sqlite` for runtime. Tests must inject a temporary database URL. The `recent_projects` table uses the normalized absolute path as its primary key and stores `displayName`, `createdAt`, and `lastOpenedAt`.
+
+Path normalization uses `URL(fileURLWithPath: path).standardizedFileURL.path`; it does not resolve symlinks. Any existing directory is a valid project folder, regardless of Git/package metadata. Upserting a selected folder updates `lastOpenedAt`, keeps the original `createdAt`, and prunes the table to the 10 most recently opened projects. Missing paths are not deleted automatically; the picker displays them disabled and lets the user remove them.
+
+The selected project path is exposed as local shell state for future agent session preparation. The current implementation does not call ACP `session/new`, does not prepare an agent session, and does not substitute a folderless chat with the home directory.
 
 ### Build / dev flow
 

@@ -164,7 +164,7 @@ Rules:
 
 The first screen should feel like a real app workspace, not a landing page.
 
-Current native shell note: the issue #5 shell is local-only. It uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, local transcript rows, and a native composer. Runtime-backed project/session controls, attachment menus, approval modes, model selection, and review dashboards are future surfaces and should not be shown as inert controls.
+Current native shell note: the shell is local-only. It uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, local transcript rows, a native composer, and a new-session-only project picker backed by recent local folders. Runtime-backed session controls, attachment menus, approval modes, model selection, and review dashboards are future surfaces and should not be shown as inert controls.
 
 ## 10. Sidebar
 
@@ -241,8 +241,9 @@ Rules:
 - Maximum height is 8 text lines before internal scrolling.
 - Placeholder text is muted and concise.
 - Send is the only primary action in the composer group while idle. During an active agent turn, the send button becomes a stop button with a small circular loading indicator and sends ACP cancellation; do not add a second competing stop control.
-- In a future runtime-backed empty-chat state, the composer footer may show a `Choose project` control. Its popover should support search, recent project folders, `New project`, and `Don't work in a project`.
-- Once a chat has visible transcript content, hide the project footer; project context moves to the top capsule when applicable.
+- In the empty-chat state, the composer footer shows a `Choose project` control when no project is selected, or the selected folder name when project context exists. Its popover supports search, recent project folders, `New project`, and `Don't work in a project`.
+- Recent project rows show the folder name and a muted, middle-truncated path. Missing folders are disabled, visibly marked, and removable rather than silently deleted.
+- Once a chat has visible transcript content, hide the project footer and lock project context until New Chat. Project context can move to the top capsule later when runtime-backed sessions exist.
 - When attachment/slash-command support lands, the `+` icon button opens the composer's "Add to prompt" menu, a single popover with an unheaded utility group (upload file, upload folder, plan mode placeholder), then a `Slash commands` group sourced live from the connected agent. Only show a `Skills` group if a real agent surface advertises skills separately; Devin currently exposes skill-like actions as slash commands. Reuse this menu (and its row styling) for any future "insert into prompt" affordance rather than adding a second popover pattern.
 - Slash-command and skill tokens typed or inserted into the composer (e.g. `/plan`, `/workspace-search`) are highlighted using the single accent color, keeping the rest of the typed text at its normal style — do not introduce a second highlight color for this.
 - When approval modes are wired, the approval-mode control (icon + label + chevron, next to the `+` menu) opens a popover with a short header question, then one row per mode: an icon, a bold label, and a muted one-line description, with a trailing checkmark on the selected row. Use this row layout for any future single-select "mode" control instead of a native select-style control.

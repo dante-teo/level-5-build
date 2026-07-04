@@ -7,6 +7,8 @@ struct ComposerView: View {
     let availability: AgentAvailability
     let runtimeMessage: String?
     let queuedPrompts: [QueuedPrompt]
+    let plan: AgentPlanState?
+    let usage: AgentTranscriptUsage?
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
@@ -41,6 +43,15 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let plan, !plan.entries.isEmpty {
+                HStack {
+                    Spacer(minLength: 0)
+                    PlanChip(plan: plan, isRunning: isActiveSessionRunning)
+                    Spacer(minLength: 0)
+                }
+                .padding(.bottom, L5Spacing.x2)
+            }
+
             if !queuedPrompts.isEmpty {
                 PromptQueueView(
                     queuedPrompts: queuedPrompts,
@@ -114,6 +125,10 @@ struct ComposerView: View {
                     .disabled(pendingPermissionRequest != nil)
 
                     Spacer()
+
+                    if let usage, usage.used ?? 0 > 0, let size = usage.size, size > 0 {
+                        ContextUsageRing(usage: usage, size: size)
+                    }
 
                     ModelSelector(
                         selectedModelId: Binding(
@@ -242,6 +257,169 @@ private struct SendButton: View {
     private var sendBackground: Color {
         if isRunning { return L5Color.warning }
         return isEnabled ? L5Color.accent : Color(nsColor: .tertiaryLabelColor)
+    }
+}
+
+private struct PlanChip: View {
+    let plan: AgentPlanState
+    let isRunning: Bool
+    @State private var showsPopover = false
+
+    var body: some View {
+        Button {
+            showsPopover.toggle()
+        } label: {
+            HStack(spacing: L5Spacing.x2) {
+                Image(systemName: plan.isComplete ? "checkmark.circle.fill" : "circle.dotted")
+                    .symbolEffect(.pulse, options: .repeating, isActive: isRunning && !plan.isComplete)
+                    .foregroundStyle(plan.isComplete ? Color(nsColor: .systemGreen) : L5Color.accent)
+
+                Text("Plan \(plan.completedCount)/\(plan.totalCount)")
+                    .font(L5Font.caption)
+                    .foregroundStyle(L5Color.textPrimary)
+            }
+            .padding(.horizontal, L5Spacing.x3)
+            .padding(.vertical, L5Spacing.x1)
+            .background(.thinMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(L5Color.border, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+            PlanPopover(plan: plan)
+        }
+        .help("Show plan")
+    }
+}
+
+private struct PlanPopover: View {
+    let plan: AgentPlanState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: L5Spacing.x3) {
+            Text(plan.title)
+                .font(L5Font.h3)
+                .foregroundStyle(L5Color.textPrimary)
+
+            VStack(alignment: .leading, spacing: L5Spacing.x2) {
+                ForEach(plan.entries) { entry in
+                    HStack(alignment: .top, spacing: L5Spacing.x2) {
+                        Image(systemName: icon(for: entry.status))
+                            .foregroundStyle(color(for: entry.status))
+                            .frame(width: L5Size.icon)
+
+                        Text(entry.content)
+                            .font(L5Font.body)
+                            .foregroundStyle(L5Color.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(L5Spacing.x4)
+        .frame(width: 340, alignment: .leading)
+    }
+
+    private func icon(for status: String) -> String {
+        switch AgentTranscriptStatusNormalizer.normalized(status) {
+        case "completed": "checkmark.circle.fill"
+        case "in_progress": "circle.dotted"
+        case "failed": "xmark.circle.fill"
+        case "cancelled": "minus.circle.fill"
+        default: "circle"
+        }
+    }
+
+    private func color(for status: String) -> Color {
+        switch AgentTranscriptStatusNormalizer.normalized(status) {
+        case "completed": Color(nsColor: .systemGreen)
+        case "in_progress": L5Color.accent
+        case "failed": Color(nsColor: .systemRed)
+        case "cancelled": .secondary
+        default: Color(nsColor: .tertiaryLabelColor)
+        }
+    }
+}
+
+private struct ContextUsageRing: View {
+    let usage: AgentTranscriptUsage
+    let size: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+    @State private var showsPopover = false
+
+    private var used: Int { max(usage.used ?? 0, 0) }
+    private var fraction: Double { min(max(Double(used) / Double(size), 0), 1) }
+    private var left: Int { max(size - used, 0) }
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: fraction)
+            .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .background {
+                Circle()
+                    .stroke(L5Color.border, lineWidth: 3)
+            }
+            .frame(width: 22, height: 22)
+            .scaleEffect(!reduceMotion && fraction >= 0.7 && pulse ? pulseScale : 1)
+            .animation(.easeInOut(duration: 0.25), value: fraction)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
+            .onHover { showsPopover = $0 }
+            .focusable()
+            .onTapGesture { showsPopover.toggle() }
+            .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: L5Spacing.x1) {
+                    Text("\(fraction.formatted(.percent.precision(.fractionLength(0)))) used")
+                        .font(L5Font.h3)
+                    Text("\(left.formatted()) tokens left")
+                        .font(L5Font.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(used.formatted()) / \(size.formatted()) tokens")
+                        .font(L5Font.caption)
+                        .foregroundStyle(.secondary)
+                    if let amount = usage.amount {
+                        Text(costText(amount))
+                            .font(L5Font.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(L5Spacing.x3)
+            }
+            .help(helpText)
+            .accessibilityLabel(helpText)
+    }
+
+    private var color: Color {
+        if fraction >= 0.9 { return Color(nsColor: .systemRed) }
+        if fraction >= 0.7 { return L5Color.warning }
+        return L5Color.accent
+    }
+
+    private var pulseScale: CGFloat {
+        fraction >= 0.9 ? 1.16 : 1.08
+    }
+
+    private var helpText: String {
+        var lines = [
+            "\(fraction.formatted(.percent.precision(.fractionLength(0)))) used",
+            "\(used.formatted()) / \(size.formatted()) tokens",
+            "\(left.formatted()) tokens left"
+        ]
+        if !usage.text.isEmpty, usage.amount != nil {
+            lines.append(usage.text)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func costText(_ amount: Double) -> String {
+        if let currency = usage.currency {
+            return "\(currency) \(amount.formatted(.number.precision(.fractionLength(3))))"
+        }
+        return amount.formatted(.number.precision(.fractionLength(3)))
     }
 }
 

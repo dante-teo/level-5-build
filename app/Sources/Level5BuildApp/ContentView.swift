@@ -33,6 +33,8 @@ public struct ContentView: View {
                 availability: model.availability,
                 runtimeMessage: model.runtimeMessage,
                 queuedPrompts: model.activeQueue,
+                plan: model.activePlan,
+                usage: model.activeUsage,
                 draft: $model.draft,
                 modelOptions: model.modelOptions,
                 slashCommands: model.slashCommands,

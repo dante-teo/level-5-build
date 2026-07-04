@@ -9,6 +9,8 @@ struct WorkspaceView: View {
     let availability: AgentAvailability
     let runtimeMessage: String?
     let queuedPrompts: [QueuedPrompt]
+    let plan: AgentPlanState?
+    let usage: AgentTranscriptUsage?
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
@@ -44,6 +46,8 @@ struct WorkspaceView: View {
                     availability: availability,
                     runtimeMessage: runtimeMessage,
                     queuedPrompts: queuedPrompts,
+                    plan: plan,
+                    usage: usage,
                     draft: $draft,
                     modelOptions: modelOptions,
                     slashCommands: slashCommands,
@@ -89,6 +93,8 @@ struct WorkspaceView: View {
                             availability: availability,
                             runtimeMessage: runtimeMessage,
                             queuedPrompts: queuedPrompts,
+                            plan: plan,
+                            usage: usage,
                             draft: $draft,
                             modelOptions: modelOptions,
                             slashCommands: slashCommands,
@@ -137,6 +143,8 @@ private struct NewSessionView: View {
     let availability: AgentAvailability
     let runtimeMessage: String?
     let queuedPrompts: [QueuedPrompt]
+    let plan: AgentPlanState?
+    let usage: AgentTranscriptUsage?
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
@@ -178,6 +186,8 @@ private struct NewSessionView: View {
                     availability: availability,
                     runtimeMessage: runtimeMessage,
                     queuedPrompts: queuedPrompts,
+                    plan: plan,
+                    usage: usage,
                     draft: $draft,
                     modelOptions: modelOptions,
                     slashCommands: slashCommands,

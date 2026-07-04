@@ -36,16 +36,20 @@ struct AgentTranscriptReducerTests {
         #expect(state.items.first?.unsupportedBlockCount == 1)
     }
 
-    @Test("Plan updates replace the active plan item")
-    func planUpdatesReplaceActiveItem() {
+    @Test("Plan updates populate structured state without transcript rows")
+    func planUpdatesPopulateStateOnly() {
         var state = AgentTranscriptState()
 
-        state.apply(.plan(status: "in_progress", text: "First"))
-        state.apply(.plan(status: "completed", text: "Second"))
+        state.apply(.plan(entries: [
+            .init(id: "1", content: "First", status: "in_progress", priority: "high"),
+            .init(id: "2", content: "Second", status: "pending", priority: "medium")
+        ]))
 
-        #expect(state.items.count == 1)
-        #expect(state.items.first?.planText == "Second")
-        #expect(state.items.first?.planStatus == "completed")
+        #expect(state.items.isEmpty)
+        #expect(state.renderableItems.isEmpty)
+        #expect(state.plan?.completedCount == 0)
+        #expect(state.plan?.totalCount == 2)
+        #expect(state.plan?.entries.map(\.content) == ["First", "Second"])
     }
 
     @Test("Tool updates merge partial fields by tool call id")
@@ -60,16 +64,36 @@ struct AgentTranscriptReducerTests {
         #expect(state.items.first?.toolKind == "read")
         #expect(state.items.first?.toolStatus == "completed")
         #expect(state.items.first?.toolText == "Starting")
+        #expect(state.items.first?.toolIsExpanded == false)
     }
 
-    @Test("Usage updates replace latest usage and metadata")
+    @Test("Tool expansion follows active completed failed and manual choices")
+    func toolExpansionRules() {
+        var state = AgentTranscriptState()
+
+        state.apply(.tool(toolCallId: "t1", title: "Run tests", kind: "execute", status: "in_progress", text: "Working"))
+        #expect(state.items.first?.toolIsExpanded == true)
+
+        state.apply(.toolExpansion(toolCallId: "t1", isExpanded: true))
+        state.apply(.tool(toolCallId: "t1", title: nil, kind: nil, status: "completed", text: "Done"))
+        #expect(state.items.first?.toolIsExpanded == true)
+
+        state.apply(.toolExpansion(toolCallId: "t1", isExpanded: false))
+        #expect(state.items.first?.toolIsExpanded == false)
+
+        state.apply(.tool(toolCallId: "t1", title: nil, kind: nil, status: "failed", text: "Failed"))
+        #expect(state.items.first?.toolIsExpanded == true)
+    }
+
+    @Test("Usage updates replace latest usage without transcript rows")
     func usageUpdatesReplaceLatestUsage() {
         var state = AgentTranscriptState()
 
         state.apply(.usage(.init(used: 10, size: 100, amount: nil, currency: nil)))
         state.apply(.usage(.init(used: 20, size: 100, amount: 0.01, currency: "USD")))
 
-        #expect(state.items.count == 1)
+        #expect(state.items.isEmpty)
+        #expect(state.renderableItems.isEmpty)
         #expect(state.latestUsage?.used == 20)
         #expect(state.latestUsage?.currency == "USD")
     }
@@ -128,16 +152,6 @@ private extension AgentTranscriptItem {
         return message.unsupportedBlockCount
     }
 
-    var planText: String? {
-        guard case let .plan(plan) = kind else { return nil }
-        return plan.text
-    }
-
-    var planStatus: String? {
-        guard case let .plan(plan) = kind else { return nil }
-        return plan.status
-    }
-
     var toolTitle: String? {
         guard case let .tool(tool) = kind else { return nil }
         return tool.title
@@ -156,6 +170,11 @@ private extension AgentTranscriptItem {
     var toolText: String? {
         guard case let .tool(tool) = kind else { return nil }
         return tool.text
+    }
+
+    var toolIsExpanded: Bool? {
+        guard case let .tool(tool) = kind else { return nil }
+        return tool.isExpanded
     }
 
     var statusText: String? {

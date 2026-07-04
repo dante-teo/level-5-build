@@ -10,6 +10,7 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
     public var observedAt: Date?
     public var isRunning: Bool
     public var isAwaitingPermission: Bool
+    public var hasCompletedTurn: Bool
 
     public init(
         sessionId: String,
@@ -18,7 +19,8 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
         updatedAt: Date? = nil,
         observedAt: Date? = nil,
         isRunning: Bool = false,
-        isAwaitingPermission: Bool = false
+        isAwaitingPermission: Bool = false,
+        hasCompletedTurn: Bool = false
     ) {
         self.sessionId = sessionId
         self.title = title
@@ -27,6 +29,7 @@ public struct AgentSessionRow: Identifiable, Equatable, Sendable {
         self.observedAt = observedAt
         self.isRunning = isRunning
         self.isAwaitingPermission = isAwaitingPermission
+        self.hasCompletedTurn = hasCompletedTurn
     }
 }
 
@@ -75,6 +78,7 @@ final class AgentSessionModel {
     private(set) var pendingPermissionRequests: [String: PermissionRequest] = [:]
 
     private var transcriptStates: [String: AgentTranscriptState] = [:]
+    private var completedTurnSessionIds: Set<String> = []
     private var queues: [String: [QueuedPrompt]] = [:]
     private var draftsBySessionId: [String: ComposerDraft] = [:]
     private var followTailBySessionId: [String: Bool] = [:]
@@ -148,6 +152,16 @@ final class AgentSessionModel {
     var transcript: [AgentTranscriptItem] {
         guard let activeSessionId else { return [] }
         return transcriptStates[activeSessionId]?.renderableItems ?? []
+    }
+
+    var activePlan: AgentPlanState? {
+        guard let activeSessionId else { return nil }
+        return transcriptStates[activeSessionId]?.plan
+    }
+
+    var activeUsage: AgentTranscriptUsage? {
+        guard let activeSessionId else { return nil }
+        return transcriptStates[activeSessionId]?.latestUsage
     }
 
     var activeQueue: [QueuedPrompt] {
@@ -352,6 +366,7 @@ final class AgentSessionModel {
     func selectSession(_ sessionId: String) {
         saveActiveDraft()
         activeSessionId = sessionId
+        ensureSessionRowExists(for: sessionId)
         restoreDraft(for: sessionId)
         if followTailBySessionId[sessionId] == nil {
             followTailBySessionId[sessionId] = true
@@ -390,6 +405,7 @@ final class AgentSessionModel {
                 draftsBySessionId[sessionId] = nil
                 followTailBySessionId[sessionId] = nil
                 pendingPermissionRequests[sessionId] = nil
+                completedTurnSessionIds.remove(sessionId)
                 activeTurns[sessionId]?.watchdogTask?.cancel()
                 activeTurns[sessionId] = nil
                 if activeSessionId == sessionId {
@@ -629,6 +645,7 @@ final class AgentSessionModel {
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
             runtimeMessage = nil
             apply(.stopReason(result.stopReason), to: sessionId)
+            updateCompletionState(sessionId: sessionId, stopReason: result.stopReason)
             await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         } catch {
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
@@ -636,6 +653,8 @@ final class AgentSessionModel {
                 cleanupUnhealthyRuntime(message: "Agent runtime disconnected: \(userFacingError(error))")
             }
             appendError(title: "Prompt failed", text: "Prompt failed: \(error)", key: "prompt-failed-\(displayMessage)", to: sessionId)
+            completedTurnSessionIds.remove(sessionId)
+            updateCompletionFlags()
             removePendingUserEcho(displayMessage, for: sessionId)
             await drainCurrentTurnEvents(sessionId: sessionId, turnId: turnId)
         }
@@ -814,6 +833,8 @@ final class AgentSessionModel {
 
     private func beginTurn(sessionId: String) -> UUID {
         clearActiveTurn(sessionId)
+        clearPlanState(for: sessionId)
+        completedTurnSessionIds.remove(sessionId)
         let turnId = UUID()
         activeTurns[sessionId] = ActiveTurn(
             id: turnId,
@@ -822,16 +843,20 @@ final class AgentSessionModel {
         )
         activeTurns[sessionId]?.watchdogTask = makeWatchdogTask(sessionId: sessionId, turnId: turnId)
         updateRunningFlags()
+        updateCompletionFlags()
         return turnId
     }
 
     private func reserveTurn(sessionId: String) {
+        clearPlanState(for: sessionId)
+        completedTurnSessionIds.remove(sessionId)
         activeTurns[sessionId] = ActiveTurn(
             id: UUID(),
             generation: clientGeneration,
             lastInboundActivity: now()
         )
         updateRunningFlags()
+        updateCompletionFlags()
     }
 
     private func clearActiveTurn(_ sessionId: String) {
@@ -897,6 +922,8 @@ final class AgentSessionModel {
         queues[sessionId] = nil
         updateRunningFlags()
         updatePermissionFlags()
+        completedTurnSessionIds.remove(sessionId)
+        updateCompletionFlags()
 
         switch reason {
         case .manual:
@@ -936,8 +963,10 @@ final class AgentSessionModel {
         activeTurns.removeAll()
         staleTurnGenerationBySessionId.removeAll()
         pendingPermissionRequests.removeAll()
+        completedTurnSessionIds.removeAll()
         updateRunningFlags()
         updatePermissionFlags()
+        updateCompletionFlags()
         clientGeneration += 1
         eventTask?.cancel()
         eventTask = nil
@@ -966,7 +995,8 @@ final class AgentSessionModel {
                 updatedAt: updatedAt,
                 observedAt: nil,
                 isRunning: activeTurns[sessionId] != nil,
-                isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
+                isAwaitingPermission: pendingPermissionRequests[sessionId] != nil,
+                hasCompletedTurn: completedTurnSessionIds.contains(sessionId)
             ))
         }
         sortSessions()
@@ -980,7 +1010,8 @@ final class AgentSessionModel {
             updatedAt: summary.updatedAt.flatMap(parseDate),
             observedAt: nil,
             isRunning: activeTurns[summary.sessionId] != nil,
-            isAwaitingPermission: pendingPermissionRequests[summary.sessionId] != nil
+            isAwaitingPermission: pendingPermissionRequests[summary.sessionId] != nil,
+            hasCompletedTurn: completedTurnSessionIds.contains(summary.sessionId)
         )
     }
 
@@ -1029,6 +1060,21 @@ final class AgentSessionModel {
         }
     }
 
+    private func updateCompletionState(sessionId: String, stopReason: String) {
+        if stopReason == "end_turn" {
+            completedTurnSessionIds.insert(sessionId)
+        } else {
+            completedTurnSessionIds.remove(sessionId)
+        }
+        updateCompletionFlags()
+    }
+
+    private func updateCompletionFlags() {
+        for index in sessions.indices {
+            sessions[index].hasCompletedTurn = completedTurnSessionIds.contains(sessions[index].sessionId)
+        }
+    }
+
     private func ensureSessionRowExists(for sessionId: String) {
         guard sessions.contains(where: { $0.sessionId == sessionId }) == false else { return }
         upsert(.init(
@@ -1037,7 +1083,8 @@ final class AgentSessionModel {
             detail: "Session",
             observedAt: now(),
             isRunning: activeTurns[sessionId] != nil,
-            isAwaitingPermission: pendingPermissionRequests[sessionId] != nil
+            isAwaitingPermission: pendingPermissionRequests[sessionId] != nil,
+            hasCompletedTurn: completedTurnSessionIds.contains(sessionId)
         ))
     }
 
@@ -1085,6 +1132,12 @@ final class AgentSessionModel {
     private func apply(_ event: AgentTranscriptEvent, to sessionId: String) {
         var state = transcriptStates[sessionId] ?? AgentTranscriptState()
         state.apply(event)
+        transcriptStates[sessionId] = state
+    }
+
+    private func clearPlanState(for sessionId: String) {
+        guard var state = transcriptStates[sessionId] else { return }
+        state.plan = nil
         transcriptStates[sessionId] = state
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import Level5Design
 import SwiftUI
 
@@ -118,48 +119,69 @@ private struct SidebarSessionRow: View {
     let deleteAction: () -> Void
 
     var body: some View {
-        HStack(spacing: L5Spacing.x2) {
-            Button(action: selectAction) {
-                HStack(spacing: L5Spacing.x3) {
-                    Image(systemName: sessionIcon)
-                        .foregroundStyle(sessionIconColor)
-                        .frame(width: L5Size.icon)
+        Button(action: selectAction) {
+            HStack(spacing: L5Spacing.x3) {
+                Image(systemName: "bubble.left")
+                    .foregroundStyle(isActive ? L5Color.accent : .secondary)
+                    .frame(width: L5Size.icon)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(session.title)
-                            .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.title)
+                        .lineLimit(1)
 
-                        Text(session.detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 0)
+                    Text(session.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(isActive ? L5Color.accent : L5Color.textPrimary)
 
-            Button(action: deleteAction) {
-                Image(systemName: "trash")
-                    .frame(width: L5Size.action, height: L5Size.action)
+                Spacer(minLength: 0)
+
+                sessionStateIndicator
+                    .frame(width: L5Size.icon)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Delete")
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? L5Color.accent : L5Color.textPrimary)
+        .contextMenu {
+            Button("Delete Chat...", role: .destructive) {
+                confirmDelete()
+            }
         }
     }
 
-    private var sessionIcon: String {
-        if session.isAwaitingPermission { return "hand.raised" }
-        return session.isRunning ? "circle.dotted" : "bubble.left"
+    @ViewBuilder
+    private var sessionStateIndicator: some View {
+        if session.isAwaitingPermission {
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(L5Color.warning)
+        } else if session.isRunning {
+            Image(systemName: "circle.dotted")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(L5Color.accent)
+        } else if session.hasCompletedTurn {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(nsColor: .systemGreen))
+        } else {
+            Color.clear
+        }
     }
 
-    private var sessionIconColor: Color {
-        if session.isAwaitingPermission { return L5Color.warning }
-        return session.isRunning ? L5Color.accent : .secondary
+    private func confirmDelete() {
+        let alert = NSAlert()
+        alert.messageText = "Delete Chat?"
+        alert.informativeText = "This removes the chat from Level5 Build and the agent runtime. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        let deleteButton = alert.buttons.first
+        deleteButton?.hasDestructiveAction = true
+        if alert.runModal() == .alertFirstButtonReturn {
+            deleteAction()
+        }
     }
 }

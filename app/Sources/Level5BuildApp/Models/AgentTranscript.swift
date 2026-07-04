@@ -13,10 +13,30 @@ struct AgentTranscriptMessage: Equatable, Sendable {
     var unsupportedBlockCount: Int = 0
 }
 
-struct AgentTranscriptPlan: Equatable, Sendable {
-    var title: String
-    var status: String?
-    var text: String
+struct AgentPlanEntry: Identifiable, Equatable, Sendable {
+    var id: String
+    var content: String
+    var status: String
+    var priority: String?
+}
+
+struct AgentPlanState: Equatable, Sendable {
+    var title: String = "Plan"
+    var entries: [AgentPlanEntry] = []
+
+    var completedCount: Int {
+        entries.filter { AgentTranscriptStatusNormalizer.normalized($0.status) == "completed" }.count
+    }
+
+    var totalCount: Int { entries.count }
+
+    var isComplete: Bool {
+        !entries.isEmpty && completedCount == totalCount
+    }
+
+    var isActive: Bool {
+        entries.contains { ["pending", "in_progress"].contains(AgentTranscriptStatusNormalizer.normalized($0.status)) }
+    }
 }
 
 struct AgentTranscriptTool: Equatable, Sendable {
@@ -25,6 +45,7 @@ struct AgentTranscriptTool: Equatable, Sendable {
     var kind: String?
     var status: String?
     var text: String?
+    var isExpanded: Bool = false
 }
 
 struct AgentTranscriptUsage: Equatable, Sendable {
@@ -65,9 +86,7 @@ struct AgentTranscriptError: Equatable, Sendable {
 
 enum AgentTranscriptItemKind: Equatable, Sendable {
     case message(AgentTranscriptMessage)
-    case plan(AgentTranscriptPlan)
     case tool(AgentTranscriptTool)
-    case usage(AgentTranscriptUsage)
     case status(AgentTranscriptStatus)
     case error(AgentTranscriptError)
 }
@@ -79,8 +98,9 @@ struct AgentTranscriptItem: Identifiable, Equatable, Sendable {
 
 enum AgentTranscriptEvent: Equatable, Sendable {
     case messageChunk(role: AgentTranscriptRole, messageId: String?, text: String, unsupportedBlockCount: Int = 0)
-    case plan(title: String = "Plan", status: String?, text: String)
+    case plan(title: String = "Plan", entries: [AgentPlanEntry])
     case tool(toolCallId: String, title: String?, kind: String?, status: String?, text: String?)
+    case toolExpansion(toolCallId: String, isExpanded: Bool)
     case usage(AgentTranscriptUsage)
     case status(title: String, text: String, replacementKey: String? = nil)
     case error(title: String, text: String, replacementKey: String? = nil)
@@ -90,10 +110,12 @@ enum AgentTranscriptEvent: Equatable, Sendable {
 struct AgentTranscriptState: Equatable, Sendable {
     var items: [AgentTranscriptItem] = []
     var latestUsage: AgentTranscriptUsage?
+    var plan: AgentPlanState?
     var stopReasons: [String] = []
     var latestError: String?
 
     private var nextLocalMessageId = 0
+    fileprivate var manualToolExpansion: [String: Bool] = [:]
 
     var renderableItems: [AgentTranscriptItem] { items }
 
@@ -118,16 +140,21 @@ enum AgentTranscriptReducer {
         switch event {
         case let .messageChunk(role, messageId, text, unsupportedBlockCount):
             appendMessage(role: role, messageId: messageId, text: text, unsupportedBlockCount: unsupportedBlockCount, to: &state)
-        case let .plan(title, status, text):
-            upsert(
-                AgentTranscriptItem(id: "plan", kind: .plan(.init(title: title, status: status, text: text))),
-                into: &state
-            )
+        case let .plan(title, entries):
+            state.plan = AgentPlanState(title: title, entries: entries)
         case let .tool(toolCallId, title, kind, status, text):
             upsertTool(toolCallId: toolCallId, title: title, kind: kind, status: status, text: text, into: &state)
+        case let .toolExpansion(toolCallId, isExpanded):
+            state.manualToolExpansion[toolCallId] = isExpanded
+            let id = "tool-\(toolCallId)"
+            guard let index = state.items.firstIndex(where: { $0.id == id }),
+                  case var .tool(tool) = state.items[index].kind else { return }
+            if AgentTranscriptStatusNormalizer.normalized(tool.status) != "failed" {
+                tool.isExpanded = isExpanded
+                state.items[index].kind = .tool(tool)
+            }
         case let .usage(usage):
             state.latestUsage = usage
-            upsert(AgentTranscriptItem(id: "usage", kind: .usage(usage)), into: &state)
         case let .status(title, text, replacementKey):
             appendOrReplaceStatus(title: title, text: text, key: replacementKey, into: &state)
         case let .error(title, text, replacementKey):
@@ -201,19 +228,41 @@ enum AgentTranscriptReducer {
            case var .tool(tool) = state.items[index].kind {
             tool.title = title?.nonEmpty ?? tool.title
             tool.kind = kind ?? tool.kind
-            tool.status = status ?? tool.status
+            tool.status = status.map(AgentTranscriptStatusNormalizer.normalized) ?? tool.status
             tool.text = text?.nonEmpty ?? tool.text
+            tool.isExpanded = expansionState(
+                toolCallId: toolCallId,
+                status: tool.status,
+                manualToolExpansion: state.manualToolExpansion
+            )
             state.items[index].kind = .tool(tool)
             return
         }
+        let normalizedStatus = status.map(AgentTranscriptStatusNormalizer.normalized)
         let tool = AgentTranscriptTool(
             toolCallId: toolCallId,
             title: title?.nonEmpty ?? "Tool call",
             kind: kind,
-            status: status,
-            text: text?.nonEmpty
+            status: normalizedStatus,
+            text: text?.nonEmpty,
+            isExpanded: expansionState(
+                toolCallId: toolCallId,
+                status: normalizedStatus,
+                manualToolExpansion: state.manualToolExpansion
+            )
         )
         state.items.append(.init(id: id, kind: .tool(tool)))
+    }
+
+    private static func expansionState(
+        toolCallId: String,
+        status: String?,
+        manualToolExpansion: [String: Bool]
+    ) -> Bool {
+        let normalizedStatus = AgentTranscriptStatusNormalizer.normalized(status)
+        if normalizedStatus == "failed" { return true }
+        if let manual = manualToolExpansion[toolCallId] { return manual }
+        return normalizedStatus == "in_progress"
     }
 
     private static func appendOrReplaceStatus(title: String, text: String, key: String?, into state: inout AgentTranscriptState) {
@@ -242,6 +291,47 @@ enum AgentTranscriptReducer {
         ["cancelled", "refusal", "max_tokens"].contains(reason)
     }
 
+}
+
+enum AgentTranscriptStatusNormalizer {
+    static func normalized(_ status: String?) -> String {
+        guard let status, !status.isEmpty else { return "" }
+        let raw = status
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "_")
+            .lowercased()
+        switch raw {
+        case "pending", "queued":
+            return "pending"
+        case "in_progress", "running", "started":
+            return "in_progress"
+        case "completed", "complete", "succeeded", "success", "done":
+            return "completed"
+        case "failed", "failure", "error":
+            return "failed"
+        case "cancelled", "canceled":
+            return "cancelled"
+        default:
+            return raw
+        }
+    }
+
+    static func display(_ status: String?) -> String? {
+        let normalized = normalized(status)
+        guard !normalized.isEmpty else { return nil }
+        switch normalized {
+        case "pending": return "Pending"
+        case "in_progress": return "In Progress"
+        case "completed": return "Completed"
+        case "failed": return "Failed"
+        case "cancelled": return "Cancelled"
+        default:
+            return normalized
+                .split(separator: "_")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
+        }
+    }
 }
 
 enum AgentTranscriptNormalizer {
@@ -288,15 +378,16 @@ enum AgentTranscriptNormalizer {
 
     private static func planEvent(from object: [String: JSONValue]) -> AgentTranscriptEvent {
         let entries = object["entries"]?.arrayValue?.compactMap(\.objectValue) ?? []
-        let active = entries.first { $0["status"]?.stringValue == "in_progress" }
-        let completed = entries.filter { $0["status"]?.stringValue == "completed" }.count
-        let total = entries.count
-        let text = active?["content"]?.stringValue
-            ?? entries.first?["content"]?.stringValue
-            ?? "Plan updated."
-        let status = active?["status"]?.stringValue
-            ?? (total > 0 && completed == total ? "completed" : nil)
-        return .plan(status: status, text: total > 0 ? "\(text) (\(completed)/\(total) complete)" : text)
+        let planEntries = entries.enumerated().compactMap { index, entry -> AgentPlanEntry? in
+            guard let content = entry["content"]?.stringValue?.nonEmpty else { return nil }
+            return AgentPlanEntry(
+                id: entry["id"]?.stringValue ?? "plan-entry-\(index)",
+                content: content,
+                status: AgentTranscriptStatusNormalizer.normalized(entry["status"]?.stringValue?.nonEmpty ?? "pending"),
+                priority: entry["priority"]?.stringValue
+            )
+        }
+        return .plan(entries: planEntries)
     }
 
     private static func contentText(from value: JSONValue?) -> String? {

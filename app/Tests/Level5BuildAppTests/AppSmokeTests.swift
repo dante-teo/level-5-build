@@ -34,18 +34,44 @@ struct AppSmokeTests {
             ]
         ))
     }
+
+    @Test("Composer constructs with plan and usage metadata")
+    @MainActor
+    func composerPlanAndUsageConstruction() {
+        _ = ComposerSmokeHarness(
+            plan: .init(entries: [
+                .init(id: "1", content: "Inspect state", status: "completed", priority: "high"),
+                .init(id: "2", content: "Render progress", status: "in_progress", priority: "high")
+            ]),
+            usage: .init(used: 72_000, size: 100_000, amount: 0.012, currency: "USD")
+        )
+    }
 }
 
 private struct ComposerSmokeHarness: View {
     @State private var draft = ComposerDraft()
     @FocusState private var isFocused: Bool
+    var plan: AgentPlanState?
+    var usage: AgentTranscriptUsage?
     let pendingPermissionRequest: PermissionRequest?
+
+    init(
+        plan: AgentPlanState? = nil,
+        usage: AgentTranscriptUsage? = nil,
+        pendingPermissionRequest: PermissionRequest? = nil
+    ) {
+        self.plan = plan
+        self.usage = usage
+        self.pendingPermissionRequest = pendingPermissionRequest
+    }
 
     var body: some View {
         ComposerView(
             availability: .available,
             runtimeMessage: nil,
             queuedPrompts: [],
+            plan: plan,
+            usage: usage,
             draft: $draft,
             modelOptions: [.init(id: "mock-pro", label: "Mock Pro")],
             slashCommands: [.init(name: "plan")],

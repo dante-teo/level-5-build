@@ -504,6 +504,52 @@ struct AgentSessionModelTests {
         try await waitUntil("active s1 transcript") { model.transcript.first?.messageText == "one" }
     }
 
+    @Test("Active plan and usage are scoped to selected session")
+    func activePlanAndUsageAreScopedToSelectedSession() async throws {
+        let client = FakeAgentSessionClient()
+        client.loadReplay["s1"] = [
+            .plan(entries: [.init(id: "p1", content: "Session one plan", status: "in_progress", priority: "high")]),
+            .usage(.init(used: 10, size: 100, amount: nil, currency: nil))
+        ]
+        client.loadReplay["s2"] = [
+            .plan(entries: [.init(id: "p2", content: "Session two plan", status: "completed", priority: "high")]),
+            .usage(.init(used: 70, size: 100, amount: 0.02, currency: "USD"))
+        ]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { model.activePlan?.entries.first?.content == "Session one plan" }
+        #expect(model.activeUsage?.used == 10)
+
+        model.selectSession("s2")
+        try await waitUntil { model.activePlan?.entries.first?.content == "Session two plan" }
+        #expect(model.activeUsage?.used == 70)
+
+        model.selectSession("s1")
+        #expect(model.activePlan?.entries.first?.content == "Session one plan")
+        #expect(model.activeUsage?.used == 10)
+    }
+
+    @Test("Completed plan clears when next prompt starts")
+    func completedPlanClearsWhenNextPromptStarts() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        client.loadReplay["s1"] = [
+            .plan(entries: [.init(id: "p1", content: "Done plan", status: "completed", priority: "high")])
+        ]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { model.activePlan?.isComplete == true }
+
+        model.draft = "next"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        #expect(model.activePlan == nil)
+
+        client.releaseNextPrompt()
+    }
+
     @Test("Same-session sends queue FIFO and queued prompts can be removed")
     func sameSessionQueueIsFIFOAndRemovable() async throws {
         let client = FakeAgentSessionClient()
@@ -963,6 +1009,28 @@ struct AgentSessionModelTests {
         #expect(model.activeSessionId == nil)
     }
 
+    @Test("Successful end turn marks sidebar completion until next activity")
+    func successfulEndTurnMarksCompletionUntilNextActivity() async throws {
+        let client = FakeAgentSessionClient()
+        client.blocksPrompts = true
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.selectSession("s1")
+        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
+        model.draft = "first"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        client.releaseNextPrompt()
+        try await waitUntil { model.sessions.first(where: { $0.sessionId == "s1" })?.hasCompletedTurn == true }
+
+        model.draft = "second"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 2 }
+        #expect(model.sessions.first(where: { $0.sessionId == "s1" })?.hasCompletedTurn == false)
+
+        client.releaseNextPrompt()
+    }
+
     @Test("Process exit marks runtime disconnected and reconnects on next action")
     func processExitDisconnectsAndNextActionReconnects() async throws {
         let first = FakeAgentSessionClient()
@@ -1342,15 +1410,18 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 messageId: messageId,
                 text: text
             )
-        case let .plan(_, status, text):
+        case let .plan(_, entries):
             continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
                 "sessionId": .string(sessionId),
                 "update": [
                     "sessionUpdate": "plan",
-                    "entries": [[
-                        "content": .string(text),
-                        "status": .string(status ?? "in_progress")
-                    ]]
+                    "entries": .array(entries.map { entry in
+                        [
+                            "content": .string(entry.content),
+                            "status": .string(entry.status),
+                            "priority": .string(entry.priority ?? "medium")
+                        ]
+                    })
                 ]
             ]))
         case let .tool(toolCallId, title, kind, status, text):
@@ -1376,7 +1447,7 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
             ]))
         case let .usage(usage):
             emitUsage(sessionId, used: usage.used ?? 0, size: usage.size ?? 0)
-        case .status, .error, .stopReason:
+        case .toolExpansion, .status, .error, .stopReason:
             break
         }
     }

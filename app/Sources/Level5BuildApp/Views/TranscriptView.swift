@@ -363,6 +363,7 @@ enum TranscriptScrollMetrics {
 
 private struct TranscriptRow: View {
     let item: AgentTranscriptItem
+    @State private var isManuallyExpanded: Bool?
 
     var body: some View {
         HStack(alignment: .top, spacing: L5Spacing.x3) {
@@ -375,11 +376,28 @@ private struct TranscriptRow: View {
                     .font(L5Font.caption)
                     .foregroundStyle(.secondary)
 
-                Text(item.renderText)
-                    .font(L5Font.body)
-                    .foregroundStyle(L5Color.textPrimary)
+                if case let .tool(tool) = item.kind {
+                    ToolDisclosureContent(
+                        tool: tool,
+                        isExpanded: effectiveToolExpansion(tool),
+                        toggle: {
+                            guard AgentTranscriptStatusNormalizer.normalized(tool.status) != "failed" else { return }
+                            isManuallyExpanded = !effectiveToolExpansion(tool)
+                        }
+                    )
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .onChange(of: tool.isExpanded) { _, newValue in
+                        if isManuallyExpanded == nil {
+                            isManuallyExpanded = newValue
+                        }
+                    }
+                } else {
+                    Text(item.renderText)
+                        .font(L5Font.body)
+                        .foregroundStyle(L5Color.textPrimary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(L5Spacing.x4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -391,6 +409,13 @@ private struct TranscriptRow: View {
         }
     }
 
+    private func effectiveToolExpansion(_ tool: AgentTranscriptTool) -> Bool {
+        if AgentTranscriptStatusNormalizer.normalized(tool.status) == "failed" {
+            return true
+        }
+        return isManuallyExpanded ?? tool.isExpanded
+    }
+
     @ViewBuilder
     private var roleIcon: some View {
         switch item.role {
@@ -400,14 +425,8 @@ private struct TranscriptRow: View {
         case .agent:
             Image(systemName: "sparkles")
                 .foregroundStyle(.white)
-        case .plan:
-            Image(systemName: "list.bullet.clipboard")
-                .foregroundStyle(.secondary)
         case .tool:
             Image(systemName: "wrench.and.screwdriver")
-                .foregroundStyle(.secondary)
-        case .usage:
-            Image(systemName: "gauge")
                 .foregroundStyle(.secondary)
         case .status:
             Image(systemName: "info")
@@ -422,9 +441,7 @@ private struct TranscriptRow: View {
         switch item.role {
         case .user: "You"
         case .agent: "Agent"
-        case .plan: item.renderStatus.map { "Plan - \($0)" } ?? "Plan"
         case .tool: item.renderStatus.map { "Tool - \($0)" } ?? "Tool"
-        case .usage: "Usage"
         case .status: "Status"
         case .error: "Error"
         }
@@ -434,9 +451,7 @@ private struct TranscriptRow: View {
         switch item.role {
         case .user: L5Color.accent
         case .agent: Color(nsColor: .systemGreen)
-        case .plan: Color(nsColor: .systemBlue).opacity(0.12)
         case .tool: Color(nsColor: .systemOrange).opacity(0.14)
-        case .usage: Color(nsColor: .systemPurple).opacity(0.14)
         case .status: L5Color.secondaryBackground
         case .error: Color(nsColor: .systemRed)
         }
@@ -446,7 +461,76 @@ private struct TranscriptRow: View {
         switch item.role {
         case .user: .regularMaterial
         case .agent: .regularMaterial
-        case .plan, .tool, .usage, .status, .error: .thinMaterial
+        case .tool, .status, .error: .thinMaterial
+        }
+    }
+}
+
+private struct ToolDisclosureContent: View {
+    let tool: AgentTranscriptTool
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: L5Spacing.x2) {
+            Button(action: toggle) {
+                HStack(spacing: L5Spacing.x2) {
+                    Text(tool.title)
+                        .font(L5Font.body)
+                        .foregroundStyle(L5Color.textPrimary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: L5Spacing.x1) {
+                    if let status = AgentTranscriptStatusNormalizer.display(tool.status) {
+                        ToolDetailLine(label: "Status", value: status)
+                    }
+                    if let kind = tool.kind?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty {
+                        ToolDetailLine(label: "Kind", value: AgentTranscriptStatusNormalizer.display(kind) ?? kind)
+                    }
+                    if let text = tool.text?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty {
+                        Text(text)
+                            .font(L5Font.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, L5Spacing.x1)
+                    }
+                }
+                .padding(.top, L5Spacing.x1)
+            } else if let text = tool.text?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty {
+                Text(text)
+                    .font(L5Font.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct ToolDetailLine: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: L5Spacing.x2) {
+            Text(label)
+                .font(L5Font.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 48, alignment: .leading)
+
+            Text(value)
+                .font(L5Font.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
     }
 }
@@ -454,9 +538,7 @@ private struct TranscriptRow: View {
 private enum TranscriptRenderRole {
     case user
     case agent
-    case plan
     case tool
-    case usage
     case status
     case error
 }
@@ -469,9 +551,7 @@ private extension AgentTranscriptItem {
             case .user: .user
             case .agent: .agent
             }
-        case .plan: .plan
         case .tool: .tool
-        case .usage: .usage
         case .status: .status
         case .error: .error
         }
@@ -482,12 +562,8 @@ private extension AgentTranscriptItem {
         case let .message(message):
             let suffix = message.unsupportedBlockCount > 0 ? "\n[\(message.unsupportedBlockCount) unsupported block\(message.unsupportedBlockCount == 1 ? "" : "s")]" : ""
             return message.text + suffix
-        case let .plan(plan):
-            return plan.text
         case let .tool(tool):
-            return tool.text ?? tool.title
-        case let .usage(usage):
-            return usage.text
+            return tool.summaryText
         case let .status(status):
             return status.text
         case let .error(error):
@@ -497,12 +573,27 @@ private extension AgentTranscriptItem {
 
     var renderStatus: String? {
         switch kind {
-        case let .plan(plan):
-            return plan.status
         case let .tool(tool):
-            return tool.status ?? tool.kind
+            return AgentTranscriptStatusNormalizer.display(tool.status ?? tool.kind)
         default:
             return nil
         }
+    }
+}
+
+private extension AgentTranscriptTool {
+    var summaryText: String {
+        let pieces = [
+            kind.map { AgentTranscriptStatusNormalizer.display($0) ?? $0 },
+            text
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty }
+        guard !pieces.isEmpty else { return title }
+        return pieces.joined(separator: " - ")
+    }
+}
+
+private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }

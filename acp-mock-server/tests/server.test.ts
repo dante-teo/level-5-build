@@ -162,6 +162,60 @@ describe("ACP mock server", () => {
 		assert.match(all, /"stopReason":"end_turn"/);
 	});
 
+	test("progress demo streams plan tool usage permission and completion states", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+
+		const prompt = send(server, {
+			jsonrpc: "2.0",
+			id: 50,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "/progress-demo" }] }
+		});
+
+		const permissionRequest = await waitForMessage(
+			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
+		) as Record<string, JsonValue>;
+		assert.ok(permissionRequest);
+		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "allow-once" } } });
+		await prompt;
+
+		const all = JSON.stringify(messages());
+		assert.match(all, /progress demo/i);
+		assert.match(all, /"sessionUpdate":"plan"/);
+		assert.match(all, /"sessionUpdate":"tool_call"/);
+		assert.match(all, /"status":"completed"/);
+		assert.match(all, /"sessionUpdate":"usage_update"/);
+		assert.match(all, /session\/request_permission/);
+		assert.match(all, /"stopReason":"end_turn"/);
+	});
+
+	test("progress demo rejection produces failed readable tool state", async () => {
+		const server = createServer(0);
+		await initialize(server);
+		const sessionId = await createSession(server);
+
+		const prompt = send(server, {
+			jsonrpc: "2.0",
+			id: 51,
+			method: "session/prompt",
+			params: { sessionId, prompt: [{ type: "text", text: "please run progress demo" }] }
+		});
+
+		const permissionRequest = await waitForMessage(
+			(message) => (message as Record<string, JsonValue>).method === "session/request_permission"
+		) as Record<string, JsonValue>;
+		assert.ok(permissionRequest);
+		await send(server, { jsonrpc: "2.0", id: permissionRequest.id as number, result: { outcome: { optionId: "reject-once" } } });
+		await prompt;
+
+		const all = JSON.stringify(messages());
+		assert.match(all, /"status":"failed"/);
+		assert.match(all, /Permission was rejected/);
+		assert.match(all, /"stopReason":"end_turn"/);
+	});
+
 	test("lists and loads persisted sessions", async () => {
 		const statePath = join(tmp, "state.json");
 		const first = createServer(0, statePath);

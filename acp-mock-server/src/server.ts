@@ -429,6 +429,10 @@ export class AcpMockServer {
 			await this.say(session, "The simulated command failed, and I surfaced it through a failed tool call so the client can render the error state.");
 			return "end_turn";
 		}
+		if (lower.startsWith("/progress-demo") || lower.includes("progress demo")) {
+			await this.progressDemoScenario(session, turn);
+			return turn.cancelled ? "cancelled" : "end_turn";
+		}
 		if (lower.includes("permission") || lower.includes("approve")) {
 			await this.permissionScenario(session, turn);
 			return turn.cancelled ? "cancelled" : "end_turn";
@@ -619,6 +623,108 @@ export class AcpMockServer {
 			content: [{ type: "content", content: { type: "text", text: "Permission granted; simulated edit completed." } }]
 		});
 		await this.say(session, "Permission was granted. I completed the protected mock edit and returned a normal end-turn response.");
+	}
+
+	private async progressDemoScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "in_progress"],
+			["Render a successful tool call", "high", "pending"],
+			["Cross context usage thresholds", "medium", "pending"],
+			["Pause for a permission request", "high", "pending"],
+			["Finish with a successful end turn", "medium", "pending"]
+		]);
+		await this.checkpoint(turn);
+		await this.say(session, "Starting the progress demo. I will stream plan, tool, context, permission, and final message updates in one deterministic turn.");
+
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "completed"],
+			["Render a successful tool call", "high", "in_progress"],
+			["Cross context usage thresholds", "medium", "pending"],
+			["Pause for a permission request", "high", "pending"],
+			["Finish with a successful end turn", "medium", "pending"]
+		]);
+		await this.tool(session, "search", "Scanning demo workspace", "completed", "Found mock fixtures, native SwiftUI views, and transcript reducer tests.", turn);
+
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "completed"],
+			["Render a successful tool call", "high", "completed"],
+			["Cross context usage thresholds", "medium", "in_progress"],
+			["Pause for a permission request", "high", "pending"],
+			["Finish with a successful end turn", "medium", "pending"]
+		]);
+		const contextSize = modelContextWindow(session.config.model);
+		await this.usage(session, Math.floor(contextSize * 0.32), 0.004);
+		await this.usage(session, Math.floor(contextSize * 0.74), 0.011);
+		await this.usage(session, Math.floor(contextSize * 0.92), 0.021);
+
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "completed"],
+			["Render a successful tool call", "high", "completed"],
+			["Cross context usage thresholds", "medium", "completed"],
+			["Pause for a permission request", "high", "in_progress"],
+			["Finish with a successful end turn", "medium", "pending"]
+		]);
+
+		const toolCallId = this.store.nextId("tool");
+		const title = "Applying protected progress marker";
+		this.sendSessionUpdate(session.sessionId, {
+			sessionUpdate: "tool_call",
+			toolCallId,
+			title,
+			kind: "edit",
+			status: "in_progress",
+			content: [{ type: "content", content: { type: "text", text: "Preparing a permission-gated mock edit." } }]
+		});
+		const outcome = await this.requestPermissionOutcome(session, turn, {
+			toolCallId,
+			title,
+			kind: "edit",
+			status: "pending",
+			content: [{ type: "content", content: { type: "text", text: "Allow the progress demo to complete its protected mock step?" } }]
+		});
+
+		if (outcome === "cancelled") {
+			this.sendSessionUpdate(session.sessionId, {
+				sessionUpdate: "tool_call_update",
+				toolCallId,
+				status: "failed",
+				content: [{ type: "content", content: { type: "text", text: "Permission request was cancelled." } }]
+			});
+			await this.say(session, "The progress demo permission request was cancelled, so the protected step failed cleanly.");
+			return;
+		}
+		if (outcome === "rejected") {
+			this.sendSessionUpdate(session.sessionId, {
+				sessionUpdate: "tool_call_update",
+				toolCallId,
+				status: "failed",
+				content: [{ type: "content", content: { type: "text", text: "Permission was rejected by the client." } }]
+			});
+			await this.say(session, "The progress demo permission was rejected. The failed tool row should remain expanded and readable.");
+			return;
+		}
+
+		this.sendSessionUpdate(session.sessionId, {
+			sessionUpdate: "tool_call_update",
+			toolCallId,
+			status: "completed",
+			content: [{ type: "content", content: { type: "text", text: "Permission granted; completed the protected mock progress step." } }]
+		});
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "completed"],
+			["Render a successful tool call", "high", "completed"],
+			["Cross context usage thresholds", "medium", "completed"],
+			["Pause for a permission request", "high", "completed"],
+			["Finish with a successful end turn", "medium", "in_progress"]
+		]);
+		await this.say(session, "Progress demo complete. Plan rows moved to done, context usage crossed warning and danger, one tool succeeded, and the permission-gated tool completed.");
+		this.sendPlan(session.sessionId, [
+			["Receive the demo prompt and start streaming", "high", "completed"],
+			["Render a successful tool call", "high", "completed"],
+			["Cross context usage thresholds", "medium", "completed"],
+			["Pause for a permission request", "high", "completed"],
+			["Finish with a successful end turn", "medium", "completed"]
+		]);
 	}
 
 	private async requestPermissionOutcome(

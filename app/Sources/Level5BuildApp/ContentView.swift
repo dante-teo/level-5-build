@@ -43,10 +43,8 @@ public struct ContentView: View {
             ShellSidebarView(
                 sessions: model.sessions,
                 activeSessionId: model.activeSessionId,
-                hasMoreSessions: model.nextCursor != nil,
                 newChatAction: startNewChat,
                 selectSessionAction: selectSession,
-                loadMoreSessionsAction: model.loadMoreSessions,
                 deleteSessionAction: model.deleteSession
             )
             .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)

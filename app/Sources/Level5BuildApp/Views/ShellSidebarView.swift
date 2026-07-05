@@ -5,10 +5,8 @@ import SwiftUI
 struct ShellSidebarView: View {
     let sessions: [AgentSessionRow]
     let activeSessionId: String?
-    let hasMoreSessions: Bool
     let newChatAction: () -> Void
     let selectSessionAction: (String) -> Void
-    let loadMoreSessionsAction: () -> Void
     let deleteSessionAction: (String) -> Void
 
     var body: some View {
@@ -47,17 +45,6 @@ struct ShellSidebarView: View {
                             }
                         )
                     }
-                }
-
-                if hasMoreSessions {
-                    Button(action: loadMoreSessionsAction) {
-                        Label {
-                            Text("Load More")
-                        } icon: {
-                            L5IconView(.loadMore)
-                        }
-                    }
-                    .buttonStyle(.plain)
                 }
             }
 

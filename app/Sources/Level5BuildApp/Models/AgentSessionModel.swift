@@ -71,7 +71,6 @@ final class AgentSessionModel {
     private(set) var selectedProject: RecentProject?
     private(set) var activeSessionProjectPath: String?
     private(set) var dashboardState: ProjectDashboardState?
-    private(set) var nextCursor: String?
     private(set) var runtimeMessage: String?
     private(set) var modelOptions: [ComposerModelOption] = []
     private(set) var slashCommands: [ComposerCommand] = []
@@ -91,19 +90,12 @@ final class AgentSessionModel {
     private var followTailBySessionId: [String: Bool] = [:]
     private var activeTurns: [String: ActiveTurn] = [:]
     private var staleTurnGenerationBySessionId: [String: Int] = [:]
-    private var loadingSessionIds: Set<String> = []
     /// Sessions the user has deleted locally. The ACP server is not
     /// guaranteed to agree — real Devin doesn't implement `session/delete`
     /// at all — so once hidden, a session must never reappear from a later
-    /// `session/list`/`session/update`, even across a relaunch. Our local
-    /// session list is not required to stay consistent with the backend's.
+    /// `session/update`, even across a relaunch. Our local session list is
+    /// not required to stay consistent with the backend's.
     private var hiddenSessionIds: Set<String> = []
-    /// Sessions whose in-memory transcript cache should be discarded and
-    /// replaced by live replay the moment the *next* raw `session/update`
-    /// notification arrives for them. Set by `selectSession` and consumed by
-    /// `handleSessionUpdate` (not `apply(_:to:)`) so even replay-only
-    /// updates that produce zero renderable events still trigger the swap.
-    private var transcriptResetPendingSessionIds: Set<String> = []
     private var pendingUserEchoes: [String: [String]] = [:]
     private var currentModelBySessionId: [String: String] = [:]
     private var pendingModelBySessionId: [String: String] = [:]
@@ -125,6 +117,23 @@ final class AgentSessionModel {
     /// that project. Reused as the real session on first send. Empty string
     /// means "creation in flight" (reservation to avoid duplicate creates).
     private var primingSessionIdByProjectKey: [String: String] = [:]
+    /// Sessions whose server-side context (history, config) is already
+    /// known to the *current* process for their project — either because
+    /// they were created/primed this run (`createSessionAndSend`,
+    /// `primeComposerSession`), or because `send(_:to:isAlreadyMarkedRunning:)`
+    /// already primed them with `session/load` earlier this run. Selecting
+    /// a session never touches this; only sending to it does. Cleared
+    /// per-project whenever that project's client is torn down (see
+    /// `terminateClient`/`cleanupUnhealthyRuntime`) since a freshly spawned
+    /// process has no live context for any session, even one primed before
+    /// the restart.
+    private var primedSessionIds: [String: Set<String>] = [:]
+    /// Sessions currently inside a send-time `session/load` prime call.
+    /// `handleSessionUpdate` drops any `session/update` for a session in
+    /// this set unconditionally: priming is a context-loading side effect,
+    /// not a way to repaint the transcript, so its replay must never reach
+    /// the UI or the durable transcript cache.
+    private var suppressingPrimeReplayForSessionIds: Set<String> = []
     private let backendKind: AgentBackendKind
     private let makeClient: @Sendable () throws -> AgentSessionClient
     private let makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)?
@@ -342,23 +351,39 @@ final class AgentSessionModel {
         hydratePersistedSessions(projectKey: key)
         Task {
             await ensureConnected(projectKey: key)
-            await refreshSessions(reset: true, projectKey: key)
             if isNewSession {
                 await primeComposerSession(forProjectKey: key)
             }
         }
     }
 
-    /// Loads durably cached session rows for `projectKey` synchronously so
-    /// the sidebar is not empty while `ensureConnected`/`refreshSessions`
-    /// are still in flight. Once `session/list` succeeds, its rows win as
-    /// usual (`upsert` overwrites in place); this is purely a cold-start
-    /// paint, never a source of truth.
+    /// Loads durably cached session rows for `projectKey` into the sidebar.
+    /// This is the sidebar's only source of session discovery: there is no
+    /// backend `session/list` call anywhere in this app, so a session this
+    /// app never sent through (another client, another machine, or one lost
+    /// to a crash before its first persisted write) is permanently invisible
+    /// here. `upsert` is still the write-through every live update goes
+    /// through afterward, so those rows stay current as the session is used.
     private func hydratePersistedSessions(projectKey: String) {
         guard let persistenceStore else { return }
         guard let rows = try? persistenceStore.listSessionRows(projectKey: projectKey) else { return }
         for row in rows {
             sessionProjectKeyBySessionId[row.sessionId] = row.projectKey
+            // For Devin, a project's own key *is* its normalized cwd (see
+            // `projectKey(for:)`), so a persisted row can still be
+            // recognized as project-backed after a relaunch even though
+            // nothing in `sessions` durably stores cwd separately. Mock's
+            // shared project key never matches a real recent path, so this
+            // is always a no-op there. Recorded unconditionally (mirroring
+            // the pre-`session/list`-removal behavior) rather than gated on
+            // `recentProjectPaths` here: `recentProjectPaths` may not be
+            // current yet at hydration time (e.g. `ContentView.selectProject`
+            // hydrates before its own `loadRecentProjects` call resolves),
+            // so `reconcileSessionProjectPaths()` — called whenever
+            // `setRecentProjects` runs, including after that reload — is
+            // what actually decides eligibility from `sessionCwdBySessionId`.
+            sessionCwdBySessionId[row.sessionId] = row.projectKey
+            sessionProjectPathBySessionId[row.sessionId] = recentProjectPaths.contains(row.projectKey) ? row.projectKey : nil
             upsert(AgentSessionRow(
                 sessionId: row.sessionId,
                 title: row.title,
@@ -395,7 +420,7 @@ final class AgentSessionModel {
         let previousReviewPath = reviewProjectPath
         selectedProject = project
         reconcileReviewContext(previousPath: previousReviewPath)
-        refreshSessionsForSelectedProjectIfNeeded()
+        connectAndPrimeComposerSessionForSelectedProjectIfNeeded()
     }
 
     func clearSelectedProject() {
@@ -403,7 +428,7 @@ final class AgentSessionModel {
         let previousReviewPath = reviewProjectPath
         selectedProject = nil
         reconcileReviewContext(previousPath: previousReviewPath)
-        refreshSessionsForSelectedProjectIfNeeded()
+        connectAndPrimeComposerSessionForSelectedProjectIfNeeded()
     }
 
     func openReview() {
@@ -425,16 +450,27 @@ final class AgentSessionModel {
     }
 
     /// Devin spawns one process per project, so switching the "new chat"
-    /// project needs to (re)load that project's own session list and get a
-    /// live agent connection ready (see `primeComposerSession`). Mock has a
-    /// single shared server that already lists and discovers everything, so
-    /// this is a no-op there.
-    private func refreshSessionsForSelectedProjectIfNeeded() {
+    /// project needs its own sidebar rows hydrated from the durable cache
+    /// (there is no backend list to pull them from — see
+    /// `hydratePersistedSessions`) and its own live agent connection
+    /// readied ahead of time (see `primeComposerSession`). Mock has a
+    /// single shared server/project key that's already hydrated and
+    /// connected up front, so this is a no-op there.
+    private func connectAndPrimeComposerSessionForSelectedProjectIfNeeded() {
         guard backendKind == .devin, isNewSession else { return }
         let key = projectKey(for: selectedProjectPath)
+        hydratePersistedSessions(projectKey: key)
+        if clients[key] != nil {
+            // A different project may have left a stale in-flight status
+            // message (e.g. "Sending...") behind when it lost the
+            // foreground to this one; an already-connected project's own
+            // true status is simply healthy, so reflect that immediately
+            // rather than waiting on a no-op `ensureConnected` to do it.
+            availability = .available
+            runtimeMessage = nil
+        }
         Task {
             await ensureConnected(projectKey: key)
-            await refreshSessions(reset: true, projectKey: key)
             await primeComposerSession(forProjectKey: key)
         }
     }
@@ -448,8 +484,8 @@ final class AgentSessionModel {
     /// it as the real session once the user actually sends (see
     /// `createSessionAndSend`). An un-messaged session is never persisted by
     /// Devin's own session store, so an abandoned priming session (e.g. the
-    /// user switches projects before sending) costs nothing and never shows
-    /// up in `session/list`.
+    /// user switches projects before sending) costs nothing and never
+    /// appears anywhere this app could discover it.
     private func primeComposerSession(forProjectKey key: String) async {
         guard backendKind == .devin else { return }
         guard primingSessionIdByProjectKey[key] == nil else { return }
@@ -470,6 +506,7 @@ final class AgentSessionModel {
             }
             primingSessionIdByProjectKey[key] = sessionId
             sessionProjectKeyBySessionId[sessionId] = key
+            markSessionPrimed(sessionId, projectKey: key)
             applyModelConfig(result.configOptions, sessionId: sessionId)
             if isNewSession, projectKey(for: selectedProjectPath) == key {
                 defaultModelId = currentModelBySessionId[sessionId] ?? defaultModelId
@@ -601,6 +638,16 @@ final class AgentSessionModel {
         clientGenerationByProjectKey[key, default: 0] += 1
         pendingApprovalModeRestartProjectKeys.remove(key)
         primingSessionIdByProjectKey[key] = nil
+        primedSessionIds[key] = nil
+        // A prime in flight for one of this project's sessions is now
+        // talking to a dead client; its eventual timeout/failure would
+        // clear this anyway, but there's no reason to keep a legitimate
+        // future prime (after reconnect) needlessly suppressed until then.
+        suppressingPrimeReplayForSessionIds.subtract(sessionIds(forProjectKey: key))
+    }
+
+    private func sessionIds(forProjectKey key: String) -> [String] {
+        sessionProjectKeyBySessionId.filter { $0.value == key }.map(\.key)
     }
 
     private func applyDeferredApprovalModeRestartIfNeeded(projectKey key: String) {
@@ -643,12 +690,16 @@ final class AgentSessionModel {
 
     func setActiveTranscriptFollowsTail(_ followsTail: Bool) {
         guard let activeSessionId else { return }
-        if followsTail == false, loadingSessionIds.contains(activeSessionId) {
-            return
-        }
         followTailBySessionId[activeSessionId] = followsTail
     }
 
+    /// Selecting a session is pure retrieval: it never talks to the agent
+    /// runtime. The durably cached transcript paints immediately from
+    /// SQLite and that's the whole operation — no `session/load`, no
+    /// `ensureConnected`. Server-side context is only fetched lazily, the
+    /// moment the user actually sends into this session (see
+    /// `primeSessionForSend`), so an idle sidebar never causes network or
+    /// process activity.
     func selectSession(_ sessionId: String) {
         saveActiveDraft()
         activeSessionId = sessionId
@@ -659,28 +710,6 @@ final class AgentSessionModel {
             followTailBySessionId[sessionId] = true
         }
         hydrateTranscriptFromCacheIfNeeded(sessionId)
-        let key = projectKey(forSessionId: sessionId)
-        Task {
-            guard await ensureConnected(projectKey: key) else { return }
-            guard let client = clients[key] else { return }
-                // Cache paints immediately (above); the in-memory cache is
-                // *not* reset here. `handleSessionUpdate` discards it and
-                // replaces it with live replay the moment the first raw
-                // `session/update` for this session arrives, so ACP remains
-                // the source of truth without an empty-flash in between.
-                transcriptResetPendingSessionIds.insert(sessionId)
-                loadingSessionIds.insert(sessionId)
-                do {
-                    let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
-                sessionProjectKeyBySessionId[sessionId] = key
-                applyModelConfig(result.configOptions, sessionId: sessionId)
-                await refreshSessionSlashCommands(sessionId, projectKey: key)
-                await clearLoadingAfterReplayDrain(sessionId)
-            } catch {
-                loadingSessionIds.remove(sessionId)
-                appendError(title: "Load failed", text: "Failed to load session: \(error)", key: "load-failed", to: sessionId)
-            }
-        }
     }
 
     /// Paints the durably cached transcript for `sessionId` immediately, if
@@ -705,13 +734,6 @@ final class AgentSessionModel {
         transcriptStates[sessionId] = state
     }
 
-    func loadMoreSessions() {
-        let key = currentSidebarProjectKey
-        Task {
-            await refreshSessions(reset: false, projectKey: key)
-        }
-    }
-
     /// Deletes `sessionId` from the sidebar. The ACP `session/delete` call is
     /// best-effort only: some backends (real Devin, notably) don't
     /// implement it at all ("Method not found"), so our local session list
@@ -727,13 +749,14 @@ final class AgentSessionModel {
                 try? await client.deleteSession(sessionId: sessionId)
             }
             removeSessionLocally(sessionId)
-            await refreshSessions(reset: true, projectKey: key)
         }
     }
 
     private func removeSessionLocally(_ sessionId: String) {
+        if let key = sessionProjectKeyBySessionId[sessionId] {
+            primedSessionIds[key]?.remove(sessionId)
+        }
         transcriptStates[sessionId] = nil
-        transcriptResetPendingSessionIds.remove(sessionId)
         queues[sessionId] = nil
         draftsBySessionId[sessionId] = nil
         followTailBySessionId[sessionId] = nil
@@ -817,50 +840,6 @@ final class AgentSessionModel {
         }
         connectionTasksByProjectKey[projectKey] = task
         return await task.value
-    }
-
-    private func refreshSessions(reset: Bool, projectKey: String) async {
-        guard await ensureConnected(projectKey: projectKey) else { return }
-        guard let client = clients[projectKey] else { return }
-        do {
-            let result = try await client.listSessions(cursor: reset ? nil : nextCursor)
-            if isActiveProjectKey(projectKey) {
-                runtimeMessage = nil
-            }
-            // Locally deleted sessions must never resurrect from a backend
-            // that still lists them (see `hiddenSessionIds`); filtered here
-            // because the `reset == false` (Load More) branch below appends
-            // directly and does not go through the `upsert` choke point.
-            let incoming = result.sessions
-                .map { row(from: $0, projectKey: projectKey) }
-                .filter { !hiddenSessionIds.contains($0.sessionId) }
-            if reset {
-                // Only replace this project's own rows: other projects' rows
-                // (e.g. one with a Devin turn still running in the
-                // background) must survive switching the sidebar's context.
-                let incomingIds = Set(incoming.map(\.sessionId))
-                sessions.removeAll { sessionProjectKeyBySessionId[$0.sessionId] == projectKey && !incomingIds.contains($0.sessionId) }
-                incoming.forEach(upsert)
-            } else {
-                // Load More discovers rows the sidebar hasn't seen yet, so
-                // they still need the same write-through `upsert` gives the
-                // `reset` branch above; only append-if-new is skipped here
-                // (unlike `upsert`) so a page that happens to repeat an
-                // already-known id can't clobber that row's tracked
-                // `observedAt`/live turn-state with the plain fetched summary.
-                let existing = Set(sessions.map(\.sessionId))
-                let newRows = incoming.filter { !existing.contains($0.sessionId) }
-                sessions.append(contentsOf: newRows)
-                newRows.forEach(persistSessionRow)
-            }
-            nextCursor = result.nextCursor
-            sortSessions()
-        } catch {
-            guard isActiveProjectKey(projectKey) else { return }
-            let message = "Agent runtime disconnected: \(userFacingError(error))"
-            availability = .disconnected(message)
-            runtimeMessage = message
-        }
     }
 
     private func saveActiveDraft() {
@@ -989,6 +968,7 @@ final class AgentSessionModel {
                 configOptions = result.configOptions
             }
             sessionProjectKeyBySessionId[sessionId] = key
+            markSessionPrimed(sessionId, projectKey: key)
             if let selectedProjectPath {
                 let normalized = RecentProjectStore.normalizedPath(selectedProjectPath)
                 sessionCwdBySessionId[sessionId] = normalized
@@ -1049,8 +1029,16 @@ final class AgentSessionModel {
             return
         }
         guard let client = clients[key] else { return }
+        if !isSessionPrimed(sessionId, projectKey: key) {
+            guard await primeSessionForSend(sessionId, projectKey: key, client: client) else {
+                if isAlreadyMarkedRunning {
+                    clearActiveTurn(sessionId)
+                    updateRunningFlags()
+                }
+                return
+            }
+        }
         let displayMessage = snapshot.previewText
-        loadingSessionIds.remove(sessionId)
         draft.clearAfterSend()
         let turnId = beginTurn(sessionId: sessionId)
         pendingUserEchoes[sessionId, default: []].append(displayMessage)
@@ -1084,6 +1072,46 @@ final class AgentSessionModel {
         refreshReviewCountsIfSupported()
         applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
         await startNextQueuedPromptIfNeeded(for: sessionId)
+    }
+
+    private func isSessionPrimed(_ sessionId: String, projectKey key: String) -> Bool {
+        primedSessionIds[key]?.contains(sessionId) ?? false
+    }
+
+    private func markSessionPrimed(_ sessionId: String, projectKey key: String) {
+        primedSessionIds[key, default: []].insert(sessionId)
+    }
+
+    /// Loads `sessionId`'s server-side context into the current process via
+    /// `session/load`, the first time this run it's about to receive a
+    /// prompt. This is the only remaining caller of `session/load`: it's a
+    /// context-priming call, not a way to repaint the transcript, so any
+    /// `session/update` replay it triggers is fully suppressed (see
+    /// `suppressingPrimeReplayForSessionIds`) rather than applied. Returns
+    /// `false` on failure, in which case the caller must abort the send —
+    /// appending an optimistic user row or starting a turn against a
+    /// session the backend couldn't load would show a phantom sent message.
+    private func primeSessionForSend(_ sessionId: String, projectKey key: String, client: AgentSessionClient) async -> Bool {
+        suppressingPrimeReplayForSessionIds.insert(sessionId)
+        do {
+            let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
+            sessionProjectKeyBySessionId[sessionId] = key
+            applyModelConfig(result.configOptions, sessionId: sessionId)
+            await refreshSessionSlashCommands(sessionId, projectKey: key)
+            // A few yields let any replay notifications the load triggered
+            // as a side effect actually arrive and get dropped by
+            // `handleSessionUpdate` before suppression lifts.
+            for _ in 0..<3 {
+                await Task.yield()
+            }
+            suppressingPrimeReplayForSessionIds.remove(sessionId)
+            markSessionPrimed(sessionId, projectKey: key)
+            return true
+        } catch {
+            suppressingPrimeReplayForSessionIds.remove(sessionId)
+            appendError(title: "Load failed", text: "Failed to load session: \(error)", key: "load-failed", to: sessionId)
+            return false
+        }
     }
 
     private func enqueue(_ snapshot: ComposerDraft, for sessionId: String) {
@@ -1231,21 +1259,13 @@ final class AgentSessionModel {
         if sessionProjectKeyBySessionId[sessionId] == nil {
             sessionProjectKeyBySessionId[sessionId] = projectKey
         }
+        // `session/load` is now a silent context-priming call (see
+        // `primeSessionForSend`), not a way to repaint the transcript: any
+        // replay it triggers as a side effect must never reach the UI or
+        // the durable transcript cache.
+        guard !suppressingPrimeReplayForSessionIds.contains(sessionId) else { return }
         if let activeTurn = activeTurns[sessionId], activeTurn.generation != generation {
             return
-        }
-        // The first raw update received *while this session is still
-        // marked loading* discards the cache-hydrated transcript in favor
-        // of live replay, even if this particular update is one of the
-        // kinds filtered out below (e.g. `session_info_update`/
-        // `config_option_update`): otherwise a replay-only session with no
-        // renderable events would keep displaying stale cache forever.
-        // Gating on `loadingSessionIds` (not just consuming the pending
-        // flag) matters: without it, a notification that happens to arrive
-        // long after the load finished (e.g. the backend echo of a later,
-        // unrelated prompt) would wipe transcript content added since.
-        if loadingSessionIds.contains(sessionId), transcriptResetPendingSessionIds.remove(sessionId) != nil {
-            transcriptStates[sessionId] = AgentTranscriptState()
         }
         guard let object = update.update.objectValue else { return }
         let kind = object["sessionUpdate"]?.stringValue
@@ -1260,7 +1280,7 @@ final class AgentSessionModel {
                 return
             }
             refreshWatchdogActivity(for: sessionId)
-            markLiveMessageActivity(for: sessionId)
+            markObservedActivity(for: sessionId)
             if case let .messageChunk(_, _, text, _) = event, suppressPendingUserEchoChunk(text, for: sessionId) {
                 return
             } else {
@@ -1269,7 +1289,7 @@ final class AgentSessionModel {
         case "agent_message_chunk":
             guard !isSuppressingStaleTurnOutput(for: sessionId) else { return }
             refreshWatchdogActivity(for: sessionId)
-            markLiveMessageActivity(for: sessionId)
+            markObservedActivity(for: sessionId)
             apply(AgentTranscriptNormalizer.events(from: update), to: sessionId)
         case "session_info_update":
             updateSessionInfo(sessionId: sessionId, object: object)
@@ -1424,7 +1444,7 @@ final class AgentSessionModel {
     }
 
     private func cleanupUnhealthyRuntime(message: String, projectKey: String) {
-        let sessionIdsForProject = sessionProjectKeyBySessionId.filter { $0.value == projectKey }.map(\.key)
+        let sessionIdsForProject = sessionIds(forProjectKey: projectKey)
         for sessionId in sessionIdsForProject {
             activeTurns[sessionId]?.watchdogTask?.cancel()
             activeTurns[sessionId] = nil
@@ -1438,6 +1458,11 @@ final class AgentSessionModel {
         refreshReviewCountsIfSupported()
         pendingApprovalModeRestartProjectKeys.remove(projectKey)
         primingSessionIdByProjectKey[projectKey] = nil
+        primedSessionIds[projectKey] = nil
+        // See `terminateClient`: don't leave a dead client's in-flight prime
+        // suppressing replay for a session that could be primed again after
+        // reconnecting.
+        suppressingPrimeReplayForSessionIds.subtract(sessionIdsForProject)
         clientGenerationByProjectKey[projectKey, default: 0] += 1
         eventTasksByProjectKey[projectKey]?.cancel()
         eventTasksByProjectKey[projectKey] = nil
@@ -1476,32 +1501,12 @@ final class AgentSessionModel {
         sortSessions()
     }
 
-    private func row(from summary: AcpSessionSummary, projectKey: String) -> AgentSessionRow {
-        if let cwd = summary.cwd {
-            let normalized = RecentProjectStore.normalizedPath(cwd)
-            sessionCwdBySessionId[summary.sessionId] = normalized
-            sessionProjectPathBySessionId[summary.sessionId] = recentProjectPaths.contains(normalized) ? normalized : nil
-        }
-        sessionProjectKeyBySessionId[summary.sessionId] = projectKey
-        return AgentSessionRow(
-            sessionId: summary.sessionId,
-            title: summary.title?.nonEmpty ?? summary.sessionId,
-            detail: folderDetail(summary.cwd),
-            updatedAt: summary.updatedAt.flatMap(parseDate),
-            observedAt: nil,
-            isRunning: activeTurns[summary.sessionId] != nil,
-            isAwaitingPermission: pendingPermissionRequests[summary.sessionId] != nil,
-            hasCompletedTurn: completedTurnSessionIds.contains(summary.sessionId)
-        )
-    }
-
     /// The single choke point every sidebar-row mutation goes through
-    /// (`refreshSessions`, `updateSessionInfo`, `ensureSessionRowExists`,
-    /// cold-start hydration). Guarding here — rather than at each call
-    /// site — is what keeps a locally deleted session from reappearing no
-    /// matter which path (a stale `session/list`, a background
-    /// `session/update`, a lingering permission request) tries to add it
-    /// back.
+    /// (`updateSessionInfo`, `ensureSessionRowExists`, cold-start
+    /// hydration). Guarding here — rather than at each call site — is what
+    /// keeps a locally deleted session from reappearing no matter which
+    /// path (a background `session/update`, a lingering permission
+    /// request) tries to add it back.
     private func upsert(_ row: AgentSessionRow) {
         guard !hiddenSessionIds.contains(row.sessionId) else { return }
         if let index = sessions.firstIndex(where: { $0.sessionId == row.sessionId }) {
@@ -1543,18 +1548,6 @@ final class AgentSessionModel {
         sessions[index].observedAt = now()
         sortSessions()
         persistSessionRow(sessions[index])
-    }
-
-    private func markLiveMessageActivity(for sessionId: String) {
-        guard !loadingSessionIds.contains(sessionId) else { return }
-        markObservedActivity(for: sessionId)
-    }
-
-    private func clearLoadingAfterReplayDrain(_ sessionId: String) async {
-        for _ in 0..<3 {
-            await Task.yield()
-        }
-        loadingSessionIds.remove(sessionId)
     }
 
     private func updateRunningFlags() {

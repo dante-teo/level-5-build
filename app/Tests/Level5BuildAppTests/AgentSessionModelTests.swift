@@ -221,27 +221,7 @@ struct AgentSessionModelTests {
         #expect(PermissionOption(optionId: "reject-once", name: "Reject", kind: nil).isAllowLike == false)
     }
 
-    @Test("Startup initializes and loads paginated session summaries")
-    func startupLoadsSessionSummaries() async throws {
-        let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "older", cwd: "/tmp/older", title: "Older", updatedAt: "2024-01-01T00:00:00.000Z"),
-                .init(sessionId: "newer", cwd: "/tmp/newer", title: "Newer", updatedAt: "2024-01-02T00:00:00.000Z")
-            ], nextCursor: "2")
-        ]
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
-
-        model.start()
-        try await waitUntil { model.sessions.count == 2 }
-
-        #expect(client.initializeCount == 1)
-        #expect(client.listCursors == [nil])
-        #expect(model.sessions.map(\.sessionId) == ["newer", "older"])
-        #expect(model.nextCursor == "2")
-    }
-
-    @Test("Startup discovery populates new chat model and slash commands")
+    @Test("Startup discovery populates new chat model and slash commands without listing sessions")
     func startupDiscoveryPopulatesComposerState() async throws {
         let client = FakeAgentSessionClient()
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
@@ -249,8 +229,14 @@ struct AgentSessionModelTests {
         model.start()
         try await waitUntil { model.modelOptions.count == 2 && model.slashCommands.count == 2 }
 
+        #expect(client.initializeCount == 1)
         #expect(model.draft.selectedModelId == "mock-pro")
         #expect(model.slashCommands.map(\.name) == ["plan", "review"])
+        // There is no backend session discovery at all anymore (`AgentSessionClient`
+        // doesn't even declare a `session/list` method): the sidebar is
+        // sourced entirely from the durable local cache (see the "Startup
+        // hydrates sidebar rows from persisted cache" test below).
+        #expect(model.sessions.isEmpty)
     }
 
     @Test("New chat creates no session until first send")
@@ -318,8 +304,12 @@ struct AgentSessionModelTests {
         client.setModelFailures = ["mock-fast"]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
+        // `selectModel` requires the target id already be in `modelOptions`,
+        // which is populated by connection-time global discovery, not by
+        // selecting a session (which never talks to the agent runtime).
+        model.start()
+        try await waitUntil { model.modelOptions.count == 2 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.selectModel("mock-fast")
         try await waitUntil { model.runtimeMessage?.contains("Model change failed") == true }
 
@@ -336,7 +326,6 @@ struct AgentSessionModelTests {
         model.start()
         try await waitUntil { model.modelOptions.count == 2 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitProcessExit()
         try await waitUntil { if case .disconnected = model.availability { true } else { false } }
 
@@ -354,15 +343,14 @@ struct AgentSessionModelTests {
         client.setModelFailures = ["mock-fast"]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
+        model.start()
+        try await waitUntil { model.modelOptions.count == 2 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft.appendText("s1 draft")
         model.selectModel("mock-fast")
         try await waitUntil { client.setModelRequestsSnapshot == [.init(sessionId: "s1", modelId: "mock-fast")] }
 
         model.selectSession("s2")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
-        try await waitUntil { client.modelOptionSessionIdsSnapshot == [nil, "s1", "s2"] }
         model.draft.selectedModelId = "mock-fast"
         client.releaseSetModel()
         try await waitUntil { model.runtimeMessage?.contains("Model change failed") == true }
@@ -415,8 +403,8 @@ struct AgentSessionModelTests {
         #expect(model.transcript.userMessageTexts == ["Build it"])
     }
 
-    @Test("Selecting a session loads replay and future sends use that session")
-    func selectingSessionLoadsReplayAndSendsToSameSession() async throws {
+    @Test("Selecting a session never talks to the agent runtime; sending primes it first and its replay never repaints the transcript")
+    func sendingPrimesUnprimedSessionBeforePromptingAndSuppressesItsReplay() async throws {
         let client = FakeAgentSessionClient()
         client.loadReplay["s1"] = [
             .messageChunk(role: .user, messageId: "u1", text: "Previous prompt"),
@@ -425,13 +413,20 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { model.transcript.count == 2 }
+        #expect(client.loadedSessionIds.isEmpty)
+        #expect(model.transcript.isEmpty)
+
         model.draft = "Next prompt"
         model.sendDraft()
         try await waitUntil { client.prompts.contains { $0.text == "Next prompt" } }
 
         #expect(client.loadedSessionIds == ["s1"])
         #expect(client.prompts.last?.sessionId == "s1")
+        // The prime's replay is a context-loading side effect, never a way
+        // to repaint the transcript: only the live send's own content shows.
+        #expect(model.transcript.contains { $0.messageText == "Previous prompt" } == false)
+        #expect(model.transcript.contains { $0.messageText == "Previous answer" } == false)
+        #expect(model.transcript.userMessageTexts == ["Next prompt"])
     }
 
     @Test("Composer drafts are scoped per selected session")
@@ -440,11 +435,9 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft.appendText("draft one")
 
         model.selectSession("s2")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
         #expect(model.draft.serializedText.isEmpty)
         model.draft.appendText("draft two")
 
@@ -457,25 +450,32 @@ struct AgentSessionModelTests {
 
     @Test("Selecting a session does not change sidebar recency order")
     func selectingSessionDoesNotChangeSidebarOrder() async throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "older",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "Older",
+            detail: "d",
+            observedAt: 1,
+            createdAt: 1
+        ))
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "newer",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "Newer",
+            detail: "d",
+            observedAt: 2,
+            createdAt: 2
+        ))
         let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "older", cwd: "/tmp/older", title: "Older", updatedAt: "2024-01-01T00:00:00.000Z"),
-                .init(sessionId: "newer", cwd: "/tmp/newer", title: "Newer", updatedAt: "2024-01-02T00:00:00.000Z")
-            ])
-        ]
-        client.loadReplay["older"] = [
-            .messageChunk(role: .user, messageId: "u-old", text: "old prompt"),
-            .messageChunk(role: .agent, messageId: "a-old", text: "old response")
-        ]
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
 
         model.start()
-        try await waitUntil("loaded sessions") { model.sessions.map(\.sessionId) == ["newer", "older"] }
         #expect(model.sessions.map(\.sessionId) == ["newer", "older"])
 
         model.selectSession("older")
-        try await waitUntil("loaded older transcript") { model.transcript.count == 2 }
         #expect(model.sessions.map(\.sessionId) == ["newer", "older"])
 
         model.draft = "new work"
@@ -486,26 +486,35 @@ struct AgentSessionModelTests {
 
     @Test("Live message after selecting a session updates sidebar recency")
     func liveMessageAfterSelectingSessionUpdatesSidebarOrder() async throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "older",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "Older",
+            detail: "d",
+            observedAt: 1,
+            createdAt: 1
+        ))
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "newer",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "Newer",
+            detail: "d",
+            observedAt: 2,
+            createdAt: 2
+        ))
         let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "older", cwd: "/tmp/older", title: "Older", updatedAt: "2024-01-01T00:00:00.000Z"),
-                .init(sessionId: "newer", cwd: "/tmp/newer", title: "Newer", updatedAt: "2024-01-02T00:00:00.000Z")
-            ])
-        ]
-        client.loadReplay["older"] = [
-            .messageChunk(role: .user, messageId: "u-old", text: "old prompt"),
-            .messageChunk(role: .agent, messageId: "a-old", text: "old response")
-        ]
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
 
         model.start()
-        try await waitUntil("loaded sessions") { model.sessions.count == 2 }
         model.selectSession("older")
-        try await waitUntil("loaded older transcript") { model.transcript.count == 2 }
         #expect(model.sessions.map(\.sessionId) == ["newer", "older"])
 
-        try await Task.sleep(for: .milliseconds(30))
+        // The shared mock client only starts consuming events once
+        // connected; `start()` already connects it for the home project key.
+        try await waitUntil { client.initializeCount == 1 }
         client.emitAgentText("older", "live response")
 
         try await waitUntil("older moved first after live message") {
@@ -519,39 +528,14 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
         #expect(model.activeTranscriptFollowsTail)
         model.setActiveTranscriptFollowsTail(false)
         #expect(model.activeTranscriptFollowsTail == false)
 
         model.selectSession("s2")
-        try await waitUntil("loaded s2") { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
         #expect(model.activeTranscriptFollowsTail)
 
         model.selectSession("s1")
-        #expect(model.activeTranscriptFollowsTail == false)
-    }
-
-    @Test("Session replay keeps follow-tail enabled while loading")
-    func sessionReplayKeepsFollowTailEnabledWhileLoading() async throws {
-        let client = FakeAgentSessionClient()
-        client.blocksLoad = true
-        client.loadReplay["s1"] = [
-            .messageChunk(role: .user, messageId: "u1", text: "old prompt"),
-            .messageChunk(role: .agent, messageId: "a1", text: "old response")
-        ]
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
-
-        model.selectSession("s1")
-        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
-        model.setActiveTranscriptFollowsTail(false)
-
-        #expect(model.activeTranscriptFollowsTail)
-
-        client.releaseLoad()
-        try await waitUntil("load finished") { model.transcript.count == 2 }
-        model.setActiveTranscriptFollowsTail(false)
-
         #expect(model.activeTranscriptFollowsTail == false)
     }
 
@@ -561,7 +545,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
         model.setActiveTranscriptFollowsTail(false)
 
         model.draft = "do not jump"
@@ -578,7 +561,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
 
         model.draft = "first"
         model.sendDraft()
@@ -601,13 +583,11 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "one"
         model.sendDraft()
         try await waitUntil("prompted s1") { client.promptSessionIds == ["s1"] }
 
         model.selectSession("s2")
-        try await waitUntil("loaded s2") { client.loadedSessionIdsSnapshot == ["s1", "s2"] }
         model.draft = "two"
         model.sendDraft()
         try await waitUntil("prompted s2") { client.promptSessionIds == ["s1", "s2"] }
@@ -620,24 +600,25 @@ struct AgentSessionModelTests {
 
     @Test("Active plan and usage are scoped to selected session")
     func activePlanAndUsageAreScopedToSelectedSession() async throws {
+        // Plan/usage are session metadata driven purely by live updates now
+        // (never by a selection-time replay), so inject them directly.
         let client = FakeAgentSessionClient()
-        client.loadReplay["s1"] = [
-            .plan(entries: [.init(id: "p1", content: "Session one plan", status: "in_progress", priority: "high")]),
-            .usage(.init(used: 10, size: 100, amount: nil, currency: nil))
-        ]
-        client.loadReplay["s2"] = [
-            .plan(entries: [.init(id: "p2", content: "Session two plan", status: "completed", priority: "high")]),
-            .usage(.init(used: 70, size: 100, amount: 0.02, currency: "USD"))
-        ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
+
         model.selectSession("s1")
+        client.emitTranscriptEvent(.plan(entries: [.init(id: "p1", content: "Session one plan", status: "in_progress", priority: "high")]), sessionId: "s1")
+        client.emitTranscriptEvent(.usage(.init(used: 10, size: 100, amount: nil, currency: nil)), sessionId: "s1")
         try await waitUntil { model.activePlan?.entries.first?.content == "Session one plan" }
-        #expect(model.activeUsage?.used == 10)
+        try await waitUntil { model.activeUsage?.used == 10 }
 
         model.selectSession("s2")
+        client.emitTranscriptEvent(.plan(entries: [.init(id: "p2", content: "Session two plan", status: "completed", priority: "high")]), sessionId: "s2")
+        client.emitTranscriptEvent(.usage(.init(used: 70, size: 100, amount: 0.02, currency: "USD")), sessionId: "s2")
         try await waitUntil { model.activePlan?.entries.first?.content == "Session two plan" }
-        #expect(model.activeUsage?.used == 70)
+        try await waitUntil { model.activeUsage?.used == 70 }
 
         model.selectSession("s1")
         #expect(model.activePlan?.entries.first?.content == "Session one plan")
@@ -647,21 +628,18 @@ struct AgentSessionModelTests {
     @Test("Completed plan clears when next prompt starts")
     func completedPlanClearsWhenNextPromptStarts() async throws {
         let client = FakeAgentSessionClient()
-        client.blocksPrompts = true
-        client.loadReplay["s1"] = [
-            .plan(entries: [.init(id: "p1", content: "Done plan", status: "completed", priority: "high")])
-        ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
+        client.emitTranscriptEvent(.plan(entries: [.init(id: "p1", content: "Done plan", status: "completed", priority: "high")]), sessionId: "s1")
         try await waitUntil { model.activePlan?.isComplete == true }
 
         model.draft = "next"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
         #expect(model.activePlan == nil)
-
-        client.releaseNextPrompt()
     }
 
     @Test("Same-session sends queue FIFO and queued prompts can be removed")
@@ -717,7 +695,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 && model.isActiveSessionRunning }
@@ -747,7 +724,6 @@ struct AgentSessionModelTests {
         )
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -774,7 +750,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -798,7 +773,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -830,7 +804,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { factory.next() })
 
         model.selectSession("s1")
-        try await waitUntil { first.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { first.prompts.count == 1 }
@@ -862,7 +835,6 @@ struct AgentSessionModelTests {
         )
 
         model.selectSession("s1")
-        try await waitUntil { first.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { first.prompts.count == 1 }
@@ -897,7 +869,6 @@ struct AgentSessionModelTests {
         )
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "needs approval"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -921,8 +892,12 @@ struct AgentSessionModelTests {
             approvalModePreferenceStore: .ephemeral
         )
 
+        // Selecting a session never connects the runtime on its own, so
+        // connect explicitly to give the permission notification below
+        // somewhere to be delivered to.
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(12), sessionId: "s1")
         try await waitUntil { model.activePermissionRequest?.sessionId == "s1" }
 
@@ -940,8 +915,9 @@ struct AgentSessionModelTests {
             approvalModePreferenceStore: .ephemeral
         )
 
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(12), sessionId: "s1")
         try await waitUntil { model.activePermissionRequest != nil }
 
@@ -970,8 +946,9 @@ struct AgentSessionModelTests {
             approvalModePreferenceStore: .ephemeral
         )
 
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(12), sessionId: "s1")
         try await waitUntil { model.activePermissionRequest != nil }
 
@@ -985,12 +962,6 @@ struct AgentSessionModelTests {
     @Test("Background session permission does not block current session")
     func backgroundSessionPermissionDoesNotBlockCurrentSession() async throws {
         let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "s1", title: "One"),
-                .init(sessionId: "s2", title: "Two")
-            ])
-        ]
         let model = AgentSessionModel(
             backendKind: .acpMock,
             makeClient: { client },
@@ -998,9 +969,8 @@ struct AgentSessionModelTests {
         )
 
         model.start()
-        try await waitUntil { model.sessions.count == 2 }
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(22), sessionId: "s2")
         try await waitUntil {
             model.sessions.first(where: { $0.sessionId == "s2" })?.isAwaitingPermission == true
@@ -1021,8 +991,9 @@ struct AgentSessionModelTests {
         )
 
         model.selectApprovalMode(.approveForMe)
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(12), sessionId: "s1")
         try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
 
@@ -1041,8 +1012,9 @@ struct AgentSessionModelTests {
         )
 
         model.selectApprovalMode(.fullAccess)
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(id: .int(12), sessionId: "s1")
         try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
 
@@ -1060,8 +1032,9 @@ struct AgentSessionModelTests {
         )
 
         model.selectApprovalMode(.fullAccess)
+        model.start()
+        try await waitUntil { client.initializeCount == 1 }
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         client.emitPermissionRequest(
             id: .int(12),
             sessionId: "s1",
@@ -1086,7 +1059,6 @@ struct AgentSessionModelTests {
         )
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -1108,17 +1080,11 @@ struct AgentSessionModelTests {
         client.releaseNextPrompt()
     }
 
-    @Test("Delete refreshes list and clears active deleted session")
+    @Test("Delete removes the session locally and clears active deleted session")
     func deleteRefreshesAndClearsActiveSession() async throws {
         let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [.init(sessionId: "s1", title: "One")]),
-            .init(sessions: [])
-        ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
-        model.start()
-        try await waitUntil { model.sessions.count == 1 }
         model.selectSession("s1")
         model.deleteSession("s1")
         try await waitUntil { client.deletedSessionIds == ["s1"] && model.sessions.isEmpty }
@@ -1126,24 +1092,16 @@ struct AgentSessionModelTests {
         #expect(model.activeSessionId == nil)
     }
 
-    @Test("Deleting a session removes it locally even when the backend's session/delete fails and keeps listing it")
-    func deleteSucceedsLocallyDespiteBackendDeleteFailureAndStaleListing() async throws {
+    @Test("Deleting a session removes it locally even when the backend's session/delete fails, and it stays hidden from later live updates")
+    func deleteSucceedsLocallyDespiteBackendDeleteFailureAndStaysHidden() async throws {
         // Mirrors the real Devin gap: `session/delete` is unimplemented
-        // ("Method not found") and the session keeps showing up in
-        // `session/list` forever. Our local sidebar is not required to stay
+        // ("Method not found"). Our local sidebar is not required to stay
         // consistent with the backend's — once deleted here, it must stay
-        // gone regardless.
+        // gone regardless of what the backend still reports.
         let client = FakeAgentSessionClient()
         client.deleteSessionFailures = ["s1"]
-        client.listResults = [
-            .init(sessions: [.init(sessionId: "s1", title: "One")]),
-            .init(sessions: [.init(sessionId: "s1", title: "One")]),
-            .init(sessions: [.init(sessionId: "s1", title: "One")])
-        ]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
-        model.start()
-        try await waitUntil { model.sessions.count == 1 }
         model.selectSession("s1")
         model.deleteSession("s1")
 
@@ -1151,10 +1109,10 @@ struct AgentSessionModelTests {
         #expect(model.sessions.isEmpty)
         #expect(model.activeSessionId == nil)
 
-        // A later refresh that still lists the "deleted" session from the
-        // backend must not resurrect it.
-        model.loadMoreSessions()
-        try await waitUntil { client.listCursors.count >= 3 }
+        // A later background update for the "deleted" session must not
+        // resurrect it in the sidebar.
+        client.emitSessionInfoUpdate("s1", title: "Resurrected?")
+        try await Task.sleep(for: .milliseconds(30))
         #expect(model.sessions.isEmpty)
     }
 
@@ -1165,7 +1123,6 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.selectSession("s1")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["s1"] }
         model.draft = "first"
         model.sendDraft()
         try await waitUntil { client.prompts.count == 1 }
@@ -1241,35 +1198,7 @@ struct AgentSessionModelTests {
         #expect(model.dashboardState == nil)
     }
 
-    @Test("Listed sessions are project-backed only when cwd is in recents")
-    func listedSessionProjectEligibilityUsesRecents() async throws {
-        let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "project", cwd: "/repo/project", title: "Project"),
-                .init(sessionId: "other", cwd: "/repo/other", title: "Other")
-            ])
-        ]
-        let model = AgentSessionModel(
-            backendKind: .acpMock,
-            makeClient: { client },
-            gitStatusProvider: { _ in .unavailable() }
-        )
-        model.setRecentProjects([
-            RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
-        ])
-
-        model.start()
-        try await waitUntil { model.sessions.count == 2 }
-        model.selectSession("project")
-        try await waitUntil { model.activeSessionProjectPath == "/repo/project" }
-        model.selectSession("other")
-        try await waitUntil { client.loadedSessionIdsSnapshot == ["project", "other"] }
-
-        #expect(model.activeSessionProjectPath == nil)
-    }
-
-    @Test("Dashboard refresh ignores stale git result after session change")
+    @Test("Dashboard refresh ignores stale git result after switching project-backed sessions")
     func dashboardRefreshIgnoresStaleResults() async throws {
         actor Gate {
             var continuations: [CheckedContinuation<ProjectGitStatus, Never>] = []
@@ -1284,62 +1213,79 @@ struct AgentSessionModelTests {
         }
         let gate = Gate()
         let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [
-                .init(sessionId: "one", cwd: "/repo/one", title: "One"),
-                .init(sessionId: "two", cwd: "/repo/two", title: "Two")
-            ])
-        ]
+        // Keep turns open so sending doesn't also trigger `send`'s own
+        // post-turn dashboard refresh, which would add extra untracked
+        // `gitStatusProvider` calls beyond the two this test releases.
+        client.blocksPrompts = true
         let model = AgentSessionModel(
             backendKind: .acpMock,
             makeClient: { client },
             gitStatusProvider: { _ in await gate.wait() }
         )
-        model.setRecentProjects([
-            RecentProject(path: "/repo/one", displayName: "one", createdAt: .distantPast, lastOpenedAt: .distantPast),
-            RecentProject(path: "/repo/two", displayName: "two", createdAt: .distantPast, lastOpenedAt: .distantPast)
-        ])
+        let projectOne = RecentProject(path: "/repo/one", displayName: "one", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectTwo = RecentProject(path: "/repo/two", displayName: "two", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model.setRecentProjects([projectOne, projectTwo])
 
-        model.start()
-        try await waitUntil { model.sessions.count == 2 }
-        model.selectSession("one")
-        try await waitUntil { model.dashboardState?.projectPath == "/repo/one" }
-        model.selectSession("two")
-        try await waitUntil { model.dashboardState?.projectPath == "/repo/two" }
+        client.newSessionResult = .init(sessionId: "one")
+        model.selectProject(projectOne)
+        model.draft = "hello"
+        model.sendDraft()
+        try await waitUntil("one dashboard") { model.dashboardState?.projectPath == "/repo/one" }
 
+        model.startNewChat()
+        client.newSessionResult = .init(sessionId: "two")
+        model.selectProject(projectTwo)
+        model.draft = "hello"
+        model.sendDraft()
+        try await waitUntil("two dashboard") { model.dashboardState?.projectPath == "/repo/two" }
+
+        // Session creation and `beginTurn` each kick off their own dashboard
+        // refresh, so switching sessions after both sends leaves 4 pending
+        // `gitStatusProvider` calls in flight (2 per session, both blocked
+        // on `client.blocksPrompts` before either turn's own completion
+        // could trigger yet another). Only the *last* one for the
+        // currently active project (project two) should win.
         await gate.release(.init(isAvailable: true, root: "/repo/one", branch: "stale", changedFiles: 99))
+        await gate.release(.init(isAvailable: true, root: "/repo/one", branch: "stale", changedFiles: 99))
+        await gate.release(.init(isAvailable: true, root: "/repo/two", branch: "stale", changedFiles: 99))
         await gate.release(.init(isAvailable: true, root: "/repo/two", branch: "main", changedFiles: 1))
         try await waitUntil { model.dashboardState?.gitStatus.branch == "main" }
 
         #expect(model.dashboardState?.projectPath == "/repo/two")
         #expect(model.dashboardState?.gitStatus.changedFiles == 1)
+
+        client.releaseNextPrompt()
+        client.releaseNextPrompt()
     }
 
     @Test("References include web and external files but exclude in-project files")
     func referencesFilterAndDedupe() async throws {
+        // References are session metadata driven purely by live updates
+        // now (never by a send-time priming replay), so inject them
+        // directly once a project-backed session is actually running.
         let client = FakeAgentSessionClient()
-        client.loadReplay["s1"] = [
-            .references([
-                .init(kind: .web, title: "Docs", uri: "https://example.com/docs"),
-                .init(kind: .web, title: "Duplicate Docs", uri: "https://example.com/docs"),
-                .init(kind: .file, title: "External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
-                .init(kind: .file, title: "Duplicate External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
-                .init(kind: .file, title: "Internal", uri: URL(fileURLWithPath: "/repo/project/Sources/App.swift").absoluteString)
-            ])
-        ]
+        client.blocksPrompts = true
         let model = AgentSessionModel(
             backendKind: .acpMock,
             makeClient: { client },
             gitStatusProvider: { _ in .unavailable() }
         )
-        model.setRecentProjects([
-            RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
-        ])
-        client.listResults = [.init(sessions: [.init(sessionId: "s1", cwd: "/repo/project", title: "Project")])]
+        let project = RecentProject(path: "/repo/project", displayName: "project", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model.setRecentProjects([project])
 
-        model.start()
-        try await waitUntil { model.sessions.count == 1 }
-        model.selectSession("s1")
+        model.selectProject(project)
+        model.draft = "Build it"
+        model.sendDraft()
+        try await waitUntil { client.prompts.count == 1 }
+        let sessionId = try #require(model.activeSessionId)
+
+        client.emitTranscriptEvent(.references([
+            .init(kind: .web, title: "Docs", uri: "https://example.com/docs"),
+            .init(kind: .web, title: "Duplicate Docs", uri: "https://example.com/docs"),
+            .init(kind: .file, title: "External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
+            .init(kind: .file, title: "Duplicate External", uri: URL(fileURLWithPath: "/tmp/external.md").absoluteString),
+            .init(kind: .file, title: "Internal", uri: URL(fileURLWithPath: "/repo/project/Sources/App.swift").absoluteString)
+        ]), sessionId: sessionId)
         try await waitUntil { model.dashboardState?.references.count == 2 }
 
         #expect(model.dashboardState?.references.map(\.uri) == [
@@ -1347,6 +1293,8 @@ struct AgentSessionModelTests {
             URL(fileURLWithPath: "/tmp/external.md").absoluteString
         ])
         #expect(Set(model.dashboardState?.references.map(\.id) ?? []).count == 2)
+
+        client.releaseNextPrompt()
     }
 
     @Test("Adaptive dashboard policy follows width fallback and compact overlay")
@@ -1432,10 +1380,6 @@ struct AgentSessionModelTests {
     func multiProjectProcessExitIsIsolated() async throws {
         let clientA = FakeAgentSessionClient()
         clientA.newSessionResult = .init(sessionId: "a1")
-        // Mirrors the session the fake will report back once created, so a
-        // concurrent sidebar refresh for project A can't race the creation
-        // and wipe the row back out.
-        clientA.listResults = [.init(sessions: [.init(sessionId: "a1", cwd: "/repo/project-a", title: "A session")])]
         clientA.blocksPrompts = true
         let clientB = FakeAgentSessionClient()
         clientB.newSessionResult = .init(sessionId: "b1")
@@ -1479,16 +1423,16 @@ struct AgentSessionModelTests {
         try await waitUntil { model.sessions.first { $0.sessionId == sessionAId }?.isRunning == false }
     }
 
-    @Test("Selecting a project loads its sessions without evicting other projects' rows")
-    func selectingProjectLoadsItsOwnSessionsForDevin() async throws {
+    @Test("Selecting a project hydrates its own persisted sessions without evicting other projects' rows")
+    func selectingProjectHydratesItsOwnPersistedSessionsForDevin() async throws {
+        let fixture = try PersistenceFixture()
+        let pathA = RecentProjectStore.normalizedPath("/repo/project-a")
+        let pathB = RecentProjectStore.normalizedPath("/repo/project-b")
+        try fixture.store.upsertSessionRow(.init(sessionId: "a1", projectKey: pathA, backend: "devin", title: "A session", detail: "d", createdAt: 1))
+        try fixture.store.upsertSessionRow(.init(sessionId: "b1", projectKey: pathB, backend: "devin", title: "B session", detail: "d", createdAt: 1))
         let clientA = FakeAgentSessionClient()
-        clientA.listResults = [.init(sessions: [.init(sessionId: "a1", cwd: "/repo/project-a", title: "A session")])]
         let clientB = FakeAgentSessionClient()
-        clientB.listResults = [.init(sessions: [.init(sessionId: "b1", cwd: "/repo/project-b", title: "B session")])]
-        let clientsByPath = [
-            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
-            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
-        ]
+        let clientsByPath = [pathA: clientA, pathB: clientB]
         let model = AgentSessionModel(
             backendKind: .devin,
             makeClient: { throw AgentBackendError.missingDevinExecutable },
@@ -1496,19 +1440,57 @@ struct AgentSessionModelTests {
                 guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
                 return client
             },
+            persistenceStore: fixture.store,
             gitStatusProvider: { _ in .unavailable() }
         )
         let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
         let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
 
         model.selectProject(projectA)
-        try await waitUntil { model.sessions.map(\.sessionId) == ["a1"] }
+        #expect(model.sessions.map(\.sessionId) == ["a1"])
 
-        // Switching the "new chat" project to B loads B's own sessions too,
-        // but must not evict A's row: with true multi-project concurrency,
-        // A's process (and any work happening there) is still alive.
+        // Switching the "new chat" project to B hydrates B's own persisted
+        // sessions too, but must not evict A's row: with true multi-project
+        // concurrency, A's process (and any work happening there) is still
+        // alive.
         model.selectProject(projectB)
-        try await waitUntil { Set(model.sessions.map(\.sessionId)) == ["a1", "b1"] }
+        #expect(Set(model.sessions.map(\.sessionId)) == ["a1", "b1"])
+    }
+
+    @Test("A persisted session becomes project-backed once recents catch up, even if hydration raced ahead of them")
+    func hydratedSessionBecomesProjectBackedAfterRecentsCatchUp() throws {
+        // Mirrors `ContentView.selectProject(_ url:)`, which calls
+        // `model.selectProject` (hydrating synchronously) before its own
+        // `loadRecentProjects()`/`model.setRecentProjects` call resolves.
+        // `recentProjectPaths` must not need to already contain the project
+        // at the moment of hydration for its persisted sessions to still be
+        // recognized as project-backed once recents do catch up.
+        let fixture = try PersistenceFixture()
+        let pathA = RecentProjectStore.normalizedPath("/repo/project-a")
+        try fixture.store.upsertSessionRow(.init(sessionId: "a1", projectKey: pathA, backend: "devin", title: "A session", detail: "d", createdAt: 1))
+        let clientA = FakeAgentSessionClient()
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard cwd == pathA else { throw AgentBackendError.missingDevinExecutable }
+                return clientA
+            },
+            persistenceStore: fixture.store,
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        // Hydrate with `recentProjectPaths` still empty (the race window).
+        model.selectProject(projectA)
+        model.selectSession("a1")
+        #expect(model.activeSessionProjectPath == nil)
+
+        // Recents catch up moments later, as they do right after
+        // `ContentView.selectProject(_ url:)`'s own `loadRecentProjects()`.
+        model.setRecentProjects([projectA])
+        model.selectSession("a1")
+        #expect(model.activeSessionProjectPath == "/repo/project-a")
     }
 
     @Test("A background project's idle-timeout cancellation does not clobber the foreground project's status")
@@ -1693,7 +1675,7 @@ struct AgentSessionModelTests {
 
     // MARK: - Durable session/transcript persistence
 
-    @Test("Sidebar shows persisted rows before session/list resolves")
+    @Test("Startup hydrates sidebar rows from persisted cache; there is no session/list to overwrite them")
     func sidebarShowsPersistedRowsBeforeSessionListResolves() throws {
         let fixture = try PersistenceFixture()
         try fixture.store.upsertSessionRow(.init(
@@ -1711,33 +1693,14 @@ struct AgentSessionModelTests {
         model.start()
 
         // Checked synchronously, before any `await`: proves the sidebar is
-        // populated from disk before `ensureConnected`/`session/list` (both
-        // async) have had a chance to run at all.
+        // populated from disk alone, with no dependency on `ensureConnected`
+        // (async) ever resolving.
         #expect(model.sessions.map(\.sessionId) == ["cached-1"])
         #expect(model.sessions.first?.title == "Cached session")
     }
 
-    @Test("Load More persists newly discovered sessions, not just the first page")
-    func loadMorePersistsNewlyDiscoveredSessions() async throws {
-        let fixture = try PersistenceFixture()
-        let client = FakeAgentSessionClient()
-        client.listResults = [
-            .init(sessions: [.init(sessionId: "s1", title: "One")], nextCursor: "2"),
-            .init(sessions: [.init(sessionId: "s2", title: "Two")])
-        ]
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
-
-        model.start()
-        try await waitUntil { model.sessions.map(\.sessionId) == ["s1"] }
-        model.loadMoreSessions()
-        try await waitUntil { model.sessions.map(\.sessionId).sorted() == ["s1", "s2"] }
-
-        let persistedIds = try fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId)
-        #expect(Set(persistedIds) == Set(["s1", "s2"]))
-    }
-
-    @Test("Selecting a session paints cached transcript immediately, then swaps to live replay")
-    func selectingSessionPaintsCacheThenSwapsToReplay() async throws {
+    @Test("Selecting a session paints its cached transcript and never touches it again just by looking")
+    func selectingSessionPaintsCacheAndLeavesItUntouched() async throws {
         let fixture = try PersistenceFixture()
         try fixture.store.upsertSessionRow(.init(
             sessionId: "s1",
@@ -1752,50 +1715,19 @@ struct AgentSessionModelTests {
         try fixture.store.upsertTranscriptItems(sessionId: "s1", items: [persisted])
 
         let client = FakeAgentSessionClient()
-        client.blocksLoad = true
         client.loadReplay["s1"] = [.messageChunk(role: .agent, messageId: "live", text: "live content")]
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
 
         model.selectSession("s1")
 
-        // Cache paints immediately, synchronously, before the async load.
+        // Cache paints immediately, synchronously — selection never talks
+        // to the agent runtime at all.
         #expect(model.transcript.map(\.messageText) == ["cached content"])
+        #expect(client.loadedSessionIds.isEmpty)
 
-        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
-        client.releaseLoad()
-        try await waitUntil("live replay swaps in") { model.transcript.map(\.messageText) == ["live content"] }
-    }
-
-    @Test("A replay with zero renderable events still discards the cache-hydrated transcript")
-    func zeroRenderableReplayStillDiscardsCache() async throws {
-        let fixture = try PersistenceFixture()
-        try fixture.store.upsertSessionRow(.init(
-            sessionId: "s1",
-            projectKey: PersistenceFixture.sharedProjectKey,
-            backend: "mock",
-            title: "t",
-            detail: "d",
-            createdAt: 1
-        ))
-        let cachedItem = AgentTranscriptItem(id: "message-cached", kind: .message(.init(role: .agent, messageId: "cached", text: "cached content")))
-        let persisted = try #require(TranscriptPersistenceCoding.encode(cachedItem))
-        try fixture.store.upsertTranscriptItems(sessionId: "s1", items: [persisted])
-
-        let client = FakeAgentSessionClient()
-        client.blocksLoad = true
-        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
-
-        model.selectSession("s1")
+        try await Task.sleep(for: .milliseconds(30))
         #expect(model.transcript.map(\.messageText) == ["cached content"])
-        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
-
-        // `available_commands_update` renders no transcript event, but it
-        // is still a raw `session/update` for this (still-loading) session
-        // and must discard the stale cache rather than leave it forever.
-        client.emitAvailableCommands("s1", names: [])
-        try await waitUntil("cache discarded") { model.transcript.isEmpty }
-
-        client.releaseLoad()
+        #expect(client.loadedSessionIds.isEmpty)
     }
 
     @Test("Deleting a session removes its persisted rows")
@@ -1805,10 +1737,7 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
 
         model.selectSession("s1")
-        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
-        try await waitUntil("session row persisted") {
-            (try? fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId)) == ["s1"]
-        }
+        #expect(try fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId) == ["s1"])
 
         model.deleteSession("s1")
 
@@ -1848,7 +1777,6 @@ struct AgentSessionModelTests {
         let client1 = FakeAgentSessionClient()
         let model1 = AgentSessionModel(backendKind: .acpMock, makeClient: { client1 }, persistenceStore: fixture.store)
         model1.selectSession("s1")
-        try await waitUntil("loaded s1") { client1.loadedSessionIdsSnapshot == ["s1"] }
         model1.draft = "hello there"
         model1.sendDraft()
         try await waitUntil("turn completed") {
@@ -1888,8 +1816,6 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     private let continuation: AsyncStream<AcpEvent>.Continuation
     let events: AsyncStream<AcpEvent>
     var initializeCount = 0
-    var listCursors: [String?] = []
-    var listResults: [AcpSessionListResult] = [.init()]
     var newSessionCwds: [String] = []
     var newSessionResult = AcpSessionResult(sessionId: "s1")
     var loadedSessionIds: [String] = []
@@ -1929,19 +1855,13 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var userEchoChunksByPrompt: [String: [String]] = [:]
     var blockBeforeUserEchoPrompts: Set<String> = []
     var blocksSetModel = false
-    var blocksLoad = false
     var blocksPrompts = false
     private var setModelContinuation: CheckedContinuation<Void, Never>?
     private var setModelReleasePermits = 0
-    private var loadContinuation: CheckedContinuation<Void, Never>?
     private var userEchoContinuations: [CheckedContinuation<Void, Never>] = []
     private var userEchoReleasePermits = 0
     private var promptContinuations: [CheckedContinuation<Void, Never>] = []
     private var promptReleasePermits = 0
-
-    var loadedSessionIdsSnapshot: [String] {
-        lock.withLock { loadedSessionIds }
-    }
 
     var promptSessionIds: [String] {
         lock.withLock { prompts.map(\.sessionId) }
@@ -1979,13 +1899,6 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         lock.withLock { initializeCount += 1 }
     }
 
-    func listSessions(cursor: String?) async throws -> AcpSessionListResult {
-        lock.withLock {
-            listCursors.append(cursor)
-            return listResults.isEmpty ? .init() : listResults.removeFirst()
-        }
-    }
-
     func newSession(cwd: String) async throws -> AcpSessionResult {
         lock.withLock { newSessionCwds.append(cwd) }
         // Real Devin streams `session/update` notifications (including
@@ -2000,13 +1913,6 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
         lock.withLock { loadedSessionIds.append(sessionId) }
-        if lock.withLock({ blocksLoad }) {
-            await withCheckedContinuation { continuation in
-                lock.withLock {
-                    loadContinuation = continuation
-                }
-            }
-        }
         for event in lock.withLock({ loadReplay[sessionId] ?? [] }) {
             emitTranscriptEvent(event, sessionId: sessionId)
         }
@@ -2180,15 +2086,6 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         continuation?.resume()
     }
 
-    func releaseLoad() {
-        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
-            let continuation = loadContinuation
-            loadContinuation = nil
-            return continuation
-        }
-        continuation?.resume()
-    }
-
     func emitUserText(_ sessionId: String, _ text: String) {
         emitText(sessionId, role: "user_message_chunk", text: text)
     }
@@ -2258,7 +2155,20 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         ]))
     }
 
-    private func emitTranscriptEvent(_ transcriptEvent: AgentTranscriptEvent, sessionId: String) {
+    /// Mirrors a real backend's `session_info_update` `session/update`
+    /// notification (e.g. a title change) so tests can exercise the
+    /// hidden-session guard without going through a removed `session/list`.
+    func emitSessionInfoUpdate(_ sessionId: String, title: String) {
+        continuation.yield(.notification(method: AcpMethod.sessionUpdate, params: [
+            "sessionId": .string(sessionId),
+            "update": [
+                "sessionUpdate": "session_info_update",
+                "title": .string(title)
+            ]
+        ]))
+    }
+
+    func emitTranscriptEvent(_ transcriptEvent: AgentTranscriptEvent, sessionId: String) {
         switch transcriptEvent {
         case let .messageChunk(role, messageId, text, _):
             emitText(

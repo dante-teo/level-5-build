@@ -64,7 +64,6 @@ protocol AgentSessionClient: Sendable {
     var events: AsyncStream<AcpEvent> { get }
 
     func initialize() async throws
-    func listSessions(cursor: String?) async throws -> AcpSessionListResult
     func newSession(cwd: String) async throws -> AcpSessionResult
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult
     func deleteSession(sessionId: String) async throws
@@ -98,10 +97,6 @@ extension AcpClientBackedSessionClient {
         _ = try await client.initialize(.init(
             clientInfo: .init(name: "Level5 Build", version: "0.0.0")
         ))
-    }
-
-    func listSessions(cursor: String?) async throws -> AcpSessionListResult {
-        try await client.listSessions(cursor: cursor)
     }
 
     func newSession(cwd: String) async throws -> AcpSessionResult {

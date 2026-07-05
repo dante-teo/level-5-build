@@ -10,7 +10,6 @@ public enum L5Icon: Equatable {
     case completed
     case dashboard
     case error
-    case loadMore
     case local
     case newChat
     case pullRequest
@@ -35,7 +34,6 @@ public enum L5Icon: Equatable {
         case .completed: "checkmark.circle.fill"
         case .dashboard: "rectangle.3.group"
         case .error: "exclamationmark.triangle.fill"
-        case .loadMore: "ellipsis.circle"
         case .local: "laptopcomputer"
         case .newChat: "square.and.pencil"
         case .pullRequest: "globe"

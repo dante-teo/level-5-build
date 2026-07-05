@@ -59,40 +59,33 @@ export function defaultMockStatePath(): string {
 	return resolve(homedir(), ".level5-build", "acp-mock-state.json");
 }
 
-export function resolveMockAcpIndexPath(input: { env?: NodeJS.ProcessEnv; execPath?: string; cwd?: string } = {}): string {
+export function resolveMockAcpStartPath(input: { env?: NodeJS.ProcessEnv; execPath?: string; cwd?: string } = {}): string {
 	const env = input.env ?? process.env;
 	const cwd = input.cwd ?? process.cwd();
 	const execPath = input.execPath ?? process.execPath;
-	const explicitPath = env.LEVEL5_ACP_MOCK_INDEX_PATH;
+	const explicitPath = env.LEVEL5_ACP_MOCK_START_PATH ?? env.LEVEL5_ACP_MOCK_INDEX_PATH;
 	if (explicitPath) {
 		return explicitPath;
 	}
 	const candidates = [
-		resolve(dirname(execPath), "../Resources/app/acp-mock-server/src/index.ts"),
-		resolve(dirname(execPath), "Resources/app/acp-mock-server/src/index.ts"),
-		resolve(cwd, "../acp-mock-server/src/index.ts"),
-		resolve(cwd, "acp-mock-server/src/index.ts"),
+		resolve(dirname(execPath), "../Resources/app/acp-mock-server/start.sh"),
+		resolve(dirname(execPath), "Resources/app/acp-mock-server/start.sh"),
+		resolve(cwd, "../acp-mock-server/start.sh"),
+		resolve(cwd, "acp-mock-server/start.sh"),
 	];
 
-	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1] ?? resolve("acp-mock-server/src/index.ts");
-}
-
-export function resolveBunExecutablePath(input: { execPath?: string } = {}): string {
-	const execPath = input.execPath ?? process.execPath;
-	const siblingBun = resolve(dirname(execPath), process.platform === "win32" ? "bun.exe" : "bun");
-	return existsSync(siblingBun) ? siblingBun : "bun";
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[candidates.length - 1] ?? resolve("acp-mock-server/start.sh");
 }
 
 export function buildMockSpawnOptions(input: {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
-	mockIndexPath?: string;
-	bunExecutablePath?: string;
+	mockStartPath?: string;
 }): AgentSpawnOptions {
-	const mockIndexPath = input.mockIndexPath ?? resolveMockAcpIndexPath({ env: input.env });
+	const mockStartPath = input.mockStartPath ?? resolveMockAcpStartPath({ env: input.env });
 	const env = input.env ?? process.env;
 	return {
-		cmd: [input.bunExecutablePath ?? resolveBunExecutablePath(), mockIndexPath],
+		cmd: [mockStartPath],
 		cwd: input.cwd,
 		env: {
 			...env,

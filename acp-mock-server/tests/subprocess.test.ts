@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, test } from "node:test";
 
-// These tests drive the real `bun src/index.ts` entrypoint over a stdio
+// These tests drive the real `start.sh` entrypoint over a stdio
 // subprocess, unlike server.test.ts which calls AcpMockServer.handleLine()
 // directly in-process. That distinction matters: a request handler that
 // calls back into the client mid-flight (e.g. session/prompt triggering
@@ -31,12 +33,9 @@ type Client = {
 };
 
 function spawnClient(env: Record<string, string> = {}): Client {
-	const proc = Bun.spawn({
-		cmd: ["bun", "src/index.ts"],
-		cwd: join(import.meta.dir, ".."),
-		stdin: "pipe",
-		stdout: "pipe",
-		stderr: "ignore",
+	const proc = spawn("./start.sh", {
+		cwd: process.cwd(),
+		stdio: ["pipe", "pipe", "ignore"],
 		env: { ...process.env, ACP_MOCK_STATE_PATH: join(tmp, "state.json"), ACP_MOCK_DELAY_MS: "10", ...env }
 	});
 
@@ -47,12 +46,8 @@ function spawnClient(env: Record<string, string> = {}): Client {
 	let buffer = "";
 
 	(async () => {
-		const reader = proc.stdout.getReader();
-		const decoder = new TextDecoder();
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
+		for await (const chunk of proc.stdout) {
+			buffer += chunk.toString("utf8");
 			let index: number;
 			while ((index = buffer.indexOf("\n")) >= 0) {
 				const line = buffer.slice(0, index).trim();
@@ -134,7 +129,7 @@ describe("ACP mock server over a real subprocess", () => {
 			client.respond(permissionRequest.id, { outcome: { optionId: "allow-once" } });
 
 			const result = await promptPromise;
-			expect(result.result.stopReason).toBe("end_turn");
+			assert.equal(result.result.stopReason, "end_turn");
 		} finally {
 			client.kill();
 		}
@@ -153,7 +148,7 @@ describe("ACP mock server over a real subprocess", () => {
 			client.respond(permissionRequest.id, { outcome: { optionId: "reject-once" } });
 
 			const result = await promptPromise;
-			expect(result.result.stopReason).toBe("end_turn");
+			assert.equal(result.result.stopReason, "end_turn");
 		} finally {
 			client.kill();
 		}
@@ -164,13 +159,17 @@ describe("ACP mock server over a real subprocess", () => {
 		try {
 			const sessionId = await initializeAndCreateSession(client, tmp);
 			const promptPromise = client.send("session/prompt", { sessionId, prompt: [{ type: "text", text: "/test please" }] });
-			await Bun.sleep(30);
+			await sleep(30);
 			client.notify("session/cancel", { sessionId });
 
 			const result = await promptPromise;
-			expect(result.result.stopReason).toBe("cancelled");
+			assert.equal(result.result.stopReason, "cancelled");
 		} finally {
 			client.kill();
 		}
 	});
 });
+
+function sleep(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}

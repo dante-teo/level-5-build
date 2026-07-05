@@ -12,7 +12,6 @@ import {
 	isDevinAvailable,
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
-	resolveBunExecutablePath,
 	selectedAgentBackend,
 } from "./runtime";
 
@@ -51,10 +50,9 @@ describe("Devin ACP runtime", () => {
 		const options = buildMockSpawnOptions({
 			cwd: "/tmp/project",
 			env: { LEVEL5_USE_ACP_MOCK: "1", PATH: "" },
-			mockIndexPath: "/tmp/repo/acp-mock-server/src/index.ts",
-			bunExecutablePath: "bun",
+			mockStartPath: "/tmp/repo/acp-mock-server/start.sh",
 		});
-		expect(options.cmd).toEqual(["bun", "/tmp/repo/acp-mock-server/src/index.ts"]);
+		expect(options.cmd).toEqual(["/tmp/repo/acp-mock-server/start.sh"]);
 		expect(options.cwd).toBe("/tmp/project");
 		expect(options.env.ACP_MOCK_STATE_PATH).toContain(".level5-build/acp-mock-state.json");
 	});
@@ -70,13 +68,9 @@ describe("Devin ACP runtime", () => {
 			buildAgentSpawnOptions({
 				approvalMode: "full-access",
 				cwd: "/tmp/project",
-				env: { LEVEL5_USE_ACP_MOCK: "1", LEVEL5_ACP_MOCK_INDEX_PATH: "/tmp/repo/acp-mock-server/src/index.ts" },
+				env: { LEVEL5_USE_ACP_MOCK: "1", LEVEL5_ACP_MOCK_START_PATH: "/tmp/repo/acp-mock-server/start.sh" },
 			}).cmd,
-		).toContain("/tmp/repo/acp-mock-server/src/index.ts");
-	});
-
-	test("falls back to PATH bun when no sibling runtime is available", () => {
-		expect(resolveBunExecutablePath({ execPath: "/tmp/no-such-dir/launcher" })).toBe("bun");
+		).toContain("/tmp/repo/acp-mock-server/start.sh");
 	});
 
 	test("initializes with honest v1 client capabilities", () => {

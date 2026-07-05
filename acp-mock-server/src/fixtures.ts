@@ -1,4 +1,4 @@
-import type { JsonObject } from "./types";
+import type { JsonObject } from "./types.js";
 
 export const supportedModes = [
 	{
@@ -143,6 +143,7 @@ export const hiddenScenarioCommands = [
 	{ name: "skills", description: "List the mock skill profiles this server can pretend to use." },
 	{ name: "mode", description: "Switch mock mode by text, for example /mode code.", input: { hint: "ask, architect, code, or auto" } },
 	{ name: "fail", description: "Force a failed tool call for client error-state testing." },
+	{ name: "progress-demo", description: "Run one deterministic turn with plan, tools, usage, permission, and completion states." },
 	{ name: "refuse", description: "Force a refusal stop reason." },
 	{ name: "tokens", description: "Force a max_tokens stop reason." }
 ];

@@ -2,6 +2,12 @@
 
 A standalone ACP v1 mock agent for testing clients. It speaks newline-delimited JSON-RPC over stdio and keeps stdout protocol-clean.
 
+## Native 1.0 role
+
+This package is active shared test infrastructure, not Electrobun POC code. The native macOS 1.0 plan keeps `acp-mock-server/` at the repository root so native runtime and UI tests can run without Devin authentication. See `../docs/adr/0001-native-macos-client.md`.
+
+Do not move this package into `legacy/` when the Electrobun app moves to `legacy/electrobun-app/`.
+
 ## Run
 
 ```bash
@@ -11,7 +17,15 @@ cd acp-mock-server
 
 The server reads ACP messages from stdin and writes ACP responses/notifications to stdout. Logs go to stderr.
 
-Use `./start.sh` when connecting an ACP client. It is intentionally a direct executable wrapper so stdout stays JSON-RPC-only; avoid `bun run` wrappers for protocol clients because some Bun versions echo script banners before process output.
+Use `./start.sh` when connecting an ACP client. It builds stale or missing TypeScript output with build logs redirected to stderr, then execs Node so stdout stays JSON-RPC-only. Avoid package-manager script wrappers for protocol clients because their banners can pollute ACP stdout.
+
+For native macOS app development, use the TCP entrypoint:
+
+```bash
+./start-tcp.sh
+```
+
+`start-tcp.sh` listens on `127.0.0.1:58945` by default and uses the same mock ACP lifecycle as the stdio server. Override it with `ACP_MOCK_TCP_HOST` and `ACP_MOCK_TCP_PORT`.
 
 Useful environment variables:
 
@@ -24,19 +38,19 @@ Useful environment variables:
 
 ## App Mock Backend
 
-The desktop app uses real Devin ACP by default. To run the app against this mock backend for manual testing:
+The native desktop app is local-only by default. To run the current native shell against this mock backend for manual testing:
 
 ```bash
-cd app
-bun run dev:mock
+./script/run_mock_app.sh
 ```
 
-This is equivalent to running the app with `LEVEL5_USE_ACP_MOCK=1`. In mock mode, app launch starts the bundled or repo-local `acp-mock-server/src/index.ts` over stdio once so the app can initialize ACP and call `session/list` for the sidebar. That startup list call does not create a new chat session; selecting a project or sending the first prompt creates or loads the actual session. App-launched mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set. To point the app at a custom mock entrypoint, set `LEVEL5_ACP_MOCK_INDEX_PATH=/absolute/path/to/acp-mock-server/src/index.ts`.
+In mock mode, DEBUG builds of the native app connect to an independently running TCP mock server. `script/run_mock_app.sh` starts `acp-mock-server/start-tcp.sh`, waits for the port, and launches the app with `LEVEL5_USE_ACP_MOCK=1`. The app initializes ACP, calls `session/list` so existing mock sessions appear in the native sidebar, creates a mock session only on first send from New Chat, sends `session/prompt`, replays existing sessions with `session/load`, and deletes rows with `session/delete`. Mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
 
-From the repo root, the same manual app flow is available as:
+The retired Electrobun reference app still has its own manual mock command:
 
 ```bash
-./scripts/start-app-with-acp-mock.sh
+cd legacy/electrobun-app
+bun run dev:mock
 ```
 
 ## ACP Surface Covered
@@ -67,6 +81,7 @@ The mock streams:
 - `tool_call`
 - `tool_call_update`
 - `usage_update`
+- URL/file reference metadata in tool `_meta`
 - `available_commands_update`
 - `current_mode_update`
 - `config_option_update`
@@ -116,11 +131,16 @@ Send text prompts containing these words or slash commands:
 - `/test` or `build`: emits execute-style tool output
 - `web` or `fetch`: hidden QA trigger for fetch-style tool output
 - `skills`: hidden QA trigger for mock skill text
+- `/progress-demo` or `progress demo`: hidden native dashboard fixture for plan, usage, permission, and reference states
 - `/mode code`: hidden compatibility path for mode updates
 - `permission`: sends `session/request_permission`
 - `fail`: emits a failed tool call
 - `refuse`: returns `stopReason: "refusal"`
 - `max tokens`: returns `stopReason: "max_tokens"`
+
+`/progress-demo` is the main dashboard QA scenario. It emits multiple plan states, usage updates across thresholds, permission success/rejection paths, external web references, external file references, project-local file locations that clients should filter out of dashboard sources, and duplicate references with changed titles so clients can verify stable dedupe by URI.
+
+The `web` / `fetch` scenario emits URL reference metadata from tool `_meta.references` so clients can verify reference extraction without depending on a future first-class ACP sources contract.
 
 ## Smoke Test
 
@@ -136,13 +156,19 @@ For prompt testing, use the `sessionId` returned by `session/new`.
 ## Verification
 
 ```bash
-bun test
-bunx tsc --noEmit -p tsconfig.json
+CI=true pnpm install --frozen-lockfile
+CI=true pnpm run build
+CI=true pnpm run typecheck
+CI=true pnpm test
 ```
 
 From the repo root, also check the helper scripts:
 
 ```bash
-bash -n scripts/start-app-with-acp-mock.sh
 bash -n acp-mock-server/start.sh
+bash -n acp-mock-server/start-tcp.sh
+bash -n script/build_and_run.sh
+bash -n script/run_mock_app.sh
 ```
+
+The native SwiftPM suite normally skips the subprocess integration. Run `LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1 swift test` from `app/` when you need to verify `AcpProcessTransport` against the real stdio mock server.

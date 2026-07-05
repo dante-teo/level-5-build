@@ -4,15 +4,25 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is an early Electrobun desktop app shell with a Devin-backed ACP chat workflow: a frameless window with a native-feeling React workspace, a light translucent sidebar with local session management, New chat and Settings controls, a floating app capsule, bundled product fonts, and typed Bun-side capabilities exposed through RPC. The composer's `+` menu lets a user attach a file/folder path and browse/insert slash commands advertised by the connected agent.
+`app/` is the active native macOS app shell. It currently provides a native `NavigationSplitView` window with a sidebar, a centered new-session workspace, a tokenized prompt composer, local project selection in the new-session footer, approval-mode controls, structured native transcript rows with per-session follow-tail scrolling, per-session queued prompts, and menu commands for New Chat, Toggle Sidebar, Focus Composer, and Clear Transcript.
 
-The current production agent path uses Devin ACP. On app open, the workspace shows a centered prompt composer and connects to Devin ACP once to initialize and fetch persisted sessions for the sidebar; this does not create a new chat session. Selecting a project warms up Devin for that cwd so model choices and slash commands can populate before the first prompt. Sending a prompt creates or reuses an ACP session and renders streamed messages, plans, tool calls, permission requests, errors, and stop reasons. While a turn is active, the send button becomes a stop button that sends ACP `session/cancel`. Once a message has been sent, a small context-usage ring next to the model selector shows how much of the model's context window has been used.
+The native shell now selects a real agent backend automatically: if a `devin` CLI is found on `$PATH` or in a known install directory, the app spawns and drives it over ACP, with one concurrent `devin acp` process per open project so multiple projects can run turns at the same time. If no CLI is found (and, in DEBUG builds only, `LEVEL5_USE_ACP_MOCK=1` isn't set), agent actions are disabled and the composer shows an actionable "Devin CLI not found" message; it does not pretend a message was sent. DEBUG builds can still opt into the repo-local ACP mock server via `LEVEL5_USE_ACP_MOCK=1` for the same native session lifecycle path: startup model and slash-command discovery, startup `session/list`, first-send `session/new`, prompt turns, structured `session/load` replay, per-session in-memory queues, optimistic session model switching, and `session/delete` (best-effort against the backend; real Devin does not yet support `session/delete` server-side, but the app deletes the session locally regardless and remembers not to show it again — see `docs/ARCHITECTURE.md`). Selecting a session does not change sidebar recency; only live sent or received message activity does.
 
-Folder selection is optional. The empty composer footer exposes a searchable `Choose project` menu built from known sessions plus the selected folder, with actions to choose a folder or leave project context unset. When no project is selected, the ACP session uses the user's home directory as its cwd behind the scenes, but that home-directory fallback is not presented as a recent project.
+Native transcripts now keep app-private structured state for messages, plans, tool calls, usage, statuses, errors, and stop reasons. The UI renders messages as chat rows and operational events as compact inline cards. The composer supports backend slash commands, file attachment chips serialized as `resource_link` blocks, a pre-session model selector, per-session drafts, queued prompt previews, approval-mode selection (backed by real Devin `--permission-mode` process restarts, not just the mock), and permission-request takeovers for ACP requests. Rich plan/tool/usage dashboards, diff rendering, terminal panes, and real cancellation are still future native work.
 
-The sidebar shows an `All chats` section backed by startup ACP `session/list` plus app-side in-memory session summaries updated as chats are created, loaded, or deleted. Selecting a chat restores the cached transcript when available, or reloads persisted messages from ACP after relaunch; right-clicking a chat exposes delete with confirmation. This is not yet a durable production-grade transcript store.
+Recent project folders are persisted locally so the project picker can offer repeat selections. The active selected project itself is window-local state and is not restored on launch.
+
+Sessions and their transcripts now survive a relaunch: the sidebar and the active transcript are cached to a local SQLite database (`~/.level5build/level5.sqlite`) and repaint instantly on next launch, with live ACP data reconciling on top once the backend reconnects. Deleting a session from the sidebar always removes it locally and keeps it gone, even for backends (like real Devin today) that don't actually support deleting a session server-side. See `docs/ARCHITECTURE.md` ("Durable session/transcript persistence") for details.
+
+The retired Electrobun app in `legacy/electrobun-app/` remains the reference for UI polish from the previous Devin-backed ACP workflow (rich streamed agent updates and review surfaces) that the native app has not yet ported.
 
 See `docs/ARCHITECTURE.md` for the app structure and runtime model. See `docs/DESIGN.md` for the visual system and layout rules.
+
+## Native 1.0 Direction
+
+The accepted 1.0 direction is a native macOS client, recorded in [ADR 0001](adr/0001-native-macos-client.md). The native app owns `app/`; the Electrobun proof of concept has moved to `legacy/electrobun-app/` and remains reference-only.
+
+The product target stays the same: a calm desktop AI coding agent centered on chat, transparent agent progress, permissions, review diffs, commit, and revert. `acp-mock-server/` remains active shared test infrastructure for native development and CI.
 
 ## Product Direction
 
@@ -50,4 +60,4 @@ The app should make code review and agent state easy to scan without turning the
 - A full IDE replacement with editor ownership as the primary interaction.
 - Decorative dashboards that do not help task execution or review.
 - Multiple competing visual languages or per-feature style systems.
-- Durable production-grade session history, production-grade attachment handling (the composer can reference a local file/folder path as an ACP resource link today, but does not read, embed, or upload file contents), mic input, and production approval policy.
+- Production-grade session history (retention/eviction limits, cross-device sync), production-grade attachment handling, mic input, and production approval policy. Basic durable session/transcript caching for a single machine now exists; see `docs/ARCHITECTURE.md`.

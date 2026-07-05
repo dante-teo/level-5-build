@@ -1,7 +1,11 @@
 .DS_Store
 node_modules/
+.pnpm-store/
 dist/
 build/
 artifacts/
 .mock-acp-state.json
 acp-mock-server/.mock-acp-state.json
+app/*.xcodeproj/
+app/.build/
+app/DerivedData/

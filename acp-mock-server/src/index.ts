@@ -1,6 +1,6 @@
-import { createLogger } from "./rpc";
-import { AcpMockServer, runServer } from "./server";
-import { StateStore } from "./state";
+import { createLogger } from "./rpc.js";
+import { AcpMockServer, runServer } from "./server.js";
+import { StateStore } from "./state.js";
 
 const statePath = process.env.ACP_MOCK_STATE_PATH ?? ".mock-acp-state.json";
 const logger = createLogger(process.env.ACP_MOCK_LOG);

@@ -1,5 +1,4 @@
-node_modules/
-build/
-dist/
-artifacts/
-*.tsbuildinfo
+.build/
+DerivedData/
+Generated/
+*.xcodeproj/

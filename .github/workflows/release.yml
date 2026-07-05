@@ -1,14 +1,348 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to dry-run. Defaults to the committed MARKETING_VERSION."
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  deferred:
-    name: Native release automation deferred
-    runs-on: macos-14
+  native-macos:
+    name: Native macOS release
+    runs-on: macos-15
+
+    env:
+      APP_NAME: Level5 Build
+      SCHEME: Level5 Build
+      PROJECT_FILE: app/project.yml
+      PROJECT_PATH: app/Level5 Build.xcodeproj
+
     steps:
-      - name: Deferred to issue 23
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          echo "Native signing, notarization, archive/export, DMG packaging, and Homebrew release automation are intentionally deferred to issue #23."
-          echo "This workflow is inert and does not publish artifacts."
+          set -euo pipefail
+
+          project_version="$(awk -F: '/^[[:space:]]+MARKETING_VERSION:/ { gsub(/[ "]/, "", $2); print $2; exit }' "$PROJECT_FILE")"
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            tag="$GITHUB_REF_NAME"
+            version="${tag#v}"
+            dry_run="false"
+          else
+            version="${DISPATCH_VERSION:-$project_version}"
+            tag="v$version"
+            dry_run="true"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "error: release tags must match vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-IDENTIFIER" >&2
+            exit 1
+          fi
+
+          if [[ "$version" != "$project_version" ]]; then
+            echo "error: $PROJECT_FILE MARKETING_VERSION is $project_version, but release version is $version" >&2
+            exit 1
+          fi
+
+          prerelease="false"
+          if [[ "$version" == *-* ]]; then
+            prerelease="true"
+          fi
+
+          artifact_name="Level5-Build-v${version}-macos-arm64.dmg"
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "dry_run=$dry_run"
+            echo "prerelease=$prerelease"
+            echo "artifact_name=$artifact_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check release secrets
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          required=(
+            APPLE_CERTIFICATE_P12
+            APPLE_CERTIFICATE_PASSWORD
+            MACOS_KEYCHAIN_PASSWORD
+            ELECTROBUN_DEVELOPER_ID
+            ELECTROBUN_TEAMID
+            ELECTROBUN_APPLEID
+            ELECTROBUN_APPLEIDPASS
+          )
+
+          if [[ "${{ steps.meta.outputs.dry_run }}" != "true" && "${{ steps.meta.outputs.prerelease }}" != "true" ]]; then
+            required+=(HOMEBREW_TAP_TOKEN)
+          fi
+
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'error: missing required release secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml --project .
+        working-directory: app
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          keychain_path="$RUNNER_TEMP/level5-release.keychain-db"
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/productbuild
+          security list-keychains -d user -s "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$MACOS_KEYCHAIN_PASSWORD" \
+            "$keychain_path"
+
+      - name: Archive native app
+        run: |
+          set -euo pipefail
+
+          xcodebuild archive \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=macOS" \
+            -archivePath "$RUNNER_TEMP/Level5Build.xcarchive" \
+            SKIP_INSTALL=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Sign app
+        id: sign
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+        run: |
+          set -euo pipefail
+
+          export_root="$RUNNER_TEMP/level5-release"
+          app_path="$RUNNER_TEMP/Level5Build.xcarchive/Products/Applications/$APP_NAME.app"
+          staged_app="$export_root/$APP_NAME.app"
+          signing_identity="$ELECTROBUN_DEVELOPER_ID"
+
+          if [[ ! -d "$app_path" ]]; then
+            echo "error: archived app not found at $app_path" >&2
+            exit 1
+          fi
+
+          rm -rf "$export_root"
+          mkdir -p "$export_root"
+          ditto "$app_path" "$staged_app"
+
+          codesign \
+            --force \
+            --deep \
+            --options runtime \
+            --timestamp \
+            --sign "$signing_identity" \
+            "$staged_app"
+
+          codesign --verify --deep --strict --verbose=2 "$staged_app"
+
+          echo "app_path=$staged_app" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize and staple app
+        env:
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+        run: |
+          set -euo pipefail
+
+          app_path="${{ steps.sign.outputs.app_path }}"
+          app_zip="$RUNNER_TEMP/Level5-Build-app.zip"
+
+          ditto -c -k --keepParent "$app_path" "$app_zip"
+          xcrun notarytool submit "$app_zip" \
+            --apple-id "$ELECTROBUN_APPLEID" \
+            --password "$ELECTROBUN_APPLEIDPASS" \
+            --team-id "$ELECTROBUN_TEAMID" \
+            --wait
+          xcrun stapler staple "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl -a -vv "$app_path"
+
+      - name: Create signed DMG
+        id: dmg
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
+        run: |
+          set -euo pipefail
+
+          app_path="${{ steps.sign.outputs.app_path }}"
+          artifact_path="$RUNNER_TEMP/level5-release/${{ steps.meta.outputs.artifact_name }}"
+          dmg_root="$RUNNER_TEMP/level5-dmg-root"
+          signing_identity="$ELECTROBUN_DEVELOPER_ID"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+          ditto "$app_path" "$dmg_root/$APP_NAME.app"
+
+          hdiutil create \
+            -volname "$APP_NAME" \
+            -srcfolder "$dmg_root" \
+            -ov \
+            -format UDZO \
+            "$artifact_path"
+
+          codesign \
+            --force \
+            --timestamp \
+            --sign "$signing_identity" \
+            "$artifact_path"
+
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize, staple, and validate DMG
+        env:
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+        run: |
+          set -euo pipefail
+
+          dmg_path="${{ steps.dmg.outputs.artifact_path }}"
+          mount_point="$RUNNER_TEMP/level5-dmg-mount"
+
+          detach_dmg() {
+            hdiutil detach "$mount_point" || true
+          }
+
+          xcrun notarytool submit "$dmg_path" \
+            --apple-id "$ELECTROBUN_APPLEID" \
+            --password "$ELECTROBUN_APPLEIDPASS" \
+            --team-id "$ELECTROBUN_TEAMID" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+          codesign --verify --verbose=2 "$dmg_path"
+          spctl -a -t open --context context:primary-signature -vv "$dmg_path"
+
+          mkdir -p "$mount_point"
+          hdiutil attach "$dmg_path" -mountpoint "$mount_point" -nobrowse -readonly
+          trap detach_dmg EXIT
+          test -d "$mount_point/$APP_NAME.app"
+          hdiutil detach "$mount_point"
+          trap - EXIT
+
+      - name: Calculate artifact SHA-256
+        id: sha
+        run: |
+          set -euo pipefail
+
+          sha256="$(shasum -a 256 "${{ steps.dmg.outputs.artifact_path }}" | awk '{ print $1 }')"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload GitHub Release
+        if: steps.meta.outputs.dry_run != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: ${{ steps.dmg.outputs.artifact_path }}
+
+      - name: Checkout Homebrew tap
+        if: steps.meta.outputs.dry_run != 'true' && steps.meta.outputs.prerelease != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: dante-teo/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew cask
+        if: steps.meta.outputs.dry_run != 'true' && steps.meta.outputs.prerelease != 'true'
+        run: |
+          set -euo pipefail
+
+          cask_path="homebrew-tap/Casks/level5-build.rb"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.meta.outputs.tag }}/${{ steps.meta.outputs.artifact_name }}"
+
+          mkdir -p "$(dirname "$cask_path")"
+          ./script/generate_homebrew_cask.sh \
+            "${{ steps.meta.outputs.version }}" \
+            "${{ steps.sha.outputs.sha256 }}" \
+            "$url" > "$cask_path"
+
+          git -C homebrew-tap config user.name "github-actions[bot]"
+          git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C homebrew-tap add Casks/level5-build.rb
+
+          if git -C homebrew-tap diff --cached --quiet; then
+            echo "Homebrew cask already up to date."
+            exit 0
+          fi
+
+          git -C homebrew-tap commit -m "Update level5-build to ${{ steps.meta.outputs.version }}"
+          git -C homebrew-tap push
+
+      - name: Delete temporary keychain
+        if: always()
+        run: |
+          set -euo pipefail
+
+          keychain_path="$RUNNER_TEMP/level5-release.keychain-db"
+          if [[ -f "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path"
+          fi

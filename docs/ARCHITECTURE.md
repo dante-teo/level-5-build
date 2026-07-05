@@ -264,13 +264,11 @@ Electrobun is not Electron — it has a different architecture and API surface. 
 - `bun run dev`: runs `electrobun dev --watch` without rebuilding the Vite webview first. Use it only when bundled assets already exist or the change is limited to Electrobun-side files.
 - `bun run dev:hmr`: runs a live Vite dev server (`localhost:5173`) alongside `bun run start`. `legacy/electrobun-app/src/bun/index.ts` probes the dev server on startup (only when the Electrobun update channel is `"dev"`) and points the window at it instead of the bundled `views://` assets when it's reachable, enabling HMR.
 - `bun run build`: production build (`vite build && electrobun build`).
-- `bun run build:stable`: stable macOS release build (`vite build && electrobun build --env=stable`). Electrobun emits release artifacts under `legacy/electrobun-app/artifacts/`.
-- `bun run release:package:mac -- v0.0.0`: copies Electrobun's stable DMG to a versioned GitHub Release artifact name.
-- `bun run release:cask`: writes `Casks/level5-build.rb` in the Homebrew tap checkout using the release artifact name and SHA-256 supplied through environment variables.
+- Legacy release scripts and stable Electrobun package commands are retained only as migration reference material. Do not use them for new Level5 Build releases.
 
 ### Release automation
 
-Electrobun release automation is retired with the proof of concept. The root release workflow is intentionally inert until native signing, notarization, archive/export, DMG packaging, and Homebrew release automation are implemented in issue #23.
+Electrobun release automation is retired with the proof of concept. Native releases are handled by the root `.github/workflows/release.yml` workflow, which builds the Xcode app target, signs with Developer ID, notarizes and staples the app and DMG, publishes GitHub Release artifacts, and updates the stable Homebrew cask. See `docs/RELEASE.md`.
 
 The old Electrobun release scripts remain in `legacy/electrobun-app/scripts/` only as migration reference material.
 

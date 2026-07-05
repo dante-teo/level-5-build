@@ -45,6 +45,8 @@ The staged SwiftPM app is not produced by Xcode. `script/build_and_run.sh` there
 - It compiles `Resources/Assets.xcassets` with `xcrun actool` so the staged app gets the same `Assets.car`, `AppIcon.icns`, `CFBundleIconFile`, and `CFBundleIconName` behavior as the generated Xcode app.
 - It copies SwiftPM resource bundles such as `Level5Build_Level5BuildApp.bundle` and `Level5Build_Level5Design.bundle` next to `dist/Level5 Build.app`, matching SwiftPM's generated `Bundle.module` lookup path for bundled resources.
 
+Release builds use the generated Xcode application target, not the SwiftPM staging script. See `../docs/RELEASE.md` for version bumping, signing, notarization, DMG packaging, and Homebrew publishing.
+
 ## Layout
 
 ```text

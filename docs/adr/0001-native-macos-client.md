@@ -4,7 +4,7 @@
 
 Accepted.
 
-Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime is implemented (mock and real Devin backends), durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches, and the native Review pane is implemented as inspect-only Git working-tree review (see `docs/ARCHITECTURE.md`). Signing, release work, mutating review actions, production-grade retention/eviction, and cross-device sync remain future scope.
+Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime is implemented (mock and real Devin backends), durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches, and the native Review pane is implemented as inspect-only Git working-tree review (see `docs/ARCHITECTURE.md`). Native release automation now builds signed and notarized DMG artifacts and updates the Homebrew cask; mutating review actions, production-grade retention/eviction, and cross-device sync remain future scope.
 
 ## Context
 

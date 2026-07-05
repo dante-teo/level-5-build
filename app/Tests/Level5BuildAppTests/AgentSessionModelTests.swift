@@ -893,7 +893,7 @@ struct AgentSessionModelTests {
             backendKind: .acpMock,
             makeClient: { client },
             approvalModePreferenceStore: .ephemeral,
-            turnIdleTimeoutMilliseconds: 30
+            turnIdleTimeoutMilliseconds: 1_000
         )
 
         model.selectSession("s1")

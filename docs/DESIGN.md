@@ -1,3 +1,9 @@
+---
+title: Design System
+product: Desktop AI Coding Agent
+status: active
+---
+
 # Design System
 
 > Product: Desktop AI Coding Agent

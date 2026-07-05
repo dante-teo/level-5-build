@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 
 public enum L5Color {
+    static let accentLight = NSColor(srgbRed: 0.247, green: 0.361, blue: 0.961, alpha: 1)
+    static let accentDark = NSColor(srgbRed: 0.435, green: 0.553, blue: 1.000, alpha: 1)
+    static let accentForegroundLight = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+    static let accentForegroundDark = NSColor(srgbRed: 0.043, green: 0.055, blue: 0.102, alpha: 1)
+
     public static let background = Color(
         light: NSColor(calibratedRed: 0.980, green: 0.980, blue: 0.988, alpha: 1),
         dark: NSColor(calibratedRed: 0.075, green: 0.078, blue: 0.086, alpha: 1)
@@ -43,13 +48,18 @@ public enum L5Color {
     )
 
     public static let accent = Color(
-        light: NSColor(calibratedRed: 0.310, green: 0.427, blue: 1.000, alpha: 1),
-        dark: NSColor(calibratedRed: 0.435, green: 0.553, blue: 1.000, alpha: 1)
+        light: accentLight,
+        dark: accentDark
+    )
+
+    public static let accentForeground = Color(
+        light: accentForegroundLight,
+        dark: accentForegroundDark
     )
 
     public static let selectedSurface = Color(
-        light: NSColor(calibratedRed: 0.310, green: 0.427, blue: 1.000, alpha: 0.10),
-        dark: NSColor(calibratedRed: 0.435, green: 0.553, blue: 1.000, alpha: 0.18)
+        light: accentLight.withAlphaComponent(0.10),
+        dark: accentDark.withAlphaComponent(0.18)
     )
 
     public static let success = Color(

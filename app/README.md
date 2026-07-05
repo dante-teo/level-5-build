@@ -116,7 +116,7 @@ Project-backed sessions are intentionally narrower than "any backend cwd". A new
 
 Project-backed active sessions can show the adaptive project dashboard, including non-Git folders. Git status comes from `Level5Core.ProjectGitStatusService`, which uses native `Process` and returns non-throwing unavailable status on Git failures or timeouts. Dashboard refresh is event-driven: project/session changes, dashboard visibility changes, send/end-turn/activity edges, and manual refresh can refresh state. There is no filesystem watcher or polling, and stale async Git refreshes are ignored after session/project changes.
 
-Review is available for New Chat with a selected project and project-backed sessions. It uses `Level5Core.ProjectReviewService` to show all uncommitted Git-visible changes without mutating the working tree: no staging, discard, commit, revert, approval, or permission actions. The pane renders one continuous top-to-bottom diff document instead of a selectable file list. Review resolves the Git root from the selected cwd, so selecting a subdirectory inside a repository still previews repository-root-relative changes; untracked directories are expanded to file rows through `git status --untracked-files=all`. Snapshots cap visible file sections at 500, previews are loaded lazily as sections appear, large per-file diffs over 200 KB show a deterministic too-large state, and ignored files/submodule contents stay out of scope.
+Review is available for New Chat with a selected project and project-backed sessions. It uses `Level5Core.ProjectReviewService` to show all uncommitted Git-visible changes without mutating the working tree: no staging, discard, commit, revert, approval, or permission actions. The pane renders one continuous top-to-bottom diff document instead of a selectable file list. Review resolves the Git root from the selected cwd, so selecting a subdirectory inside a repository still previews repository-root-relative changes; untracked directories are expanded to file rows through `git status --untracked-files=all`. Snapshots cap visible file sections at 500, previews are loaded lazily as sections appear, large per-file diffs over 200 KB show a deterministic too-large state, and ignored files/submodule contents stay out of scope. The Review surface uses adaptive `Level5Design` colors and only exposes backed controls: filter, refresh, close, running/stale hint, and project/root context.
 
 ## Design primitives
 
@@ -127,6 +127,8 @@ Import `Level5Design` from app views and use the typed `L5` APIs instead of hard
 - `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation` for documented token scales.
 - `L5Asset.mark` for the in-app Level5 identity mark.
 - `L5ButtonStyle`, `l5Surface`, `l5InputSurface`, and `l5CompactControl` for primitive SwiftUI styling.
+
+The accent token is adaptive and intentionally darker in light mode for primary-action contrast. Primary buttons use `L5Color.accent` with `L5Color.accentForeground`; do not hardcode white foreground text for primary actions.
 
 `Level5BuildApp.init()` calls `Level5DesignResources.registerFonts()` so the bundled fonts are available before views render. The resources live under `Sources/Level5Design/Resources/Fonts` and `Sources/Level5Design/Resources/Assets`.
 

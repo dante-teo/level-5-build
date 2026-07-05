@@ -103,7 +103,7 @@ public struct L5ButtonStyle: ButtonStyle {
 
     private var foregroundStyle: Color {
         switch variant {
-        case .primary: .white
+        case .primary: L5Color.accentForeground
         case .secondary: L5Color.textPrimary
         case .subtle: L5Color.textSecondary
         }

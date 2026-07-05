@@ -40,89 +40,93 @@ struct ReviewPaneView: View {
     }
 
     private var toolbar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: L5Spacing.x3) {
-                Text("Unstaged")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(DiffPalette.primaryText)
+        VStack(alignment: .leading, spacing: L5Spacing.x2) {
+            HStack(alignment: .firstTextBaseline, spacing: L5Spacing.x3) {
+                VStack(alignment: .leading, spacing: L5Spacing.x1) {
+                    HStack(spacing: L5Spacing.x2) {
+                        Text("Review")
+                            .font(L5Font.h3)
+                            .foregroundStyle(DiffPalette.primaryText)
 
-                Text(countText)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(DiffPalette.primaryText)
-                    .padding(.horizontal, L5Spacing.x2)
-                    .frame(height: 24)
-                    .background(DiffPalette.pill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        Text(countText)
+                            .font(L5Font.caption.weight(.semibold))
+                            .foregroundStyle(L5Color.accent)
+                            .padding(.horizontal, L5Spacing.x2)
+                            .frame(height: L5Size.action)
+                            .background(DiffPalette.pill, in: Capsule())
 
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(DiffPalette.primaryText)
+                        Text(additionsText)
+                            .font(L5Font.caption.weight(.semibold))
+                            .foregroundStyle(DiffPalette.addedLineNumber)
 
-                Text(additionsText)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(DiffPalette.addedLineNumber)
+                        Text(deletionsText)
+                            .font(L5Font.caption.weight(.semibold))
+                            .foregroundStyle(DiffPalette.deletedLineNumber)
+                    }
 
-                Text(deletionsText)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(DiffPalette.deletedLineNumber)
-
-                Spacer()
-
-                if state.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.75)
+                    if let rootHint {
+                        Label(rootHint, systemImage: "folder")
+                            .font(L5Font.caption)
+                            .foregroundStyle(DiffPalette.mutedText)
+                            .lineLimit(1)
+                    }
                 }
 
-                Button(action: refreshAction) {
-                    L5IconView(.refresh)
-                        .frame(width: L5Size.action, height: L5Size.action)
-                }
-                .buttonStyle(.plain)
-                .help("Refresh")
+                Spacer(minLength: L5Spacing.x3)
 
-                toolbarIcon("ellipsis", help: "More")
-                toolbarIcon("arrow.up.arrow.down", help: "Sort")
-                toolbarIcon("doc.viewfinder", help: "Inspect")
-                toolbarIcon("folder", help: rootHint ?? "Project")
-
-                ReviewPaneToggleButton(
-                    isSelected: true,
-                    action: closeAction
-                )
-            }
-            .padding(.horizontal, L5Spacing.x4)
-            .frame(height: 54)
-
-            if isAgentRunning || !filterText.isEmpty {
                 HStack(spacing: L5Spacing.x2) {
-                    if isAgentRunning {
-                        Label("Agent running; refresh after the turn for latest changes.", systemImage: "clock")
+                    if state.isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.75)
                     }
-                    if !filterText.isEmpty {
-                        TextField("Filter changed files", text: $filterText)
-                            .textFieldStyle(.plain)
+
+                    Button(action: refreshAction) {
+                        L5IconView(.refresh)
+                            .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
                     }
+                    .buttonStyle(.plain)
+                    .help("Refresh Review")
+
+                    ReviewPaneToggleButton(
+                        isSelected: true,
+                        action: closeAction
+                    )
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(DiffPalette.mutedText)
-                .padding(.horizontal, L5Spacing.x4)
-                .padding(.bottom, L5Spacing.x2)
+            }
+
+            HStack(spacing: L5Spacing.x2) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(DiffPalette.mutedText)
+                TextField("Filter changed files", text: $filterText)
+                    .textFieldStyle(.plain)
+                    .font(L5Font.caption)
+                    .foregroundStyle(DiffPalette.primaryText)
+
+                if isAgentRunning {
+                    Divider()
+                        .frame(height: L5Size.icon)
+                    Label("Refresh after turn", systemImage: "clock")
+                        .lineLimit(1)
+                }
+            }
+            .font(L5Font.caption)
+            .foregroundStyle(DiffPalette.mutedText)
+            .padding(.horizontal, L5Spacing.x3)
+            .frame(height: L5Size.control)
+            .background(DiffPalette.field, in: RoundedRectangle(cornerRadius: L5Radius.medium, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: L5Radius.medium, style: .continuous)
+                    .stroke(DiffPalette.separator, lineWidth: 1)
             }
         }
+        .padding(L5Spacing.x4)
         .background(DiffPalette.header)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(DiffPalette.separator)
                 .frame(height: 1)
         }
-    }
-
-    private func toolbarIcon(_ systemName: String, help: String) -> some View {
-        Image(systemName: systemName)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(DiffPalette.mutedText)
-            .frame(width: 30, height: 30)
-            .help(help)
     }
 
     private var content: some View {
@@ -290,7 +294,7 @@ private struct ReviewFileDiffSection: View {
                                 .controlSize(.small)
                         }
                         Text(isLoading ? "Loading diff" : "Preparing diff")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
+                            .font(L5Font.caption.weight(.semibold))
                             .foregroundStyle(DiffPalette.mutedText)
                     }
                     .frame(maxWidth: .infinity, minHeight: 160)
@@ -326,7 +330,7 @@ private struct DiffPreviewView: View {
                             ProgressView()
                                 .controlSize(.small)
                             Text("Rendering diff")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .font(L5Font.caption.weight(.semibold))
                                 .foregroundStyle(DiffPalette.mutedText)
                         }
                         .frame(minWidth: 760, minHeight: 120)
@@ -370,25 +374,25 @@ private struct DiffFileHeader: View {
             Image(systemName: fileIcon)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(DiffPalette.icon)
-                .frame(width: 32)
+                .frame(width: L5Size.control)
 
             HStack(spacing: 0) {
                 Text(parentPath)
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .font(L5Font.body.weight(.semibold))
                     .foregroundStyle(DiffPalette.pathText)
                     .lineLimit(1)
 
                 Text(fileName)
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(L5Font.body.weight(.bold))
                     .foregroundStyle(DiffPalette.primaryText)
                     .lineLimit(1)
 
                 if let markerText {
                     Text(markerText)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(L5Font.caption.weight(.semibold))
                         .foregroundStyle(DiffPalette.mutedText)
                         .padding(.horizontal, L5Spacing.x2)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, L5Spacing.x1)
                         .background(DiffPalette.pill, in: Capsule())
                         .padding(.leading, L5Spacing.x2)
                 }
@@ -397,25 +401,12 @@ private struct DiffFileHeader: View {
             Spacer(minLength: L5Spacing.x4)
 
             Text(summary)
-                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .font(L5Font.body.weight(.semibold))
                 .foregroundStyle(summary.hasPrefix("+0 -0") ? DiffPalette.mutedText : DiffPalette.addedLineNumber)
-
-            Image(systemName: "arrow.uturn.backward")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(DiffPalette.mutedText)
-                .frame(width: 32)
-            Image(systemName: "plus")
-                .font(.system(size: 17, weight: .regular))
-                .foregroundStyle(DiffPalette.mutedText)
-                .frame(width: 32)
-            Image(systemName: "arrow.up.right.square")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(DiffPalette.mutedText)
-                .frame(width: 32)
         }
         .padding(.leading, L5Spacing.x3)
         .padding(.trailing, L5Spacing.x3)
-        .frame(height: 46)
+        .frame(height: L5Spacing.x12)
         .background(DiffPalette.fileHeader)
         .overlay(alignment: .bottom) {
             Rectangle()
@@ -425,11 +416,11 @@ private struct DiffFileHeader: View {
         .overlay(alignment: .bottomLeading) {
             if let oldPath = file.oldPath {
                 Text("Renamed from \(oldPath)")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(L5Font.caption)
                     .foregroundStyle(DiffPalette.mutedText)
                     .lineLimit(1)
-                    .padding(.leading, 44)
-                    .offset(y: 15)
+                    .padding(.leading, L5Size.control + L5Spacing.x3)
+                    .offset(y: L5Spacing.x4)
             }
         }
     }
@@ -489,6 +480,17 @@ private struct DiffRowView: View {
     let row: DiffRow
     let path: String
 
+    private enum Metrics {
+        static let gutterWidth: CGFloat = 54
+        static let gutterPairWidth: CGFloat = gutterWidth * 2
+        static let rowHeight: CGFloat = 28
+        static let metadataRowHeight: CGFloat = 24
+        static let hunkRowHeight: CGFloat = 26
+        static let edgeWidth: CGFloat = 4
+        static let minTextWidth: CGFloat = 660
+        static let minDocumentWidth: CGFloat = gutterPairWidth + minTextWidth
+    }
+
     var body: some View {
         switch row.kind {
         case let .fold(count):
@@ -508,17 +510,17 @@ private struct DiffRowView: View {
             LineNumberColumn(value: row.newLine, color: row.lineNumberColor)
 
             Text(row.displayText)
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .font(L5Font.mono(size: 14).weight(.medium))
                 .foregroundStyle(row.textColor)
                 .lineLimit(1)
-                .frame(minWidth: 660, minHeight: 28, alignment: .leading)
+                .frame(minWidth: Metrics.minTextWidth, minHeight: Metrics.rowHeight, alignment: .leading)
                 .padding(.leading, L5Spacing.x4)
                 .padding(.trailing, L5Spacing.x4)
         }
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(row.edgeColor)
-                .frame(width: 4)
+                .frame(width: Metrics.edgeWidth)
         }
         .background(row.background)
     }
@@ -526,10 +528,10 @@ private struct DiffRowView: View {
     private var metadataRow: some View {
         HStack(spacing: 0) {
             Text(row.text)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .font(L5Font.mono(size: 12).weight(.medium))
                 .foregroundStyle(DiffPalette.mutedText)
-                .frame(minWidth: 760, minHeight: 24, alignment: .leading)
-                .padding(.leading, 108)
+                .frame(minWidth: Metrics.minDocumentWidth, minHeight: Metrics.metadataRowHeight, alignment: .leading)
+                .padding(.leading, Metrics.gutterPairWidth)
         }
         .background(DiffPalette.background)
     }
@@ -537,15 +539,15 @@ private struct DiffRowView: View {
     private var hunkRow: some View {
         HStack(spacing: 0) {
             Text(row.text)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .font(L5Font.mono(size: 12).weight(.semibold))
                 .foregroundStyle(DiffPalette.hunkText)
-                .frame(minWidth: 760, minHeight: 26, alignment: .leading)
-                .padding(.leading, 108)
+                .frame(minWidth: Metrics.minDocumentWidth, minHeight: Metrics.hunkRowHeight, alignment: .leading)
+                .padding(.leading, Metrics.gutterPairWidth)
         }
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(DiffPalette.accent.opacity(0.7))
-                .frame(width: 4)
+                .frame(width: Metrics.edgeWidth)
         }
         .background(DiffPalette.hunkBackground)
     }
@@ -555,11 +557,16 @@ private struct LineNumberColumn: View {
     let value: Int?
     let color: Color
 
+    private enum Metrics {
+        static let width: CGFloat = 54
+        static let rowHeight: CGFloat = 28
+    }
+
     var body: some View {
         Text(value.map(String.init) ?? "")
-            .font(.system(size: 15, weight: .medium, design: .monospaced))
+            .font(L5Font.mono(size: 14).weight(.medium))
             .foregroundStyle(color)
-            .frame(width: 54, height: 28, alignment: .trailing)
+            .frame(width: Metrics.width, height: Metrics.rowHeight, alignment: .trailing)
             .padding(.trailing, L5Spacing.x3)
             .background(DiffPalette.gutter)
     }
@@ -568,17 +575,23 @@ private struct LineNumberColumn: View {
 private struct FoldRow: View {
     let count: Int
 
+    private enum Metrics {
+        static let gutterWidth: CGFloat = 108
+        static let textWidth: CGFloat = 656
+        static let rowHeight: CGFloat = 34
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             Image(systemName: "chevron.up")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(DiffPalette.mutedText)
-                .frame(width: 104, height: 34)
+                .frame(width: Metrics.gutterWidth, height: Metrics.rowHeight)
                 .background(DiffPalette.foldGutter)
             Text("\(count) unmodified \(count == 1 ? "line" : "lines")")
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(L5Font.body.weight(.semibold))
                 .foregroundStyle(DiffPalette.mutedText)
-                .frame(minWidth: 656, minHeight: 34, alignment: .leading)
+                .frame(minWidth: Metrics.textWidth, minHeight: Metrics.rowHeight, alignment: .leading)
                 .padding(.horizontal, L5Spacing.x3)
                 .background(DiffPalette.foldBackground)
         }
@@ -765,29 +778,29 @@ private struct DiffRow: Identifiable, Sendable {
 }
 
 private enum DiffPalette {
-    static let background = Color(red: 0.075, green: 0.078, blue: 0.082)
-    static let header = Color(red: 0.105, green: 0.108, blue: 0.112)
-    static let fileHeader = Color(red: 0.120, green: 0.123, blue: 0.128)
-    static let toolbarButton = Color.white.opacity(0.050)
-    static let pill = Color.white.opacity(0.070)
-    static let gutter = Color(red: 0.070, green: 0.073, blue: 0.077)
-    static let foldGutter = Color(red: 0.095, green: 0.098, blue: 0.104)
-    static let foldBackground = Color(red: 0.110, green: 0.113, blue: 0.120)
-    static let hunkBackground = Color(red: 0.095, green: 0.113, blue: 0.135)
-    static let addedBackground = Color(red: 0.075, green: 0.155, blue: 0.095)
-    static let deletedBackground = Color(red: 0.170, green: 0.080, blue: 0.080)
-    static let addedEdge = Color(red: 0.330, green: 0.880, blue: 0.520)
-    static let deletedEdge = Color(red: 0.940, green: 0.320, blue: 0.320)
-    static let separator = Color.white.opacity(0.055)
-    static let primaryText = Color(red: 0.905, green: 0.910, blue: 0.920)
-    static let pathText = Color(red: 0.520, green: 0.535, blue: 0.560)
-    static let mutedText = Color(red: 0.550, green: 0.565, blue: 0.590)
-    static let lineNumber = Color(red: 0.565, green: 0.580, blue: 0.605)
-    static let addedLineNumber = Color(red: 0.440, green: 0.900, blue: 0.600)
-    static let deletedLineNumber = Color(red: 0.980, green: 0.400, blue: 0.400)
-    static let addedText = Color(red: 0.620, green: 0.970, blue: 0.730)
-    static let deletedText = Color(red: 1.000, green: 0.580, blue: 0.580)
-    static let hunkText = Color(red: 0.520, green: 0.720, blue: 0.980)
-    static let icon = Color(red: 0.950, green: 0.530, blue: 0.230)
-    static let accent = Color(red: 0.370, green: 0.610, blue: 0.950)
+    static let background = L5Color.background
+    static let header = L5Color.elevatedSurface
+    static let fileHeader = L5Color.secondaryBackground.opacity(0.74)
+    static let field = L5Color.surface
+    static let pill = L5Color.selectedSurface
+    static let gutter = L5Color.secondaryBackground.opacity(0.72)
+    static let foldGutter = L5Color.selectedSurface.opacity(0.54)
+    static let foldBackground = L5Color.selectedSurface.opacity(0.34)
+    static let hunkBackground = L5Color.accent.opacity(0.11)
+    static let addedBackground = L5Color.success.opacity(0.13)
+    static let deletedBackground = L5Color.danger.opacity(0.13)
+    static let addedEdge = L5Color.success
+    static let deletedEdge = L5Color.danger
+    static let separator = L5Color.border
+    static let primaryText = L5Color.textPrimary
+    static let pathText = L5Color.textSecondary
+    static let mutedText = L5Color.textMuted
+    static let lineNumber = L5Color.textMuted
+    static let addedLineNumber = L5Color.success
+    static let deletedLineNumber = L5Color.danger
+    static let addedText = L5Color.success
+    static let deletedText = L5Color.danger
+    static let hunkText = L5Color.accent
+    static let icon = L5Color.accent
+    static let accent = L5Color.accent
 }

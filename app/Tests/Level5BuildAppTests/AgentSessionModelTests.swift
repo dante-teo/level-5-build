@@ -93,6 +93,62 @@ struct AgentSessionModelTests {
         #expect(message == DevinRuntime.missingCliMessage)
     }
 
+    @Test("Review is available for selected project and caches loaded preview")
+    func reviewAvailableForSelectedProjectAndCachesPreview() async throws {
+        let previewCalls = LockedCounter()
+        let file = ProjectChangedFile(path: "Sources/App.swift", indexStatus: "M", workingTreeStatus: " ", changeKind: .modified)
+        let snapshot = ProjectReviewSnapshot(
+            isAvailable: true,
+            root: "/repo",
+            branch: "main",
+            files: [file],
+            totalChangedFiles: 1
+        )
+        let model = AgentSessionModel(
+            backendKind: .unavailable,
+            makeClient: { throw AgentBackendError.missingMockStartScript },
+            reviewSnapshotProvider: { _ in snapshot },
+            reviewPreviewProvider: { _, file in
+                previewCalls.increment()
+                return ProjectFilePreview(file: file, content: .unifiedDiff("diff --git a/Sources/App.swift b/Sources/App.swift"))
+            }
+        )
+
+        model.selectProject(.fixture(path: "/repo"))
+        try await waitUntil { model.reviewState.changedFileCount == 1 }
+        #expect(model.isReviewAvailable)
+        #expect(model.reviewState.isOpen == false)
+
+        model.openReview()
+        model.loadReviewPreview(file)
+        try await waitUntil { model.reviewState.previewCache[file.id] != nil }
+        model.loadReviewPreview(file)
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(model.reviewState.isOpen)
+        #expect(model.reviewState.previewCache[file.id]?.file == file)
+        #expect(previewCalls.value == 1)
+    }
+
+    @Test("Review closes when selected project context is cleared")
+    func reviewClosesWhenProjectContextChanges() async throws {
+        let model = AgentSessionModel(
+            backendKind: .unavailable,
+            makeClient: { throw AgentBackendError.missingMockStartScript },
+            reviewSnapshotProvider: { _ in
+                ProjectReviewSnapshot(isAvailable: true, root: "/repo", branch: "main", files: [], totalChangedFiles: 0)
+            }
+        )
+
+        model.selectProject(.fixture(path: "/repo"))
+        model.openReview()
+        try await waitUntil { model.reviewState.snapshot != nil }
+        model.clearSelectedProject()
+
+        #expect(model.isReviewAvailable == false)
+        #expect(model.reviewState == ProjectReviewPaneState())
+    }
+
     @Test("Failed first-send connection preserves draft and shows unavailable reason")
     func failedFirstSendConnectionPreservesDraft() async throws {
         let model = AgentSessionModel(
@@ -415,7 +471,7 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
 
         model.start()
-        try await waitUntil("loaded sessions") { model.sessions.count == 2 }
+        try await waitUntil("loaded sessions") { model.sessions.map(\.sessionId) == ["newer", "older"] }
         #expect(model.sessions.map(\.sessionId) == ["newer", "older"])
 
         model.selectSession("older")
@@ -890,7 +946,10 @@ struct AgentSessionModelTests {
         try await waitUntil { model.activePermissionRequest != nil }
 
         model.respondToPermission(optionId: "allow-always")
-        try await waitUntil { client.permissionResponsesSnapshot.count == 1 }
+        try await waitUntil {
+            client.permissionResponsesSnapshot.count == 1
+                && model.activePermissionRequest == nil
+        }
 
         #expect(client.permissionResponsesSnapshot == [.init(
             requestId: .int(12),
@@ -1088,7 +1147,7 @@ struct AgentSessionModelTests {
         model.selectSession("s1")
         model.deleteSession("s1")
 
-        try await waitUntil { client.deletedSessionIds == ["s1"] }
+        try await waitUntil { client.deletedSessionIds == ["s1"] && model.sessions.isEmpty }
         #expect(model.sessions.isEmpty)
         #expect(model.activeSessionId == nil)
 
@@ -1397,7 +1456,7 @@ struct AgentSessionModelTests {
         let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
 
         model.selectProject(projectA)
-        try await waitUntil { clientA.initializeCount == 1 }
+        try await waitUntil { clientA.newSessionCwds == ["/repo/project-a"] }
         model.draft = "hello a"
         model.sendDraft()
         try await waitUntil { clientA.prompts.count == 1 }
@@ -1405,7 +1464,7 @@ struct AgentSessionModelTests {
 
         model.startNewChat()
         model.selectProject(projectB)
-        try await waitUntil { clientB.initializeCount == 1 }
+        try await waitUntil { clientB.newSessionCwds == ["/repo/project-b"] }
         model.draft = "hello b"
         model.sendDraft()
         try await waitUntil { model.activeSessionId == "b1" }
@@ -2342,6 +2401,34 @@ private func waitUntil(
 
 private enum WaitError: Error {
     case timedOut(String)
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func increment() {
+        lock.lock()
+        storage += 1
+        lock.unlock()
+    }
+}
+
+private extension RecentProject {
+    static func fixture(path: String) -> RecentProject {
+        RecentProject(
+            path: path,
+            displayName: URL(fileURLWithPath: path).lastPathComponent,
+            createdAt: Date(timeIntervalSince1970: 0),
+            lastOpenedAt: Date(timeIntervalSince1970: 0)
+        )
+    }
 }
 
 private extension AgentTranscriptItem {

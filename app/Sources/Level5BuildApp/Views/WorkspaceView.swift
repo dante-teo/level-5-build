@@ -12,6 +12,8 @@ struct WorkspaceView: View {
     let plan: AgentPlanState?
     let usage: AgentTranscriptUsage?
     let dashboard: ProjectDashboardState?
+    let isReviewAvailable: Bool
+    let isReviewVisible: Bool
     @Binding var draft: ComposerDraft
     let modelOptions: [ComposerModelOption]
     let slashCommands: [ComposerCommand]
@@ -35,6 +37,7 @@ struct WorkspaceView: View {
     let acceptSlashCommandAction: (ComposerCommand) -> Void
     let setTranscriptFollowsTailAction: (Bool) -> Void
     let refreshDashboardAction: () -> Void
+    let toggleReviewAction: () -> Void
     let removeQueuedPromptAction: (QueuedPrompt) -> Void
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
@@ -90,12 +93,15 @@ struct WorkspaceView: View {
                     subtitle: topBarSubtitle,
                     hasDashboard: dashboard != nil,
                     isDashboardVisible: dashboard != nil && adaptiveDashboard.presentation != .hidden,
+                    isReviewAvailable: isReviewAvailable,
+                    isReviewVisible: isReviewVisible,
                     toggleDashboardAction: {
                         adaptiveDashboard.toggle()
                         if adaptiveDashboard.presentation != .hidden {
                             refreshDashboardAction()
                         }
-                    }
+                    },
+                    toggleReviewAction: toggleReviewAction
                 )
                 .measureWorkspaceTopBarHeight()
             }
@@ -339,7 +345,10 @@ private struct WorkspaceTopBar: View {
     let subtitle: String
     let hasDashboard: Bool
     let isDashboardVisible: Bool
+    let isReviewAvailable: Bool
+    let isReviewVisible: Bool
     let toggleDashboardAction: () -> Void
+    let toggleReviewAction: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: L5Spacing.x5) {
@@ -357,13 +366,19 @@ private struct WorkspaceTopBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             GlassIconButton(
-                systemImage: "slider.horizontal.3",
+                systemImage: "list.bullet",
                 isSelected: isDashboardVisible,
                 isEnabled: hasDashboard,
                 help: "Dashboard",
                 action: toggleDashboardAction
             )
-            .glassCircle()
+
+            if isReviewAvailable, !isReviewVisible {
+                ReviewPaneToggleButton(
+                    isSelected: false,
+                    action: toggleReviewAction
+                )
+            }
         }
         .padding(.horizontal, L5Spacing.x5)
         .padding(.leading, L5WorkspaceTopBar.leadingWindowControlsInset)
@@ -416,10 +431,10 @@ private struct GlassIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(L5Font.h3)
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(isSelected ? L5Color.textPrimary : L5Color.textSecondary)
-                .frame(width: L5Size.hitTarget, height: L5Size.hitTarget)
-                .contentShape(Circle())
+                .frame(width: TopBarControlMetrics.glyphSize, height: TopBarControlMetrics.glyphSize)
+                .topBarControlChrome(isSelected: isSelected)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -438,41 +453,6 @@ private extension View {
                 )
             }
         }
-    }
-
-    func glassCapsule() -> some View {
-        modifier(GlassChromeModifier(shape: Capsule()))
-    }
-
-    func glassCircle() -> some View {
-        modifier(GlassChromeModifier(shape: Circle()))
-            .frame(width: L5WorkspaceTopBar.controlDiameter, height: L5WorkspaceTopBar.controlDiameter)
-    }
-}
-
-private struct GlassChromeModifier<S: Shape>: ViewModifier {
-    let shape: S
-
-    func body(content: Content) -> some View {
-        #if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            content
-                .glassEffect(.regular.interactive(), in: shape)
-        } else {
-            fallback(content)
-        }
-        #else
-        fallback(content)
-        #endif
-    }
-
-    private func fallback(_ content: Content) -> some View {
-        content
-            .background(.regularMaterial, in: shape)
-            .overlay {
-                shape.stroke(L5Color.border, lineWidth: L5WorkspaceTopBar.borderWidth)
-            }
-            .shadow(color: .black.opacity(L5WorkspaceTopBar.shadowOpacity), radius: L5Spacing.x4, x: .zero, y: L5Spacing.x1)
     }
 }
 
@@ -502,16 +482,13 @@ private enum L5WorkspaceDashboardLayout {
 
 private enum L5WorkspaceTopBar {
     static let leadingWindowControlsInset = L5Spacing.x16
-    static let controlDiameter = L5Size.control
-    static let verticalPadding = L5Spacing.x1
+    static let verticalPadding: CGFloat = 8
     static let fadeHeight = L5Spacing.x12
     static let fadeStart: CGFloat = .zero
     static let fadeMid = L5Spacing.x1 / L5Spacing.x10
     static let fadeEnd: CGFloat = 1
     static let fadeTintTopOpacity = L5Spacing.x4 / L5Spacing.x10
     static let fadeTintMidOpacity = L5Spacing.x2 / L5Spacing.x10
-    static let borderWidth = L5Spacing.x1 / L5Spacing.x4
-    static let shadowOpacity = L5Spacing.x1 / L5Spacing.x16
     static let disabledOpacity = L5Spacing.x6 / L5Spacing.x16
 
     static func scrollContentTopInset(for measuredHeight: CGFloat) -> CGFloat {

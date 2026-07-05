@@ -78,6 +78,7 @@ final class AgentSessionModel {
     private(set) var sessionModelSaveInFlight = false
     private(set) var approvalMode: ApprovalMode
     private(set) var pendingPermissionRequests: [String: PermissionRequest] = [:]
+    private(set) var reviewState = ProjectReviewPaneState()
 
     private var transcriptStates: [String: AgentTranscriptState] = [:]
     private var sessionCwdBySessionId: [String: String] = [:]
@@ -109,6 +110,7 @@ final class AgentSessionModel {
     private var persistedNewChatModelByBackend: [AgentBackendKind: String] = [:]
     private var defaultModelId: String?
     private var dashboardRefreshGeneration = 0
+    private var reviewRefreshGeneration = 0
     /// One ACP client per project. Keyed by `Self.sharedClientKey` for the
     /// mock backend (a single shared server handles every project), or by
     /// the normalized project path for Devin (one spawned `devin acp`
@@ -129,6 +131,8 @@ final class AgentSessionModel {
     private let approvalModePreferenceStore: ApprovalModePreferenceStore
     private let persistenceStore: SessionPersistenceStore?
     private let gitStatusProvider: @Sendable (String) async -> ProjectGitStatus
+    private let reviewSnapshotProvider: @Sendable (String) async -> ProjectReviewSnapshot
+    private let reviewPreviewProvider: @Sendable (String, ProjectChangedFile) async -> ProjectFilePreview
     private let now: @Sendable () -> Date
     private let turnIdleTimeoutMilliseconds: Int
     private let homeDirectoryPath: String
@@ -150,6 +154,12 @@ final class AgentSessionModel {
         gitStatusProvider: @escaping @Sendable (String) async -> ProjectGitStatus = { cwd in
             await ProjectGitStatusService().status(cwd: cwd)
         },
+        reviewSnapshotProvider: @escaping @Sendable (String) async -> ProjectReviewSnapshot = { cwd in
+            await ProjectReviewService().snapshot(cwd: cwd)
+        },
+        reviewPreviewProvider: @escaping @Sendable (String, ProjectChangedFile) async -> ProjectFilePreview = { cwd, file in
+            await ProjectReviewService().preview(cwd: cwd, file: file)
+        },
         now: @escaping @Sendable () -> Date = Date.init,
         homeDirectoryPath: String = FileManager.default.homeDirectoryForCurrentUser.path,
         turnIdleTimeoutMilliseconds: Int? = nil,
@@ -164,6 +174,8 @@ final class AgentSessionModel {
             self.hiddenSessionIds = hiddenIds
         }
         self.gitStatusProvider = gitStatusProvider
+        self.reviewSnapshotProvider = reviewSnapshotProvider
+        self.reviewPreviewProvider = reviewPreviewProvider
         approvalMode = approvalModePreferenceStore.load(backendKind)
         self.now = now
         self.homeDirectoryPath = homeDirectoryPath
@@ -284,6 +296,14 @@ final class AgentSessionModel {
         selectedProject?.path
     }
 
+    var isReviewAvailable: Bool {
+        reviewProjectPath != nil
+    }
+
+    var reviewProjectPath: String? {
+        activeSessionProjectPath ?? (isNewSession ? selectedProjectPath : nil)
+    }
+
     var activeReferences: [AgentReference] {
         guard let activeSessionId else { return [] }
         let references = transcriptStates[activeSessionId]?.references ?? []
@@ -353,6 +373,7 @@ final class AgentSessionModel {
     }
 
     func startNewChat() {
+        let previousReviewPath = reviewProjectPath
         saveActiveDraft()
         activeSessionId = nil
         activeSessionProjectPath = nil
@@ -360,6 +381,7 @@ final class AgentSessionModel {
         dashboardRefreshGeneration += 1
         draft.clearAfterSend()
         applyNewChatPersistedModel()
+        reconcileReviewContext(previousPath: previousReviewPath)
     }
 
     func setRecentProjects(_ projects: [RecentProject]) {
@@ -370,14 +392,36 @@ final class AgentSessionModel {
 
     func selectProject(_ project: RecentProject) {
         guard isProjectSelectionAvailable else { return }
+        let previousReviewPath = reviewProjectPath
         selectedProject = project
+        reconcileReviewContext(previousPath: previousReviewPath)
         refreshSessionsForSelectedProjectIfNeeded()
     }
 
     func clearSelectedProject() {
         guard isProjectSelectionAvailable else { return }
+        let previousReviewPath = reviewProjectPath
         selectedProject = nil
+        reconcileReviewContext(previousPath: previousReviewPath)
         refreshSessionsForSelectedProjectIfNeeded()
+    }
+
+    func openReview() {
+        guard isReviewAvailable else { return }
+        reviewState.isOpen = true
+        refreshReview()
+    }
+
+    func closeReview() {
+        reviewState.isOpen = false
+    }
+
+    func refreshReview() {
+        refreshReviewSnapshot()
+    }
+
+    func loadReviewPreview(_ file: ProjectChangedFile) {
+        loadReviewPreview(for: file)
     }
 
     /// Devin spawns one process per project, so switching the "new chat"
@@ -1037,6 +1081,7 @@ final class AgentSessionModel {
         guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
         clearActiveTurn(sessionId)
         updateRunningFlags()
+        refreshReviewCountsIfSupported()
         applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
         await startNextQueuedPromptIfNeeded(for: sessionId)
     }
@@ -1337,6 +1382,7 @@ final class AgentSessionModel {
         updatePermissionFlags()
         completedTurnSessionIds.remove(sessionId)
         updateCompletionFlags()
+        refreshReviewCountsIfSupported()
 
         switch reason {
         case .manual:
@@ -1389,6 +1435,7 @@ final class AgentSessionModel {
         updateRunningFlags()
         updatePermissionFlags()
         updateCompletionFlags()
+        refreshReviewCountsIfSupported()
         pendingApprovalModeRestartProjectKeys.remove(projectKey)
         primingSessionIdByProjectKey[projectKey] = nil
         clientGenerationByProjectKey[projectKey, default: 0] += 1
@@ -1682,6 +1729,7 @@ final class AgentSessionModel {
     }
 
     private func updateActiveProjectPathFromSession() {
+        let previousReviewPath = reviewProjectPath
         let nextPath = activeSessionId.flatMap { sessionProjectPathBySessionId[$0] }
         guard nextPath != activeSessionProjectPath else {
             updateDashboardReferences()
@@ -1699,6 +1747,7 @@ final class AgentSessionModel {
         } else {
             dashboardState = nil
         }
+        reconcileReviewContext(previousPath: previousReviewPath)
     }
 
     private func refreshDashboardStatus() {
@@ -1735,6 +1784,55 @@ final class AgentSessionModel {
             references: activeReferences,
             isRefreshing: current.isRefreshing
         )
+    }
+
+    private func refreshReviewSnapshot() {
+        guard let projectPath = reviewProjectPath else {
+            reviewRefreshGeneration += 1
+            reviewState = ProjectReviewPaneState()
+            return
+        }
+        let generation = reviewRefreshGeneration + 1
+        reviewRefreshGeneration = generation
+        reviewState.projectPath = projectPath
+        reviewState.isRefreshing = true
+        Task {
+            let snapshot = await reviewSnapshotProvider(projectPath)
+            guard reviewProjectPath == projectPath, reviewRefreshGeneration == generation else { return }
+            reviewState.snapshot = snapshot
+            reviewState.isRefreshing = false
+            reviewState.previewCache = [:]
+            reviewState.loadingPreviewFileIDs = []
+        }
+    }
+
+    private func refreshReviewCountsIfSupported() {
+        guard reviewProjectPath != nil else { return }
+        refreshReviewSnapshot()
+    }
+
+    private func loadReviewPreview(for file: ProjectChangedFile) {
+        guard let projectPath = reviewProjectPath else { return }
+        let generation = reviewRefreshGeneration
+        let cacheKey = file.id
+        if reviewState.previewCache[cacheKey] != nil || reviewState.loadingPreviewFileIDs.contains(cacheKey) { return }
+        reviewState.loadingPreviewFileIDs.insert(cacheKey)
+        Task {
+            let preview = await reviewPreviewProvider(projectPath, file)
+            guard reviewProjectPath == projectPath, reviewRefreshGeneration == generation else { return }
+            reviewState.previewCache[cacheKey] = preview
+            reviewState.loadingPreviewFileIDs.remove(cacheKey)
+        }
+    }
+
+    private func reconcileReviewContext(previousPath: String?) {
+        let currentPath = reviewProjectPath
+        guard previousPath != currentPath else { return }
+        reviewRefreshGeneration += 1
+        reviewState = ProjectReviewPaneState()
+        if currentPath != nil {
+            refreshReviewCountsIfSupported()
+        }
     }
 
     private static func fileReference(_ reference: AgentReference, isInside projectPath: String) -> Bool {

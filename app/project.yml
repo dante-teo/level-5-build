@@ -17,6 +17,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift.git
     from: 7.5.0
+  HighlighterSwift:
+    url: https://github.com/smittytone/HighlighterSwift.git
+    from: 3.1.0
   SwiftUIIntrospect:
     url: https://github.com/siteline/swiftui-introspect
     from: 26.0.0
@@ -83,6 +86,8 @@ targets:
     dependencies:
       - target: Level5Core
       - target: Level5Design
+      - package: HighlighterSwift
+        product: Highlighter
       - package: SwiftUIIntrospect
         product: SwiftUIIntrospect
     info:

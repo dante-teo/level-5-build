@@ -161,15 +161,19 @@ Never stack heavy shadows. Shadows should create quiet depth, not a floating-car
 
 The primary layout is:
 
-`Sidebar | Workspace | Optional Project Dashboard`
+`Sidebar | Workspace | Optional Review Column`
 
 Rules:
 
 - Sidebar is user-resizable from `260px` to `420px`.
 - Collapsing the sidebar hides it completely (`0px`) rather than leaving an icon rail.
 - Workspace grows to fill remaining space.
-- The project dashboard adapts between reserved wide layout and compact popover/overlay behavior.
+- The project dashboard adapts inside the workspace between reserved wide layout and compact popover/overlay behavior.
+- Review, when open, is a true third column to the right of the workspace.
+- Review content is a continuous, vertically scrolling diff document. Do not add a separate selectable file list; each changed file appears as its own diff section from top to bottom.
+- The Review column is user-resizable for the current open interaction and should keep a visible drag target between the workspace and Review.
 - Reserved dashboard space should still feel visually connected to the transcript area, not like a separate app column.
+- Review should preserve at least a `520px` workspace; hide the Review toggle when the window cannot fit the workspace, resize handle, and default Review column even after sidebar collapse.
 - Top bar always spans the full workspace width.
 - Top bar actions remain right aligned and should be kept minimal.
 - Window controls remain native.
@@ -216,11 +220,11 @@ Rules:
 
 ## 13. Top Bar
 
-Height: `56`.
+Height: content-driven. The current workspace toolbar row uses circular `44px` icon buttons plus vertical padding, for an effective height of about `60px`.
 
 The workspace top bar is a translucent overlay, not a second opaque app header. It should use native/material glass behavior with a top-to-bottom fade so transcript content can begin under it while remaining readable through scroll content inset. Do not hide the macOS traffic-light controls to achieve this treatment.
 
-Keep top-bar controls sparse. For the current workspace, a single dashboard button is the default right-side control. Icon-only buttons should be circular; grouped controls should be capsule-shaped. Use design tokens and native materials instead of hardcoded frames, offsets, or one-off colors.
+Keep top-bar controls sparse. For the current workspace, the dashboard button and Review button are the right-side controls when available, with Review immediately to the right of dashboard. Icon-only buttons should be circular; grouped controls should be capsule-shaped. Use design tokens and native materials instead of hardcoded frames, offsets, or one-off colors.
 
 Contains:
 
@@ -238,7 +242,8 @@ Rules:
 - Use icon buttons for compact actions.
 - Use visible labels only for navigation tabs or commands that require clarity.
 - Interactive controls inside draggable regions must opt out of drag behavior.
-- A project-backed active session may show a top-right dashboard trigger. The trigger uses a rounded glass capsule with one icon button; when the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
+- A project-backed active session may show a top-right dashboard trigger. The trigger uses the standard circular glass top-bar button; when the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
+- Any selected project or project-backed session may show a top-right Review trigger when the default Review column can fit. It uses the same circular glass treatment as dashboard and keeps the same icon in open and closed states.
 - The dashboard trigger and the floating app/session capsule should align on the same tokenized toolbar row. Keep their icon buttons vertically centered even when the session capsule grows to show a title/subtitle.
 
 ## 14. Project Dashboard
@@ -311,28 +316,26 @@ Sidebar chat rows should keep a fixed trailing state slot. State precedence is a
 
 ## 17. Review Panel
 
-The review experience may appear in two modes:
+The native Review experience is an inspect-only third column for Git working-tree changes. It is available for New Chat with a selected project and for project-backed sessions.
 
-- Floating right overlay for compact review.
-- Right-side tool surface with tabs when review, terminal, or browser need persistent access.
-
-Preferred floating width: `380`.
-
-Maximum floating width: `420`.
+Width: defaults to `600px` and is user-resizable from `420px` to `820px` for the current open interaction only. Do not persist width or open state.
 
 Contains:
 
-- Summary
-- Changed files
-- Diff preview
-- Approval actions
+- Header summary, branch/root hint, running-agent stale hint, refresh, and close.
+- Compact path/status filter.
+- Continuous file sections with path, rename subtitle, staged/unstaged/mixed badges, additions/deletions, and binary/image/large markers.
+- Unified diff sections with old/new gutters and horizontal scrolling.
+- Current working-tree image previews for changed images when AppKit can load them.
+- Friendly Git errors with raw details in disclosure.
 
 Rules:
 
-- Opening review must never shift the main workspace.
-- Floating review should not become a full-height sidebar.
-- Persistent tool surfaces may fill height, but must read as a mode of the workspace rather than a second app shell.
-- Commit or approval actions belong at the bottom of the review surface.
+- Opening Review may collapse the sidebar on narrow windows to preserve workspace width.
+- Review is non-mutating: no commit, revert, staging, discard, approval, or permission-answering actions.
+- Use Git as the source of truth; do not show ignored files or recursive submodule contents. Resolve previews from the repository root even when the selected project is a subdirectory, and expand untracked directories into file rows.
+- Large per-file diffs over `200 KB` show a deterministic too-large state, not truncation.
+- Keep the continuous diff dense but readable; avoid card stacks inside the column.
 
 ## 18. Diff Viewer
 

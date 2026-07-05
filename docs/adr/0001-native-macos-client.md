@@ -4,7 +4,7 @@
 
 Accepted.
 
-Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; review, signing, and release work remain future implementation scope. ACP runtime is implemented (mock and real Devin backends). Durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches (see `docs/ARCHITECTURE.md`, "Durable session/transcript persistence"); production-grade retention/eviction and cross-device sync remain future scope.
+Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime is implemented (mock and real Devin backends), durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches, and the native Review pane is implemented as inspect-only Git working-tree review (see `docs/ARCHITECTURE.md`). Signing, release work, mutating review actions, production-grade retention/eviction, and cross-device sync remain future scope.
 
 ## Context
 
@@ -22,7 +22,7 @@ The native project will use XcodeGen for Xcode project generation and Swift Pack
 
 The runtime will be implemented in Swift. It will supervise agent subprocesses with native `Process`, communicate over newline-delimited JSON-RPC, model the needed ACP surface with focused `Codable` types, and expose a native session adapter to the app. ACP core code must remain provider-neutral. Devin is the only productized provider for 1.0.
 
-The app shell will use SwiftUI with a `NavigationSplitView` layout. Chat remains the primary workspace. Review is a trailing inspector/tool surface where diffs, approvals, commit, and revert actions are visible without losing chat context.
+The app shell will use SwiftUI with a `NavigationSplitView` layout. Chat remains the primary workspace. Review is a trailing inspector/tool surface where diffs are visible without losing chat context. Approval answering, commit, and revert controls are outside the current inspect-only Review scope.
 
 Core runtime and data modules will be shared Swift modules rather than app-private view code. This keeps the path open for a future TUI or other local clients.
 

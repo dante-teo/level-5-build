@@ -5,13 +5,29 @@ import SwiftUI
 public struct ContentView: View {
     @AppStorage("shell.sidebar.isCollapsed") private var isSidebarCollapsed = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var model = AgentSessionModel()
+    @State private var model: AgentSessionModel
     @State private var recentProjects: [RecentProject] = []
     private let recentProjectStore: RecentProjectStore?
     @FocusState private var isComposerFocused: Bool
 
-    public init(recentProjectStore: RecentProjectStore? = try? RecentProjectStore()) {
+    /// Both stores default to sharing the single `Level5Database` connection
+    /// at the ADR-mandated path (`~/.level5build/level5.sqlite`): GRDB
+    /// recommends one writer connection per file, and two independent
+    /// `DatabaseQueue`s to the same file would work but buy nothing here.
+    /// The shared default is lazy and computed once per process, so callers
+    /// that want no on-disk persistence (e.g. tests) should pass `nil` for
+    /// both parameters explicitly rather than relying on only one default
+    /// being skipped.
+    public static let defaultDatabase: Level5Database? = try? Level5Database(
+        migrations: RecentProjectStore.migrations + SessionPersistenceStore.migrations
+    )
+
+    public init(
+        recentProjectStore: RecentProjectStore? = ContentView.defaultDatabase.map { RecentProjectStore(database: $0) },
+        persistenceStore: SessionPersistenceStore? = ContentView.defaultDatabase.map { SessionPersistenceStore(database: $0) }
+    ) {
         self.recentProjectStore = recentProjectStore
+        _model = State(wrappedValue: AgentSessionModel(persistenceStore: persistenceStore))
     }
 
     public var body: some View {

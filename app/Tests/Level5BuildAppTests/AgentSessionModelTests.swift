@@ -1067,6 +1067,38 @@ struct AgentSessionModelTests {
         #expect(model.activeSessionId == nil)
     }
 
+    @Test("Deleting a session removes it locally even when the backend's session/delete fails and keeps listing it")
+    func deleteSucceedsLocallyDespiteBackendDeleteFailureAndStaleListing() async throws {
+        // Mirrors the real Devin gap: `session/delete` is unimplemented
+        // ("Method not found") and the session keeps showing up in
+        // `session/list` forever. Our local sidebar is not required to stay
+        // consistent with the backend's — once deleted here, it must stay
+        // gone regardless.
+        let client = FakeAgentSessionClient()
+        client.deleteSessionFailures = ["s1"]
+        client.listResults = [
+            .init(sessions: [.init(sessionId: "s1", title: "One")]),
+            .init(sessions: [.init(sessionId: "s1", title: "One")]),
+            .init(sessions: [.init(sessionId: "s1", title: "One")])
+        ]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client })
+
+        model.start()
+        try await waitUntil { model.sessions.count == 1 }
+        model.selectSession("s1")
+        model.deleteSession("s1")
+
+        try await waitUntil { client.deletedSessionIds == ["s1"] }
+        #expect(model.sessions.isEmpty)
+        #expect(model.activeSessionId == nil)
+
+        // A later refresh that still lists the "deleted" session from the
+        // backend must not resurrect it.
+        model.loadMoreSessions()
+        try await waitUntil { client.listCursors.count >= 3 }
+        #expect(model.sessions.isEmpty)
+    }
+
     @Test("Successful end turn marks sidebar completion until next activity")
     func successfulEndTurnMarksCompletionUntilNextActivity() async throws {
         let client = FakeAgentSessionClient()
@@ -1599,6 +1631,186 @@ struct AgentSessionModelTests {
         // those calls wipe out what the notification already populated.
         #expect(model.slashCommands.map(\.name) == ["grill-me", "code-review", "find-skills"])
     }
+
+    // MARK: - Durable session/transcript persistence
+
+    @Test("Sidebar shows persisted rows before session/list resolves")
+    func sidebarShowsPersistedRowsBeforeSessionListResolves() throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "cached-1",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "Cached session",
+            detail: "cached detail",
+            observedAt: 10,
+            createdAt: 5
+        ))
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.start()
+
+        // Checked synchronously, before any `await`: proves the sidebar is
+        // populated from disk before `ensureConnected`/`session/list` (both
+        // async) have had a chance to run at all.
+        #expect(model.sessions.map(\.sessionId) == ["cached-1"])
+        #expect(model.sessions.first?.title == "Cached session")
+    }
+
+    @Test("Load More persists newly discovered sessions, not just the first page")
+    func loadMorePersistsNewlyDiscoveredSessions() async throws {
+        let fixture = try PersistenceFixture()
+        let client = FakeAgentSessionClient()
+        client.listResults = [
+            .init(sessions: [.init(sessionId: "s1", title: "One")], nextCursor: "2"),
+            .init(sessions: [.init(sessionId: "s2", title: "Two")])
+        ]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.start()
+        try await waitUntil { model.sessions.map(\.sessionId) == ["s1"] }
+        model.loadMoreSessions()
+        try await waitUntil { model.sessions.map(\.sessionId).sorted() == ["s1", "s2"] }
+
+        let persistedIds = try fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId)
+        #expect(Set(persistedIds) == Set(["s1", "s2"]))
+    }
+
+    @Test("Selecting a session paints cached transcript immediately, then swaps to live replay")
+    func selectingSessionPaintsCacheThenSwapsToReplay() async throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "s1",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "t",
+            detail: "d",
+            createdAt: 1
+        ))
+        let cachedItem = AgentTranscriptItem(id: "message-cached", kind: .message(.init(role: .agent, messageId: "cached", text: "cached content")))
+        let persisted = try #require(TranscriptPersistenceCoding.encode(cachedItem))
+        try fixture.store.upsertTranscriptItems(sessionId: "s1", items: [persisted])
+
+        let client = FakeAgentSessionClient()
+        client.blocksLoad = true
+        client.loadReplay["s1"] = [.messageChunk(role: .agent, messageId: "live", text: "live content")]
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.selectSession("s1")
+
+        // Cache paints immediately, synchronously, before the async load.
+        #expect(model.transcript.map(\.messageText) == ["cached content"])
+
+        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
+        client.releaseLoad()
+        try await waitUntil("live replay swaps in") { model.transcript.map(\.messageText) == ["live content"] }
+    }
+
+    @Test("A replay with zero renderable events still discards the cache-hydrated transcript")
+    func zeroRenderableReplayStillDiscardsCache() async throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "s1",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "t",
+            detail: "d",
+            createdAt: 1
+        ))
+        let cachedItem = AgentTranscriptItem(id: "message-cached", kind: .message(.init(role: .agent, messageId: "cached", text: "cached content")))
+        let persisted = try #require(TranscriptPersistenceCoding.encode(cachedItem))
+        try fixture.store.upsertTranscriptItems(sessionId: "s1", items: [persisted])
+
+        let client = FakeAgentSessionClient()
+        client.blocksLoad = true
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.selectSession("s1")
+        #expect(model.transcript.map(\.messageText) == ["cached content"])
+        try await waitUntil("load started") { client.loadedSessionIdsSnapshot == ["s1"] }
+
+        // `available_commands_update` renders no transcript event, but it
+        // is still a raw `session/update` for this (still-loading) session
+        // and must discard the stale cache rather than leave it forever.
+        client.emitAvailableCommands("s1", names: [])
+        try await waitUntil("cache discarded") { model.transcript.isEmpty }
+
+        client.releaseLoad()
+    }
+
+    @Test("Deleting a session removes its persisted rows")
+    func deletingSessionRemovesPersistedRows() async throws {
+        let fixture = try PersistenceFixture()
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.selectSession("s1")
+        try await waitUntil("loaded s1") { client.loadedSessionIdsSnapshot == ["s1"] }
+        try await waitUntil("session row persisted") {
+            (try? fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId)) == ["s1"]
+        }
+
+        model.deleteSession("s1")
+
+        try await waitUntil("session row removed") {
+            (try? fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).isEmpty) == true
+        }
+    }
+
+    @Test("A corrupt persisted transcript payload doesn't crash and is treated as a cache miss")
+    func corruptPersistedTranscriptPayloadIsCacheMiss() throws {
+        let fixture = try PersistenceFixture()
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "s1",
+            projectKey: PersistenceFixture.sharedProjectKey,
+            backend: "mock",
+            title: "t",
+            detail: "d",
+            createdAt: 1
+        ))
+        let goodItem = AgentTranscriptItem(id: "message-good", kind: .message(.init(role: .agent, messageId: "good", text: "good content")))
+        let goodPersisted = try #require(TranscriptPersistenceCoding.encode(goodItem))
+        let corruptPersisted = PersistedTranscriptItem(itemId: "message-bad", kind: "message", payloadVersion: 1, payload: Data("not valid json".utf8))
+        try fixture.store.upsertTranscriptItems(sessionId: "s1", items: [goodPersisted, corruptPersisted])
+
+        let client = FakeAgentSessionClient()
+        let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
+
+        model.selectSession("s1")
+
+        #expect(model.transcript.map(\.messageText) == ["good content"])
+    }
+
+    @Test("A relaunch restores sessions and transcript content persisted by an earlier launch")
+    func relaunchRestoresPersistedSessionsAndTranscript() async throws {
+        let fixture = try PersistenceFixture()
+
+        let client1 = FakeAgentSessionClient()
+        let model1 = AgentSessionModel(backendKind: .acpMock, makeClient: { client1 }, persistenceStore: fixture.store)
+        model1.selectSession("s1")
+        try await waitUntil("loaded s1") { client1.loadedSessionIdsSnapshot == ["s1"] }
+        model1.draft = "hello there"
+        model1.sendDraft()
+        try await waitUntil("turn completed") {
+            model1.transcript.contains { $0.messageText == "response hello there" }
+        }
+        try await waitUntil("transcript persisted") {
+            (try? fixture.store.fetchTranscriptItems(sessionId: "s1").isEmpty) == false
+        }
+
+        // Simulate a fresh launch: a second model instance, with no
+        // in-memory state of its own, sharing only the on-disk store.
+        let client2 = FakeAgentSessionClient()
+        let model2 = AgentSessionModel(backendKind: .acpMock, makeClient: { client2 }, persistenceStore: fixture.store)
+
+        model2.start()
+        #expect(model2.sessions.map(\.sessionId) == ["s1"])
+
+        model2.selectSession("s1")
+        #expect(model2.transcript.map(\.messageText).contains("response hello there"))
+        #expect(model2.transcript.contains { $0.messageRole == .user })
+    }
 }
 
 private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Sendable {
@@ -1624,6 +1836,7 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var loadedSessionIds: [String] = []
     var loadReplay: [String: [AgentTranscriptEvent]] = [:]
     var deletedSessionIds: [String] = []
+    var deleteSessionFailures: Set<String> = []
     var modelOptionSessionIds: [String?] = []
     var modelOptionsResult: (options: [ComposerModelOption], currentModelId: String?) = (
         [
@@ -1743,6 +1956,11 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     func deleteSession(sessionId: String) async throws {
         lock.withLock { deletedSessionIds.append(sessionId) }
+        if lock.withLock({ deleteSessionFailures.contains(sessionId) }) {
+            // Mirrors real Devin, which doesn't implement `session/delete`
+            // at all ("Method not found").
+            throw FakeClientError.promptFailed
+        }
     }
 
     func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?) {
@@ -2165,5 +2383,27 @@ private extension [JSONValue] {
             return object["text"]?.stringValue
         }
         .joined()
+    }
+}
+
+/// An isolated on-disk `SessionPersistenceStore`, matching the temp-database
+/// conventions of `RecentProjectStoreTests`/`SessionPersistenceStoreTests`.
+private struct PersistenceFixture {
+    /// Mirrors `AgentSessionModel.sharedClientKey`: the mock backend always
+    /// routes every project through one shared client/project key.
+    static let sharedProjectKey = "shared"
+
+    let store: SessionPersistenceStore
+
+    init() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Level5BuildTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let database = try Level5Database(
+            databaseURL: root.appendingPathComponent("level5.sqlite"),
+            migrations: SessionPersistenceStore.migrations
+        )
+        store = SessionPersistenceStore(database: database)
     }
 }

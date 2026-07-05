@@ -8,6 +8,17 @@ enum AgentBackendKind: Equatable, Hashable, Sendable {
     case unavailable
 }
 
+extension AgentBackendKind {
+    /// The `backend` column value used in `Level5Core.SessionPersistenceStore`.
+    var persistedIdentifier: String {
+        switch self {
+        case .acpMock: "mock"
+        case .devin: "devin"
+        case .unavailable: "unavailable"
+        }
+    }
+}
+
 struct AgentBackendSelector: Sendable {
     var environment: [String: String]
     var allowsMockBackend: Bool

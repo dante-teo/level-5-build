@@ -8,7 +8,7 @@ struct AppSmokeTests {
     @Test("Content view can be constructed")
     @MainActor
     func contentViewConstruction() {
-        _ = ContentView(recentProjectStore: nil)
+        _ = ContentView(recentProjectStore: nil, persistenceStore: nil)
     }
 
     @Test("Composer constructs with approval selector")

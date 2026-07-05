@@ -4,7 +4,7 @@
 
 Accepted.
 
-Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime, persistence, review, signing, and release work remain future implementation scope.
+Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; review, signing, and release work remain future implementation scope. ACP runtime is implemented (mock and real Devin backends). Durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches (see `docs/ARCHITECTURE.md`, "Durable session/transcript persistence"); production-grade retention/eviction and cross-device sync remain future scope.
 
 ## Context
 

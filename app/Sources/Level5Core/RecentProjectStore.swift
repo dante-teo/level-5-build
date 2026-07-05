@@ -35,30 +35,39 @@ public final class RecentProjectStore {
     private let fileManager: FileManager
     private let now: @Sendable () -> Date
 
+    /// Preferred initializer: shares the single connection/migrator owned by
+    /// `database` instead of opening its own queue.
     public init(
+        database: Level5Database,
+        fileManager: FileManager = .default,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.databaseQueue = database.dbQueue
+        self.fileManager = fileManager
+        self.now = now
+    }
+
+    /// Convenience path that opens (and migrates) its own `Level5Database`
+    /// scoped to just this store's schema. Kept so `ContentView.init` and
+    /// existing tests can keep constructing a store directly from a
+    /// database URL without needing to know about `Level5Database`.
+    public convenience init(
         databaseURL: URL = RecentProjectStore.defaultDatabaseURL(),
         fileManager: FileManager = .default,
         now: @escaping @Sendable () -> Date = Date.init
     ) throws {
-        self.fileManager = fileManager
-        self.now = now
-
-        let databaseDirectory = databaseURL.deletingLastPathComponent()
-        try fileManager.createDirectory(
-            at: databaseDirectory,
-            withIntermediateDirectories: true
+        let database = try Level5Database(
+            databaseURL: databaseURL,
+            fileManager: fileManager,
+            migrations: RecentProjectStore.migrations
         )
-
-        databaseQueue = try DatabaseQueue(path: databaseURL.path)
-        try Self.migrator.migrate(databaseQueue)
+        self.init(database: database, fileManager: fileManager, now: now)
     }
 
     public static func defaultDatabaseURL(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> URL {
-        homeDirectory
-            .appendingPathComponent(".level5build", isDirectory: true)
-            .appendingPathComponent("level5.sqlite")
+        Level5Database.defaultDatabaseURL(homeDirectory: homeDirectory)
     }
 
     public static func normalizedPath(_ path: String) -> String {
@@ -155,10 +164,11 @@ public final class RecentProjectStore {
         }
     }
 
-    private static let migrator: DatabaseMigrator = {
-        var migrator = DatabaseMigrator()
-
-        migrator.registerMigration("createRecentProjects") { db in
+    /// This store's own named migrations, in the order they must apply.
+    /// `Level5Database` composes these alongside every other store's
+    /// migrations into one ordered migrator for the shared connection.
+    public static let migrations: [DatabaseMigration] = [
+        DatabaseMigration(identifier: "createRecentProjects") { db in
             try db.create(table: "recent_projects", ifNotExists: true) { table in
                 table.column("path", .text).primaryKey()
                 table.column("displayName", .text).notNull()
@@ -166,9 +176,7 @@ public final class RecentProjectStore {
                 table.column("lastOpenedAt", .double).notNull().indexed()
             }
         }
-
-        return migrator
-    }()
+    ]
 
     private static func recentProject(from row: Row) -> RecentProject {
         RecentProject(

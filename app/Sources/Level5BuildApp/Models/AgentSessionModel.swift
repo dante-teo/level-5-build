@@ -91,6 +91,18 @@ final class AgentSessionModel {
     private var activeTurns: [String: ActiveTurn] = [:]
     private var staleTurnGenerationBySessionId: [String: Int] = [:]
     private var loadingSessionIds: Set<String> = []
+    /// Sessions the user has deleted locally. The ACP server is not
+    /// guaranteed to agree — real Devin doesn't implement `session/delete`
+    /// at all — so once hidden, a session must never reappear from a later
+    /// `session/list`/`session/update`, even across a relaunch. Our local
+    /// session list is not required to stay consistent with the backend's.
+    private var hiddenSessionIds: Set<String> = []
+    /// Sessions whose in-memory transcript cache should be discarded and
+    /// replaced by live replay the moment the *next* raw `session/update`
+    /// notification arrives for them. Set by `selectSession` and consumed by
+    /// `handleSessionUpdate` (not `apply(_:to:)`) so even replay-only
+    /// updates that produce zero renderable events still trigger the swap.
+    private var transcriptResetPendingSessionIds: Set<String> = []
     private var pendingUserEchoes: [String: [String]] = [:]
     private var currentModelBySessionId: [String: String] = [:]
     private var pendingModelBySessionId: [String: String] = [:]
@@ -115,6 +127,7 @@ final class AgentSessionModel {
     private let makeClient: @Sendable () throws -> AgentSessionClient
     private let makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)?
     private let approvalModePreferenceStore: ApprovalModePreferenceStore
+    private let persistenceStore: SessionPersistenceStore?
     private let gitStatusProvider: @Sendable (String) async -> ProjectGitStatus
     private let now: @Sendable () -> Date
     private let turnIdleTimeoutMilliseconds: Int
@@ -133,6 +146,7 @@ final class AgentSessionModel {
         makeClient: @escaping @Sendable () throws -> AgentSessionClient,
         makeProjectClient: (@Sendable (String, ApprovalMode) throws -> AgentSessionClient)? = nil,
         approvalModePreferenceStore: ApprovalModePreferenceStore = .userDefaults,
+        persistenceStore: SessionPersistenceStore? = nil,
         gitStatusProvider: @escaping @Sendable (String) async -> ProjectGitStatus = { cwd in
             await ProjectGitStatusService().status(cwd: cwd)
         },
@@ -145,6 +159,10 @@ final class AgentSessionModel {
         self.makeClient = makeClient
         self.makeProjectClient = makeProjectClient
         self.approvalModePreferenceStore = approvalModePreferenceStore
+        self.persistenceStore = persistenceStore
+        if let persistenceStore, let hiddenIds = try? persistenceStore.hiddenSessionIds() {
+            self.hiddenSessionIds = hiddenIds
+        }
         self.gitStatusProvider = gitStatusProvider
         approvalMode = approvalModePreferenceStore.load(backendKind)
         self.now = now
@@ -161,7 +179,8 @@ final class AgentSessionModel {
     }
 
     convenience init(
-        selector: AgentBackendSelector = AgentBackendSelector()
+        selector: AgentBackendSelector = AgentBackendSelector(),
+        persistenceStore: SessionPersistenceStore? = nil
     ) {
         let kind = selector.selectedBackend
         let makeClient: @Sendable () throws -> AgentSessionClient = {
@@ -185,6 +204,7 @@ final class AgentSessionModel {
             backendKind: kind,
             makeClient: makeClient,
             makeProjectClient: makeProjectClient,
+            persistenceStore: persistenceStore,
             unavailableReason: selector.unavailableReason
         )
     }
@@ -299,12 +319,36 @@ final class AgentSessionModel {
     func start() {
         guard backendKind == .acpMock || backendKind == .devin else { return }
         let key = currentSidebarProjectKey
+        hydratePersistedSessions(projectKey: key)
         Task {
             await ensureConnected(projectKey: key)
             await refreshSessions(reset: true, projectKey: key)
             if isNewSession {
                 await primeComposerSession(forProjectKey: key)
             }
+        }
+    }
+
+    /// Loads durably cached session rows for `projectKey` synchronously so
+    /// the sidebar is not empty while `ensureConnected`/`refreshSessions`
+    /// are still in flight. Once `session/list` succeeds, its rows win as
+    /// usual (`upsert` overwrites in place); this is purely a cold-start
+    /// paint, never a source of truth.
+    private func hydratePersistedSessions(projectKey: String) {
+        guard let persistenceStore else { return }
+        guard let rows = try? persistenceStore.listSessionRows(projectKey: projectKey) else { return }
+        for row in rows {
+            sessionProjectKeyBySessionId[row.sessionId] = row.projectKey
+            upsert(AgentSessionRow(
+                sessionId: row.sessionId,
+                title: row.title,
+                detail: row.detail,
+                updatedAt: row.providerUpdatedAt.map(Date.init(timeIntervalSince1970:)),
+                observedAt: row.observedAt.map(Date.init(timeIntervalSince1970:)),
+                isRunning: false,
+                isAwaitingPermission: false,
+                hasCompletedTurn: false
+            ))
         }
     }
 
@@ -570,11 +614,17 @@ final class AgentSessionModel {
         if followTailBySessionId[sessionId] == nil {
             followTailBySessionId[sessionId] = true
         }
+        hydrateTranscriptFromCacheIfNeeded(sessionId)
         let key = projectKey(forSessionId: sessionId)
         Task {
             guard await ensureConnected(projectKey: key) else { return }
             guard let client = clients[key] else { return }
-                transcriptStates[sessionId] = AgentTranscriptState()
+                // Cache paints immediately (above); the in-memory cache is
+                // *not* reset here. `handleSessionUpdate` discards it and
+                // replaces it with live replay the moment the first raw
+                // `session/update` for this session arrives, so ACP remains
+                // the source of truth without an empty-flash in between.
+                transcriptResetPendingSessionIds.insert(sessionId)
                 loadingSessionIds.insert(sessionId)
                 do {
                     let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
@@ -589,6 +639,28 @@ final class AgentSessionModel {
         }
     }
 
+    /// Paints the durably cached transcript for `sessionId` immediately, if
+    /// there is one and nothing is already in memory for it (a session
+    /// visited earlier in this process run already reflects at least as
+    /// much as the on-disk cache, since writes flow from `apply(_:to:)` as
+    /// they happen).
+    private func hydrateTranscriptFromCacheIfNeeded(_ sessionId: String) {
+        guard transcriptStates[sessionId] == nil else { return }
+        guard let persistenceStore else { return }
+        var state = AgentTranscriptState()
+        if let items = try? persistenceStore.fetchTranscriptItems(sessionId: sessionId) {
+            for persistedItem in items {
+                if let item = TranscriptPersistenceCoding.decode(persistedItem) {
+                    state.items.append(item)
+                }
+            }
+        }
+        if let persistedState = try? persistenceStore.fetchTranscriptState(sessionId: sessionId) {
+            TranscriptPersistenceCoding.apply(persistedState, to: &state)
+        }
+        transcriptStates[sessionId] = state
+    }
+
     func loadMoreSessions() {
         let key = currentSidebarProjectKey
         Task {
@@ -596,37 +668,49 @@ final class AgentSessionModel {
         }
     }
 
+    /// Deletes `sessionId` from the sidebar. The ACP `session/delete` call is
+    /// best-effort only: some backends (real Devin, notably) don't
+    /// implement it at all ("Method not found"), so our local session list
+    /// is not required to stay consistent with whatever the server still
+    /// reports. Local removal (and the durable hidden-session marker that
+    /// keeps it from reappearing) happens unconditionally, regardless of
+    /// whether the remote call succeeds, fails, or the backend is
+    /// unreachable.
     func deleteSession(_ sessionId: String) {
         let key = projectKey(forSessionId: sessionId)
         Task {
-            guard await ensureConnected(projectKey: key) else { return }
-            guard let client = clients[key] else { return }
-            do {
-                try await client.deleteSession(sessionId: sessionId)
-                transcriptStates[sessionId] = nil
-                queues[sessionId] = nil
-                draftsBySessionId[sessionId] = nil
-                followTailBySessionId[sessionId] = nil
-                sessionCwdBySessionId[sessionId] = nil
-                sessionProjectPathBySessionId[sessionId] = nil
-                sessionProjectKeyBySessionId[sessionId] = nil
-                pendingPermissionRequests[sessionId] = nil
-                completedTurnSessionIds.remove(sessionId)
-                activeTurns[sessionId]?.watchdogTask?.cancel()
-                activeTurns[sessionId] = nil
-                sessions.removeAll { $0.sessionId == sessionId }
-                if activeSessionId == sessionId {
-                    activeSessionId = nil
-                    activeSessionProjectPath = nil
-                    dashboardState = nil
-                    dashboardRefreshGeneration += 1
-                    draft.clearAfterSend()
-                    applyNewChatPersistedModel()
-                }
-                await refreshSessions(reset: true, projectKey: key)
-            } catch {
-                appendError(title: "Delete failed", text: "Failed to delete session: \(error)", key: "delete-failed", to: sessionId)
+            if await ensureConnected(projectKey: key), let client = clients[key] {
+                try? await client.deleteSession(sessionId: sessionId)
             }
+            removeSessionLocally(sessionId)
+            await refreshSessions(reset: true, projectKey: key)
+        }
+    }
+
+    private func removeSessionLocally(_ sessionId: String) {
+        transcriptStates[sessionId] = nil
+        transcriptResetPendingSessionIds.remove(sessionId)
+        queues[sessionId] = nil
+        draftsBySessionId[sessionId] = nil
+        followTailBySessionId[sessionId] = nil
+        sessionCwdBySessionId[sessionId] = nil
+        sessionProjectPathBySessionId[sessionId] = nil
+        sessionProjectKeyBySessionId[sessionId] = nil
+        pendingPermissionRequests[sessionId] = nil
+        completedTurnSessionIds.remove(sessionId)
+        activeTurns[sessionId]?.watchdogTask?.cancel()
+        activeTurns[sessionId] = nil
+        sessions.removeAll { $0.sessionId == sessionId }
+        hiddenSessionIds.insert(sessionId)
+        try? persistenceStore?.deleteSession(sessionId: sessionId)
+        try? persistenceStore?.markSessionHidden(sessionId: sessionId, hiddenAt: now().timeIntervalSince1970)
+        if activeSessionId == sessionId {
+            activeSessionId = nil
+            activeSessionProjectPath = nil
+            dashboardState = nil
+            dashboardRefreshGeneration += 1
+            draft.clearAfterSend()
+            applyNewChatPersistedModel()
         }
     }
 
@@ -699,7 +783,13 @@ final class AgentSessionModel {
             if isActiveProjectKey(projectKey) {
                 runtimeMessage = nil
             }
-            let incoming = result.sessions.map { row(from: $0, projectKey: projectKey) }
+            // Locally deleted sessions must never resurrect from a backend
+            // that still lists them (see `hiddenSessionIds`); filtered here
+            // because the `reset == false` (Load More) branch below appends
+            // directly and does not go through the `upsert` choke point.
+            let incoming = result.sessions
+                .map { row(from: $0, projectKey: projectKey) }
+                .filter { !hiddenSessionIds.contains($0.sessionId) }
             if reset {
                 // Only replace this project's own rows: other projects' rows
                 // (e.g. one with a Devin turn still running in the
@@ -708,8 +798,16 @@ final class AgentSessionModel {
                 sessions.removeAll { sessionProjectKeyBySessionId[$0.sessionId] == projectKey && !incomingIds.contains($0.sessionId) }
                 incoming.forEach(upsert)
             } else {
+                // Load More discovers rows the sidebar hasn't seen yet, so
+                // they still need the same write-through `upsert` gives the
+                // `reset` branch above; only append-if-new is skipped here
+                // (unlike `upsert`) so a page that happens to repeat an
+                // already-known id can't clobber that row's tracked
+                // `observedAt`/live turn-state with the plain fetched summary.
                 let existing = Set(sessions.map(\.sessionId))
-                sessions.append(contentsOf: incoming.filter { !existing.contains($0.sessionId) })
+                let newRows = incoming.filter { !existing.contains($0.sessionId) }
+                sessions.append(contentsOf: newRows)
+                newRows.forEach(persistSessionRow)
             }
             nextCursor = result.nextCursor
             sortSessions()
@@ -1091,6 +1189,19 @@ final class AgentSessionModel {
         if let activeTurn = activeTurns[sessionId], activeTurn.generation != generation {
             return
         }
+        // The first raw update received *while this session is still
+        // marked loading* discards the cache-hydrated transcript in favor
+        // of live replay, even if this particular update is one of the
+        // kinds filtered out below (e.g. `session_info_update`/
+        // `config_option_update`): otherwise a replay-only session with no
+        // renderable events would keep displaying stale cache forever.
+        // Gating on `loadingSessionIds` (not just consuming the pending
+        // flag) matters: without it, a notification that happens to arrive
+        // long after the load finished (e.g. the backend echo of a later,
+        // unrelated prompt) would wipe transcript content added since.
+        if loadingSessionIds.contains(sessionId), transcriptResetPendingSessionIds.remove(sessionId) != nil {
+            transcriptStates[sessionId] = AgentTranscriptState()
+        }
         guard let object = update.update.objectValue else { return }
         let kind = object["sessionUpdate"]?.stringValue
 
@@ -1302,6 +1413,7 @@ final class AgentSessionModel {
             if let updatedAt {
                 sessions[index].updatedAt = updatedAt
             }
+            persistSessionRow(sessions[index])
         } else {
             upsert(.init(
                 sessionId: sessionId,
@@ -1336,13 +1448,22 @@ final class AgentSessionModel {
         )
     }
 
+    /// The single choke point every sidebar-row mutation goes through
+    /// (`refreshSessions`, `updateSessionInfo`, `ensureSessionRowExists`,
+    /// cold-start hydration). Guarding here — rather than at each call
+    /// site — is what keeps a locally deleted session from reappearing no
+    /// matter which path (a stale `session/list`, a background
+    /// `session/update`, a lingering permission request) tries to add it
+    /// back.
     private func upsert(_ row: AgentSessionRow) {
+        guard !hiddenSessionIds.contains(row.sessionId) else { return }
         if let index = sessions.firstIndex(where: { $0.sessionId == row.sessionId }) {
             sessions[index] = row
         } else {
             sessions.insert(row, at: 0)
         }
         sortSessions()
+        persistSessionRow(row)
     }
 
     private func sortSessions() {
@@ -1351,10 +1472,30 @@ final class AgentSessionModel {
         }
     }
 
+    /// Write-through for durable session fields (`title`, `detail`,
+    /// `updatedAt`, `observedAt`). Live turn-state (`isRunning`,
+    /// `isAwaitingPermission`, `hasCompletedTurn`) is intentionally not
+    /// part of `PersistedSessionRow` and correctly resets after a relaunch.
+    private func persistSessionRow(_ row: AgentSessionRow) {
+        guard let persistenceStore else { return }
+        let persisted = PersistedSessionRow(
+            sessionId: row.sessionId,
+            projectKey: sessionProjectKeyBySessionId[row.sessionId] ?? projectKey(for: selectedProjectPath),
+            backend: backendKind.persistedIdentifier,
+            title: row.title,
+            detail: row.detail,
+            providerUpdatedAt: row.updatedAt?.timeIntervalSince1970,
+            observedAt: row.observedAt?.timeIntervalSince1970,
+            createdAt: now().timeIntervalSince1970
+        )
+        try? persistenceStore.upsertSessionRow(persisted)
+    }
+
     private func markObservedActivity(for sessionId: String) {
         guard let index = sessions.firstIndex(where: { $0.sessionId == sessionId }) else { return }
         sessions[index].observedAt = now()
         sortSessions()
+        persistSessionRow(sessions[index])
     }
 
     private func markLiveMessageActivity(for sessionId: String) {
@@ -1457,12 +1598,81 @@ final class AgentSessionModel {
         if sessionId == activeSessionId {
             updateDashboardReferences()
         }
+        persistTranscriptChange(event, sessionId: sessionId, state: state)
+    }
+
+    /// Writes only the 1-2 rows `event` actually changed, off the main
+    /// actor. No debounce: each `apply(_:to:)` call already touches at most
+    /// one transcript item plus (rarely) the singleton state row, so a
+    /// wall-clock debounce would add complexity (an injectable clock, a
+    /// termination-flush path — this app has no `AppDelegate` today) for no
+    /// real benefit. Revisit if profiling ever shows write volume matters
+    /// at fast token-streaming rates.
+    private func persistTranscriptChange(_ event: AgentTranscriptEvent, sessionId: String, state: AgentTranscriptState) {
+        guard let persistenceStore else { return }
+        let changedItems = Self.changedItemIds(for: event, resultingState: state)
+            .compactMap { id in state.items.first { $0.id == id } }
+            .compactMap(TranscriptPersistenceCoding.encode)
+        let persistedState = Self.eventTouchesSingletonState(event) ? TranscriptPersistenceCoding.encodeState(state) : nil
+        guard !changedItems.isEmpty || persistedState != nil else { return }
+        Task.detached(priority: .utility) {
+            if !changedItems.isEmpty {
+                try? persistenceStore.upsertTranscriptItems(sessionId: sessionId, items: changedItems)
+            }
+            if let persistedState {
+                try? persistenceStore.upsertTranscriptState(sessionId: sessionId, state: persistedState)
+            }
+        }
+    }
+
+    /// The transcript item id(s) `event` touched in `resultingState`
+    /// (post-`apply`), without duplicating `AgentTranscriptReducer`'s
+    /// private id-assignment logic: ids driven by an explicit
+    /// `messageId`/`toolCallId`/`replacementKey` are deterministic, and the
+    /// reducer's only two "no explicit id" paths (message merge/append with
+    /// no `messageId`, status/error append with no `replacementKey`) always
+    /// land on the trailing item.
+    private static func changedItemIds(for event: AgentTranscriptEvent, resultingState state: AgentTranscriptState) -> [String] {
+        switch event {
+        case let .messageChunk(_, messageId, _, _):
+            if let messageId { return ["message-\(messageId)"] }
+            return state.items.last.map { [$0.id] } ?? []
+        case let .tool(toolCallId, _, _, _, _):
+            return ["tool-\(toolCallId)"]
+        case let .toolExpansion(toolCallId, _):
+            return ["tool-\(toolCallId)"]
+        case let .status(_, _, replacementKey):
+            if let replacementKey { return ["status-\(replacementKey)"] }
+            return state.items.last.map { [$0.id] } ?? []
+        case let .error(_, _, replacementKey):
+            if let replacementKey { return ["error-\(replacementKey)"] }
+            return state.items.last.map { [$0.id] } ?? []
+        case let .stopReason(reason):
+            let id = "status-stop-\(reason)"
+            return state.items.contains { $0.id == id } ? [id] : []
+        case .plan, .usage, .references:
+            return []
+        }
+    }
+
+    private static func eventTouchesSingletonState(_ event: AgentTranscriptEvent) -> Bool {
+        switch event {
+        case .plan, .usage, .references, .stopReason:
+            true
+        case .messageChunk, .tool, .toolExpansion, .status, .error:
+            false
+        }
     }
 
     private func clearPlanState(for sessionId: String) {
         guard var state = transcriptStates[sessionId] else { return }
         state.plan = nil
         transcriptStates[sessionId] = state
+        guard let persistenceStore else { return }
+        let persistedState = TranscriptPersistenceCoding.encodeState(state)
+        Task.detached(priority: .utility) {
+            try? persistenceStore.upsertTranscriptState(sessionId: sessionId, state: persistedState)
+        }
     }
 
     private func reconcileSessionProjectPaths() {

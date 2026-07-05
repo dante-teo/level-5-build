@@ -366,7 +366,7 @@ private struct WorkspaceTopBar: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             GlassIconButton(
-                systemImage: "list.bullet",
+                icon: .dashboard,
                 isSelected: isDashboardVisible,
                 isEnabled: hasDashboard,
                 help: "Dashboard",
@@ -422,7 +422,7 @@ private struct TopBarFade: View {
 }
 
 private struct GlassIconButton: View {
-    let systemImage: String
+    let icon: L5Icon
     var isSelected = false
     var isEnabled = true
     let help: String
@@ -430,8 +430,7 @@ private struct GlassIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
+            L5IconView(icon, size: 18)
                 .foregroundStyle(isSelected ? L5Color.textPrimary : L5Color.textSecondary)
                 .frame(width: TopBarControlMetrics.glyphSize, height: TopBarControlMetrics.glyphSize)
                 .topBarControlChrome(isSelected: isSelected)

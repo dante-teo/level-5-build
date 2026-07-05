@@ -126,7 +126,7 @@ app/
     └── Level5CoreTests/
 ```
 
-`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It owns recent-project persistence, native project Git status, and provider-neutral ACP primitives. `Level5Design` owns reusable SwiftUI design primitives and bundled in-app identity/font resources. `Level5BuildApp` is the SwiftUI app target.
+`Level5Core` is the provider-neutral module where reusable runtime/domain code will grow. It owns recent-project persistence, native project Git status, and provider-neutral ACP primitives. `Level5Design` owns reusable SwiftUI design primitives, semantic tintable in-app icon APIs, and bundled in-app identity/font resources. `Level5BuildApp` is the SwiftUI app target.
 
 `Level5Core`'s ACP layer is intentionally hand-coded and tolerant rather than generated from a full schema. It includes reusable `Codable` protocol values, JSON-RPC envelopes, method constants, a newline-delimited JSON-RPC transport actor, a thin `AcpClient`, and a generic `AcpProcessTransport` wrapper around native `Process`. Unknown forward-compatible fields are tolerated where possible; required identifiers and discriminators remain strict. This keeps the core provider-neutral while covering the ACP surface the native app and mock tests currently need.
 
@@ -241,6 +241,8 @@ From the repo root, `script/build_and_run.sh` builds the Swift package, stages `
 ### Native app assets
 
 The native app icon lives in `app/Resources/Assets.xcassets/AppIcon.appiconset`. `app/project.yml` must reference `Resources/Assets.xcassets` directly, not as a copied folder, so Xcode's asset catalog compiler emits `Assets.car` and `AppIcon.icns` into the app bundle.
+
+In-app chrome should not consume generated app-icon artwork or separate raster icon sets. Product-level UI concepts should use `Level5Design.L5Icon` / `L5IconView`, which centralizes SF Symbol selection and keeps icons vector, tintable, and consistent with native macOS controls. File-type glyphs, chevrons, and backend-provided command symbols may remain local SF Symbols where their meaning is control-specific.
 
 ## `legacy/electrobun-app/` — Electrobun reference app
 

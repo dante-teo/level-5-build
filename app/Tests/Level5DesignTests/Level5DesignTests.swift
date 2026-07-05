@@ -41,6 +41,8 @@ struct Level5DesignTests {
             L5Asset.mark
                 .resizable()
                 .frame(width: 16, height: 16)
+            L5IconView(.agent)
+                .foregroundStyle(L5Color.accent)
         }
         .padding(L5Spacing.x4)
         .l5Surface(.card)

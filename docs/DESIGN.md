@@ -50,11 +50,14 @@ The module owns:
 - `L5Font`: display, heading, body, caption, and monospace helpers backed by bundled Barlow and Departure Mono font resources.
 - `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation`: documented token scales for layout rhythm, corner treatment, fixed control dimensions, and quiet depth.
 - `L5Asset`: typed access to in-app identity artwork such as the Level5 mark.
+- `L5Icon` and `L5IconView`: semantic, tintable in-app icons backed by SF Symbols. Use them for product concepts such as agent, tool, chat, dashboard, branch, status, and source rows instead of choosing ad hoc symbol names in app views.
 - `L5ButtonStyle` and `l5Surface`, `l5InputSurface`, `l5CompactControl` modifiers for primitive controls and glass/material surfaces.
 
 `Level5BuildApp` calls `Level5DesignResources.registerFonts()` during startup. The app target still owns the bundle app icon in `app/Resources/Assets.xcassets/AppIcon.appiconset`; `Level5Design` owns only reusable in-app identity resources.
 
 App icon artwork is owned by the app target, not by `Level5Design`. The source image is `app/Resources/AppIconSource.png`; generated icon sizes live in `app/Resources/Assets.xcassets/AppIcon.appiconset`. Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
+
+In-app icons are not app icon artwork. They should be vector, monochrome, template/tintable, and readable at `16px`. Do not generate raster PNG icon sets for app chrome. Keep custom icon styling centralized in `L5Icon`; use direct SF Symbols only for mechanical controls such as chevrons, close affordances, file-type glyphs, and backend-provided command icons where the exact symbol is local to that control.
 
 The retired Electrobun proof of concept remains useful for product direction, but native SwiftUI should not clone its Tailwind gradients or CSS implementation. Prefer system-adaptive macOS materials and standard controls. Where current SDKs expose Liquid Glass APIs, use them behind availability checks for custom app-specific surfaces; on the macOS 14 deployment target, fall back to SwiftUI materials such as `.regularMaterial` and `.thinMaterial`.
 
@@ -362,7 +365,7 @@ Rules:
 - Only one primary button per visual group.
 - Loading states keep width fixed.
 - Disabled opacity is `40%`.
-- Prefer lucide icons inside icon buttons.
+- Prefer `L5IconView` for semantic product icons and native SF Symbols for mechanical control glyphs.
 - Use text or icon+text buttons only for clear commands.
 
 ## 20. Inputs

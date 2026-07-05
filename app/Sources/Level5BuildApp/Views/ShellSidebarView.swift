@@ -18,7 +18,11 @@ struct ShellSidebarView: View {
                     .listRowInsets(EdgeInsets(top: L5Spacing.x3, leading: L5Spacing.x3, bottom: L5Spacing.x3, trailing: L5Spacing.x3))
 
                 Button(action: newChatAction) {
-                    Label("New Chat", systemImage: "square.and.pencil")
+                    Label {
+                        Text("New Chat")
+                    } icon: {
+                        L5IconView(.newChat)
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -47,7 +51,11 @@ struct ShellSidebarView: View {
 
                 if hasMoreSessions {
                     Button(action: loadMoreSessionsAction) {
-                        Label("Load More", systemImage: "ellipsis.circle")
+                        Label {
+                            Text("Load More")
+                        } icon: {
+                            L5IconView(.loadMore)
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -55,7 +63,11 @@ struct ShellSidebarView: View {
 
             Section {
                 Button {} label: {
-                    Label("Settings", systemImage: "gearshape")
+                    Label {
+                        Text("Settings")
+                    } icon: {
+                        L5IconView(.settings)
+                    }
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -121,7 +133,7 @@ private struct SidebarSessionRow: View {
     var body: some View {
         Button(action: selectAction) {
             HStack(spacing: L5Spacing.x3) {
-                Image(systemName: "bubble.left")
+                L5IconView(.chat)
                     .foregroundStyle(isActive ? L5Color.accent : .secondary)
                     .frame(width: L5Size.icon)
 
@@ -155,17 +167,14 @@ private struct SidebarSessionRow: View {
     @ViewBuilder
     private var sessionStateIndicator: some View {
         if session.isAwaitingPermission {
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 11, weight: .semibold))
+            L5IconView(.awaitingPermission, size: 11)
                 .foregroundStyle(L5Color.warning)
         } else if session.isRunning {
-            Image(systemName: "circle.dotted")
-                .font(.system(size: 11, weight: .semibold))
+            L5IconView(.running, size: 11)
                 .foregroundStyle(L5Color.accent)
                 .symbolEffect(.pulse, options: .repeating, isActive: true)
         } else if session.hasCompletedTurn {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 11, weight: .semibold))
+            L5IconView(.completed, size: 11)
                 .foregroundStyle(Color(nsColor: .systemGreen))
         } else {
             Color.clear

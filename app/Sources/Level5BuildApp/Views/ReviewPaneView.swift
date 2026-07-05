@@ -74,7 +74,7 @@ struct ReviewPaneView: View {
                 }
 
                 Button(action: refreshAction) {
-                    Image(systemName: "arrow.clockwise")
+                    L5IconView(.refresh)
                         .frame(width: L5Size.action, height: L5Size.action)
                 }
                 .buttonStyle(.plain)

@@ -497,19 +497,19 @@ private struct TranscriptRow: View {
     private var roleIcon: some View {
         switch item.role {
         case .user:
-            Image(systemName: "person.fill")
+            L5IconView(.user)
                 .foregroundStyle(.white)
         case .agent:
-            Image(systemName: "sparkles")
+            L5IconView(.agent)
                 .foregroundStyle(.white)
         case .tool:
-            Image(systemName: "wrench.and.screwdriver")
+            L5IconView(.tool)
                 .foregroundStyle(.secondary)
         case .status:
-            Image(systemName: "info")
+            L5IconView(.status)
                 .foregroundStyle(.secondary)
         case .error:
-            Image(systemName: "exclamationmark.triangle.fill")
+            L5IconView(.error)
                 .foregroundStyle(.white)
         }
     }

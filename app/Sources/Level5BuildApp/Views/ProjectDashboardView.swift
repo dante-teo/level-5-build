@@ -62,7 +62,7 @@ struct ProjectDashboardView: View {
             Spacer()
 
             Button(action: refreshAction) {
-                Image(systemName: "gearshape")
+                L5IconView(.refresh)
                     .frame(width: L5Size.action, height: L5Size.action)
             }
             .buttonStyle(.plain)
@@ -70,7 +70,7 @@ struct ProjectDashboardView: View {
 
             if let closeAction {
                 Button(action: closeAction) {
-                    Image(systemName: "xmark")
+                    L5IconView(.close)
                         .frame(width: L5Size.action, height: L5Size.action)
                 }
                 .buttonStyle(.plain)
@@ -81,7 +81,7 @@ struct ProjectDashboardView: View {
 
     private var environmentRows: some View {
         VStack(alignment: .leading, spacing: L5Spacing.x4) {
-            EnvironmentRow(icon: "plus.rectangle", title: "Changes") {
+            EnvironmentRow(icon: .workingTreeChanges, title: "Changes") {
                 HStack(spacing: L5Spacing.x2) {
                     if state.gitStatus.isAvailable {
                         Text("+\(state.gitStatus.additions.formatted())")
@@ -96,22 +96,22 @@ struct ProjectDashboardView: View {
                 .font(L5Font.body.weight(.semibold))
             }
 
-            EnvironmentRow(icon: "laptopcomputer", title: "Local") {
+            EnvironmentRow(icon: .local, title: "Local") {
                 Image(systemName: "chevron.down")
                     .font(L5Font.caption)
                     .foregroundStyle(L5Color.textMuted)
             }
 
-            EnvironmentRow(icon: "point.3.connected.trianglepath.dotted", title: branchTitle) {
+            EnvironmentRow(icon: .branch, title: branchTitle) {
                 Image(systemName: "chevron.down")
                     .font(L5Font.caption)
                     .foregroundStyle(L5Color.textMuted)
             }
             .help(state.gitStatus.root ?? state.projectPath)
 
-            EnvironmentRow(icon: "smallcircle.filled.circle", title: "Commit or push")
+            EnvironmentRow(icon: .commit, title: "Commit or push")
 
-            EnvironmentRow(icon: "globe", title: "Create pull request")
+            EnvironmentRow(icon: .pullRequest, title: "Create pull request")
         }
     }
 
@@ -134,7 +134,7 @@ struct ProjectDashboardView: View {
                 VStack(alignment: .leading, spacing: L5Spacing.x3) {
                     ForEach(state.references) { reference in
                         EnvironmentRow(
-                            icon: reference.kind == .web ? "link" : "doc",
+                            icon: reference.kind == .web ? .sourceWeb : .sourceDocument,
                             title: reference.title
                         ) {
                             EmptyView()
@@ -195,11 +195,11 @@ struct ProjectDashboardView: View {
 }
 
 private struct EnvironmentRow<Trailing: View>: View {
-    let icon: String
+    let icon: L5Icon
     let title: String
     @ViewBuilder var trailing: Trailing
 
-    init(icon: String, title: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
+    init(icon: L5Icon, title: String, @ViewBuilder trailing: () -> Trailing = { EmptyView() }) {
         self.icon = icon
         self.title = title
         self.trailing = trailing()
@@ -207,8 +207,7 @@ private struct EnvironmentRow<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: L5Spacing.x4) {
-            Image(systemName: icon)
-                .font(L5Font.h3)
+            L5IconView(icon, size: L5Size.icon)
                 .foregroundStyle(L5Color.textPrimary)
                 .frame(width: L5Size.control, alignment: .center)
 

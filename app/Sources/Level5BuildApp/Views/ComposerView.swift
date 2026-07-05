@@ -270,7 +270,7 @@ private struct PlanChip: View {
             showsPopover.toggle()
         } label: {
             HStack(spacing: L5Spacing.x2) {
-                Image(systemName: plan.isComplete ? "checkmark.circle.fill" : "circle.dotted")
+                L5IconView(plan.isComplete ? .completed : .running)
                     .symbolEffect(.pulse, options: .repeating, isActive: isRunning && !plan.isComplete)
                     .foregroundStyle(plan.isComplete ? Color(nsColor: .systemGreen) : L5Color.accent)
 
@@ -306,7 +306,7 @@ private struct PlanPopover: View {
             VStack(alignment: .leading, spacing: L5Spacing.x2) {
                 ForEach(plan.entries) { entry in
                     HStack(alignment: .top, spacing: L5Spacing.x2) {
-                        Image(systemName: icon(for: entry.status))
+                        planEntryIcon(for: entry.status)
                             .foregroundStyle(color(for: entry.status))
                             .frame(width: L5Size.icon)
 
@@ -322,13 +322,21 @@ private struct PlanPopover: View {
         .frame(width: 340, alignment: .leading)
     }
 
-    private func icon(for status: String) -> String {
+    @ViewBuilder
+    private func planEntryIcon(for status: String) -> some View {
         switch AgentTranscriptStatusNormalizer.normalized(status) {
-        case "completed": "checkmark.circle.fill"
-        case "in_progress": "circle.dotted"
-        case "failed": "xmark.circle.fill"
-        case "cancelled": "minus.circle.fill"
-        default: "circle"
+        case "completed":
+            L5IconView(.completed)
+        case "in_progress":
+            L5IconView(.running)
+        case "failed":
+            L5IconView(.error)
+        case "cancelled":
+            Image(systemName: "minus.circle.fill")
+                .symbolRenderingMode(.monochrome)
+        default:
+            Image(systemName: "circle")
+                .symbolRenderingMode(.monochrome)
         }
     }
 
@@ -468,7 +476,7 @@ private struct RuntimeStatusView: View {
 
     var body: some View {
         HStack(spacing: L5Spacing.x2) {
-            Image(systemName: "exclamationmark.triangle")
+            L5IconView(.error)
                 .foregroundStyle(.secondary)
             Text(message)
                 .font(L5Font.caption)

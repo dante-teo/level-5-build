@@ -56,8 +56,7 @@ jobs:
           fi
 
           if [[ "$version" != "$project_version" ]]; then
-            echo "error: $PROJECT_FILE MARKETING_VERSION is $project_version, but release version is $version" >&2
-            exit 1
+            echo "note: $PROJECT_FILE MARKETING_VERSION is $project_version, but release version is $version; this build will use $version and a follow-up commit will sync $PROJECT_FILE on main"
           fi
 
           prerelease="false"
@@ -121,6 +120,9 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Apply release version to project.yml
+        run: ./script/sync_native_version.sh "${{ steps.meta.outputs.version }}"
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml --project .
@@ -336,6 +338,34 @@ jobs:
 
           git -C homebrew-tap commit -m "Update level5-build to ${{ steps.meta.outputs.version }}"
           git -C homebrew-tap push
+
+      - name: Sync committed version to main
+        if: steps.meta.outputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.meta.outputs.version }}"
+          worktree_path="$RUNNER_TEMP/level5-main-sync"
+
+          cleanup() {
+            git worktree remove "$worktree_path" --force 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          git fetch origin main
+          git worktree add "$worktree_path" origin/main
+
+          (cd "$worktree_path" && ./script/sync_native_version.sh "$version")
+
+          if git -C "$worktree_path" diff --quiet -- app/project.yml; then
+            echo "main is already in sync with $version"
+          else
+            git -C "$worktree_path" config user.name "github-actions[bot]"
+            git -C "$worktree_path" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C "$worktree_path" add app/project.yml
+            git -C "$worktree_path" commit -m "Sync native app version to $version [skip ci]"
+            git -C "$worktree_path" push origin HEAD:main
+          fi
 
       - name: Delete temporary keychain
         if: always()

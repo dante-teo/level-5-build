@@ -26,7 +26,9 @@ Release tags must match one of these formats:
 - Stable: `vMAJOR.MINOR.PATCH`
 - Prerelease: `vMAJOR.MINOR.PATCH-IDENTIFIER`
 
-Before tagging, update the native app version from the repo root:
+The pushed tag is authoritative: the release workflow applies the tag's version to its own checkout of `app/project.yml` before building (via `./script/sync_native_version.sh`), regardless of what's committed, so the artifact always embeds the tagged version. After a successful non-dry-run release, the workflow also pushes a follow-up commit to `main` (`Sync native app version to X.Y.Z [skip ci]`) if the committed `app/project.yml` was out of sync, so history stays consistent without a required manual step.
+
+Manually bumping the version before tagging is now optional, but still recommended so that local Xcode builds off `main` show a sensible version in the meantime:
 
 ```bash
 ./script/sync_native_version.sh 1.0.0
@@ -39,11 +41,24 @@ The script updates only `app/project.yml`:
 
 The first native release is `MARKETING_VERSION=1.0.0` and `CURRENT_PROJECT_VERSION=1`.
 
-The release workflow fails if the tag version does not match the committed `MARKETING_VERSION`. It does not mutate source after a tag is pushed.
+**Caveat:** if `main` has branch protection that requires PR review or otherwise blocks direct pushes, the workflow's sync-back push will fail. The release itself (build, sign, notarize, GitHub Release, Homebrew cask) still succeeds since that push happens last, but `app/project.yml` on `main` won't be updated automatically — in that case, keep bumping the version manually before tagging.
+
+### Known limitations of the sync-back step
+
+- **No ancestry/monotonicity check.** The sync-back step assumes every tag is cut from `main`'s current tip, which matches this project's tag-from-tip flow. It does not verify the tag's commit descends from `main` or that its version is newer than what's committed. A tag cut from an older commit (e.g. a future hotfix/maintenance-branch workflow) would push a version *regression* to `main`. Not a concern today, but worth revisiting before adopting maintenance branches.
+- **Not gated on prerelease.** Unlike the Homebrew cask steps, the sync-back step runs for prerelease tags too. Pushing `v1.0.0-beta.1` will sync that literal prerelease string onto `main`'s committed `MARKETING_VERSION` until the next stable tag corrects it.
+- **`CURRENT_PROJECT_VERSION` is recomputed independently, not reused.** The sync-back step reruns `sync_native_version.sh` against a fresh `main` checkout rather than reusing the value actually embedded in the build. If `main` moves between the tag push and this step running (e.g. a rapid follow-up release, or someone bumping `app/project.yml` on `main` mid-build), the `CURRENT_PROJECT_VERSION` pushed to `main` isn't guaranteed to match what was actually shipped in that release's artifact.
 
 ## Publishing
 
-For a stable release:
+The minimal path for a stable release is just tagging and pushing:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow syncs `app/project.yml` to `1.0.0` for the build and, on success, pushes a follow-up commit to `main` to match. If you'd rather commit the bump yourself (e.g. `main` is branch-protected, see the caveat above), do it before tagging:
 
 ```bash
 ./script/sync_native_version.sh 1.0.0

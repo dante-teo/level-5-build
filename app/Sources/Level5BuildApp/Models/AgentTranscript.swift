@@ -119,7 +119,17 @@ struct AgentTranscriptState: Equatable, Sendable {
     private var nextLocalMessageId = 0
     fileprivate var manualToolExpansion: [String: Bool] = [:]
 
-    var renderableItems: [AgentTranscriptItem] { items }
+    /// `.status` rows (runtime diagnostics, stderr, permission notes,
+    /// notable stop reasons, ...) are internal bookkeeping, not something a
+    /// user sending a chat message wants cluttering their transcript as a
+    /// "Status" bubble, so they're recorded in `items` (and persisted, for
+    /// anything that inspects raw state) but never rendered.
+    var renderableItems: [AgentTranscriptItem] {
+        items.filter { item in
+            if case .status = item.kind { return false }
+            return true
+        }
+    }
 
     mutating func apply(_ event: AgentTranscriptEvent) {
         AgentTranscriptReducer.reduce(event, into: &self)

@@ -347,8 +347,8 @@ final class AgentSessionModel {
 
     func start() {
         guard backendKind == .acpMock || backendKind == .devin else { return }
+        hydrateAllPersistedSessions()
         let key = currentSidebarProjectKey
-        hydratePersistedSessions(projectKey: key)
         Task {
             await ensureConnected(projectKey: key)
             if isNewSession {
@@ -357,16 +357,21 @@ final class AgentSessionModel {
         }
     }
 
-    /// Loads durably cached session rows for `projectKey` into the sidebar.
-    /// This is the sidebar's only source of session discovery: there is no
-    /// backend `session/list` call anywhere in this app, so a session this
-    /// app never sent through (another client, another machine, or one lost
-    /// to a crash before its first persisted write) is permanently invisible
+    /// Loads every durably cached session row, across every project, into
+    /// the sidebar. The sidebar is a single global list of every session
+    /// this app has ever sent into: it is independent of whichever project
+    /// is currently selected for the *next* new chat, so selecting a
+    /// different project only changes where a new session would be
+    /// created, never which existing sessions are visible. This is also the
+    /// sidebar's only source of session discovery: there is no backend
+    /// `session/list` call anywhere in this app, so a session this app
+    /// never sent through (another client, another machine, or one lost to
+    /// a crash before its first persisted write) is permanently invisible
     /// here. `upsert` is still the write-through every live update goes
     /// through afterward, so those rows stay current as the session is used.
-    private func hydratePersistedSessions(projectKey: String) {
+    private func hydrateAllPersistedSessions() {
         guard let persistenceStore else { return }
-        guard let rows = try? persistenceStore.listSessionRows(projectKey: projectKey) else { return }
+        guard let rows = try? persistenceStore.listAllSessionRows() else { return }
         for row in rows {
             sessionProjectKeyBySessionId[row.sessionId] = row.projectKey
             // For Devin, a project's own key *is* its normalized cwd (see
@@ -450,16 +455,18 @@ final class AgentSessionModel {
     }
 
     /// Devin spawns one process per project, so switching the "new chat"
-    /// project needs its own sidebar rows hydrated from the durable cache
-    /// (there is no backend list to pull them from — see
-    /// `hydratePersistedSessions`) and its own live agent connection
-    /// readied ahead of time (see `primeComposerSession`). Mock has a
-    /// single shared server/project key that's already hydrated and
-    /// connected up front, so this is a no-op there.
+    /// project needs its own live agent connection readied ahead of time
+    /// (see `primeComposerSession`). The sidebar itself is already a global
+    /// list hydrated once up front (see `hydrateAllPersistedSessions`), but
+    /// re-hydrating here too is a cheap, idempotent way to pick up any rows
+    /// written since (e.g. this same project's own earlier session, if this
+    /// method runs before `start()` has). Mock has a single shared
+    /// server/project key that's already connected up front, so this is a
+    /// no-op there.
     private func connectAndPrimeComposerSessionForSelectedProjectIfNeeded() {
         guard backendKind == .devin, isNewSession else { return }
         let key = projectKey(for: selectedProjectPath)
-        hydratePersistedSessions(projectKey: key)
+        hydrateAllPersistedSessions()
         if clients[key] != nil {
             // A different project may have left a stale in-flight status
             // message (e.g. "Sending...") behind when it lost the
@@ -1151,6 +1158,7 @@ final class AgentSessionModel {
             appendStatus(title: "Diagnostic", text: diagnostic.message, to: activeSessionId)
         case let .stderr(line):
             guard isActiveProjectKey(projectKey) else { return }
+            guard AcpRuntimeLogLine.isWorthRecording(line) else { return }
             appendStatus(title: "Runtime stderr", text: line, to: activeSessionId)
         case let .processExit(exit):
             let message = "Agent runtime disconnected: status \(exit.status)"

@@ -708,7 +708,6 @@ struct AgentSessionModelTests {
         #expect(model.isActiveSessionRunning == false)
         #expect(model.activeQueue.isEmpty)
         #expect(model.canEditComposer)
-        #expect(model.transcript.contains { $0.statusText?.contains("cancelled") == true })
 
         client.releaseNextPrompt()
     }
@@ -981,8 +980,8 @@ struct AgentSessionModelTests {
         #expect(model.canEditComposer)
     }
 
-    @Test("Approve for me auto-approves mock permission with status note")
-    func approveForMeAutoApprovesMockPermissionWithStatusNote() async throws {
+    @Test("Approve for me auto-approves mock permission silently")
+    func approveForMeAutoApprovesMockPermissionSilently() async throws {
         let client = FakeAgentSessionClient()
         let model = AgentSessionModel(
             backendKind: .acpMock,
@@ -999,7 +998,7 @@ struct AgentSessionModelTests {
 
         #expect(client.permissionResponsesSnapshot.first?.optionId == "allow-once")
         #expect(model.activePermissionRequest == nil)
-        #expect(model.transcript.contains { $0.statusText?.contains("Approve for me") == true })
+        #expect(model.transcript.contains { $0.statusText?.contains("Approve for me") == true } == false)
     }
 
     @Test("Full access auto-approves silently")
@@ -1423,8 +1422,8 @@ struct AgentSessionModelTests {
         try await waitUntil { model.sessions.first { $0.sessionId == sessionAId }?.isRunning == false }
     }
 
-    @Test("Selecting a project hydrates its own persisted sessions without evicting other projects' rows")
-    func selectingProjectHydratesItsOwnPersistedSessionsForDevin() async throws {
+    @Test("The sidebar shows every project's persisted sessions at once, regardless of which project is selected")
+    func sidebarShowsEveryProjectsSessionsRegardlessOfSelection() async throws {
         let fixture = try PersistenceFixture()
         let pathA = RecentProjectStore.normalizedPath("/repo/project-a")
         let pathB = RecentProjectStore.normalizedPath("/repo/project-b")
@@ -1446,13 +1445,19 @@ struct AgentSessionModelTests {
         let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
         let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
 
-        model.selectProject(projectA)
-        #expect(model.sessions.map(\.sessionId) == ["a1"])
+        // Neither project has been selected yet; the sidebar is still a
+        // global list, not scoped to the (currently unset) composer
+        // project.
+        model.start()
+        #expect(Set(model.sessions.map(\.sessionId)) == ["a1", "b1"])
 
-        // Switching the "new chat" project to B hydrates B's own persisted
-        // sessions too, but must not evict A's row: with true multi-project
-        // concurrency, A's process (and any work happening there) is still
-        // alive.
+        // Selecting A (or B) only changes where the *next* new chat would
+        // be created; it must not evict the other project's row, since
+        // with true multi-project concurrency that project's process (and
+        // any work happening there) is still alive.
+        model.selectProject(projectA)
+        #expect(Set(model.sessions.map(\.sessionId)) == ["a1", "b1"])
+
         model.selectProject(projectB)
         #expect(Set(model.sessions.map(\.sessionId)) == ["a1", "b1"])
     }
@@ -1737,12 +1742,12 @@ struct AgentSessionModelTests {
         let model = AgentSessionModel(backendKind: .acpMock, makeClient: { client }, persistenceStore: fixture.store)
 
         model.selectSession("s1")
-        #expect(try fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).map(\.sessionId) == ["s1"])
+        #expect(try fixture.store.listAllSessionRows().map(\.sessionId) == ["s1"])
 
         model.deleteSession("s1")
 
         try await waitUntil("session row removed") {
-            (try? fixture.store.listSessionRows(projectKey: PersistenceFixture.sharedProjectKey).isEmpty) == true
+            (try? fixture.store.listAllSessionRows().isEmpty) == true
         }
     }
 

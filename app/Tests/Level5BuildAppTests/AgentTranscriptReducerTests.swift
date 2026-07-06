@@ -176,8 +176,8 @@ struct AgentTranscriptReducerTests {
         #expect(state.renderableItems.isEmpty)
     }
 
-    @Test("Notable stop reasons render compact status rows")
-    func notableStopsRender() {
+    @Test("Notable stop reasons are recorded but never rendered as status rows")
+    func notableStopsAreRecordedButNotRendered() {
         var state = AgentTranscriptState()
 
         state.apply(.stopReason("cancelled"))
@@ -185,12 +185,29 @@ struct AgentTranscriptReducerTests {
         state.apply(.stopReason("max_tokens"))
 
         #expect(state.stopReasons == ["cancelled", "refusal", "max_tokens"])
-        #expect(state.renderableItems.count == 3)
-        #expect(state.renderableItems.map(\.statusText) == [
+        #expect(state.items.count == 3)
+        #expect(state.items.map(\.statusText) == [
             "Agent turn ended: cancelled.",
             "Agent turn ended: refusal.",
             "Agent turn ended: max_tokens."
         ])
+        #expect(state.renderableItems.isEmpty)
+    }
+
+    @Test("Status rows are never rendered, regardless of source")
+    func statusRowsAreNeverRendered() {
+        var state = AgentTranscriptState()
+
+        state.apply(.status(title: "Runtime", text: "Connecting"))
+        state.apply(.messageChunk(role: .agent, messageId: "m1", text: "Hello"))
+        state.apply(.error(title: "Prompt failed", text: "boom"))
+
+        #expect(state.items.count == 3)
+        #expect(state.renderableItems.map(\.messageText) == ["Hello", nil])
+        #expect(state.renderableItems.allSatisfy { item in
+            if case .status = item.kind { return false }
+            return true
+        })
     }
 }
 

@@ -16,33 +16,31 @@ struct SessionPersistenceStoreTests {
         #expect(tablesExist)
     }
 
-    @Test("Session rows round-trip through upsert and list, scoped by project key")
-    func sessionRowRoundTrip() throws {
+    @Test("listAllSessionRows returns sessions from every project, newest observed first")
+    func listAllSessionRowsSpansEveryProject() throws {
         let fixture = try StoreFixture()
-        let row = PersistedSessionRow(
+        let older = PersistedSessionRow(
             sessionId: "s1",
             projectKey: "/tmp/project",
             backend: "devin",
             title: "Fix bug",
             detail: "project - /tmp/project",
-            providerUpdatedAt: 100,
-            observedAt: 200,
+            observedAt: 100,
             createdAt: 50
         )
-
-        try fixture.store.upsertSessionRow(row)
-        let otherProjectRow = PersistedSessionRow(
+        let newer = PersistedSessionRow(
             sessionId: "s2",
             projectKey: "/tmp/other",
             backend: "devin",
             title: "Other",
             detail: "other",
+            observedAt: 200,
             createdAt: 10
         )
-        try fixture.store.upsertSessionRow(otherProjectRow)
+        try fixture.store.upsertSessionRow(older)
+        try fixture.store.upsertSessionRow(newer)
 
-        #expect(try fixture.store.listSessionRows(projectKey: "/tmp/project") == [row])
-        #expect(try fixture.store.listSessionRows(projectKey: "/tmp/other") == [otherProjectRow])
+        #expect(try fixture.store.listAllSessionRows() == [newer, older])
     }
 
     @Test("Upserting a session row updates fields in place without duplicating")
@@ -63,7 +61,7 @@ struct SessionPersistenceStoreTests {
         updated.observedAt = 500
         try fixture.store.upsertSessionRow(updated)
 
-        let rows = try fixture.store.listSessionRows(projectKey: "/tmp/project")
+        let rows = try fixture.store.listAllSessionRows()
         #expect(rows.count == 1)
         #expect(rows.first?.title == "Fix bug (updated)")
         #expect(rows.first?.observedAt == 500)
@@ -76,7 +74,7 @@ struct SessionPersistenceStoreTests {
         try fixture.store.upsertSessionRow(.init(sessionId: "old", projectKey: "/tmp/p", backend: "devin", title: "Old", detail: "d", observedAt: 1, createdAt: 1))
         try fixture.store.upsertSessionRow(.init(sessionId: "new", projectKey: "/tmp/p", backend: "devin", title: "New", detail: "d", observedAt: 2, createdAt: 1))
 
-        let rows = try fixture.store.listSessionRows(projectKey: "/tmp/p")
+        let rows = try fixture.store.listAllSessionRows()
         #expect(rows.map(\.sessionId) == ["new", "old"])
     }
 
@@ -128,7 +126,7 @@ struct SessionPersistenceStoreTests {
 
         try fixture.store.deleteSession(sessionId: "s1")
 
-        #expect(try fixture.store.listSessionRows(projectKey: "/tmp/p").isEmpty)
+        #expect(try fixture.store.listAllSessionRows().isEmpty)
         #expect(try fixture.store.fetchTranscriptItems(sessionId: "s1").isEmpty)
         #expect(try fixture.store.fetchTranscriptState(sessionId: "s1") == nil)
     }
@@ -188,7 +186,7 @@ struct SessionPersistenceStoreTests {
 
         #expect(try fixture.store.hiddenSessionIds() == Set(["s1"]))
         // The hidden marker is independent of the (now-deleted) cache row.
-        #expect(try fixture.store.listSessionRows(projectKey: "/tmp/p").isEmpty)
+        #expect(try fixture.store.listAllSessionRows().isEmpty)
     }
 
     @Test("Marking the same session hidden twice does not duplicate or throw")

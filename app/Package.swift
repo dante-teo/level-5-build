@@ -24,7 +24,8 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.5.0"),
         .package(url: "https://github.com/smittytone/HighlighterSwift.git", from: "3.1.0"),
-        .package(url: "https://github.com/siteline/swiftui-introspect", from: "26.0.0")
+        .package(url: "https://github.com/siteline/swiftui-introspect", from: "26.0.0"),
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.1")
     ],
     targets: [
         .executableTarget(
@@ -33,7 +34,8 @@ let package = Package(
                 "Level5Core",
                 "Level5Design",
                 .product(name: "Highlighter", package: "HighlighterSwift"),
-                .product(name: "SwiftUIIntrospect", package: "swiftui-introspect")
+                .product(name: "SwiftUIIntrospect", package: "swiftui-introspect"),
+                .product(name: "MarkdownUI", package: "swift-markdown-ui")
             ],
             path: "Sources/Level5BuildApp",
             resources: [

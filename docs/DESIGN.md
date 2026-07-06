@@ -228,7 +228,7 @@ Rules:
 - The text input starts at one line, grows with content, and caps at 12 text lines before internal scrolling.
 - Placeholder text is muted and concise.
 - Send is the primary action while idle. During an active agent turn, the same circular button becomes an enabled Stop action using `stop.fill` with native help text `Stop agent turn`.
-- Stop immediately restores composer editing for that selected session, sends ACP `session/cancel`, cancels any pending permission request with ACP's cancelled outcome, clears queued prompts for that same session, preserves already-streamed transcript rows, suppresses stale late output from that cancelled turn, and appends a compact cancelled status.
+- Stop immediately restores composer editing for that selected session, sends ACP `session/cancel`, cancels any pending permission request with ACP's cancelled outcome, clears queued prompts for that same session, preserves already-streamed transcript rows, suppresses stale late output from that cancelled turn, and records a compact cancelled status (never rendered as a transcript row).
 - If the user sends again immediately after Stop, stale output must remain suppressed until the backend echoes the new prompt's user message so cancelled-turn output does not appear as part of the new turn.
 - In the empty-chat state, the composer footer shows `Choose project` when no project is selected, or the selected folder name when project context exists.
 - The project popover supports search, recent project folders, `New project`, and `Don't work in a project`.
@@ -251,9 +251,10 @@ Rules:
 
 - Spacing between messages is `20`.
 - Timestamps and metadata use caption styling.
-- Tool calls, statuses, errors, and notable stop reasons appear as compact operational transcript rows.
+- Tool calls and errors appear as compact operational transcript rows. Statuses (runtime diagnostics, raw stderr, permission audit notes, notable stop reasons like `cancelled`/`refusal`/`max_tokens`) are never shown as transcript rows, regardless of source — they exist only as internal/persisted bookkeeping.
 - Tool rows auto-expand while `in_progress`, auto-collapse when `completed` unless manually expanded, and remain expanded when `failed`.
 - Expanded tool rows show normalized status, kind, and readable detail text. Collapsed rows keep the title and a one-line detail preview.
+- Chat message bodies (user and agent) render Markdown — bold/italic, inline code, links, lists, headings, blockquotes, and code blocks — via the `L5MarkdownTheme` (`MarkdownUI` theme built from `L5Font`/`L5Color`/`L5Spacing` tokens), not raw text, so authored formatting displays instead of literal `**`/backtick/`-` syntax.
 - Never show raw JSON, schema payloads, or ACP identifiers.
 - Avoid decorative message chrome.
 - When the composer visually overlays the tail of the scroll layer, reserve matching space with real layout measurement rather than a static padding guess.

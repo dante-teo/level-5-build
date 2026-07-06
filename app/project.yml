@@ -23,6 +23,9 @@ packages:
   SwiftUIIntrospect:
     url: https://github.com/siteline/swiftui-introspect
     from: 26.0.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.1
 targets:
   Level5Core:
     type: framework
@@ -90,6 +93,8 @@ targets:
         product: Highlighter
       - package: SwiftUIIntrospect
         product: SwiftUIIntrospect
+      - package: MarkdownUI
+        product: MarkdownUI
     info:
       path: Generated/Info.plist
       properties:

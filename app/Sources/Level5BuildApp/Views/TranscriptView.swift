@@ -1,5 +1,6 @@
 import AppKit
 import Level5Design
+import MarkdownUI
 import SwiftUI
 import SwiftUIIntrospect
 
@@ -469,9 +470,8 @@ private struct TranscriptRow: View {
                         }
                     }
                 } else {
-                    Text(item.renderText)
-                        .font(L5Font.body)
-                        .foregroundStyle(L5Color.textPrimary)
+                    Markdown(item.renderText)
+                        .markdownTheme(.level5)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }

@@ -93,17 +93,19 @@ public final class SessionPersistenceStore: Sendable {
 
     // MARK: - Sessions
 
-    public func listSessionRows(projectKey: String) throws -> [PersistedSessionRow] {
+    /// Every known session across every project, newest observed first. The
+    /// sidebar is a single global list independent of whichever project is
+    /// currently selected for the next new chat, so this is its only source
+    /// of session discovery (see `AgentSessionModel.hydrateAllPersistedSessions`).
+    public func listAllSessionRows() throws -> [PersistedSessionRow] {
         try databaseQueue.read { db in
             let rows = try Row.fetchAll(
                 db,
                 sql: """
                 SELECT sessionId, projectKey, backend, title, detail, providerUpdatedAt, observedAt, createdAt
                 FROM sessions
-                WHERE projectKey = ?
                 ORDER BY observedAt DESC
-                """,
-                arguments: [projectKey]
+                """
             )
             return rows.compactMap(Self.sessionRow(from:))
         }

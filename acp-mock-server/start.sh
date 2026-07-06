@@ -16,7 +16,7 @@ else
 fi
 
 if [[ "${needs_build}" -eq 1 ]]; then
-	pnpm run build >&2
+	bun run build >&2
 fi
 
 exec node dist/src/index.js

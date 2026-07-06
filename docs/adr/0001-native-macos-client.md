@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0002](0002-revert-to-electrobun.md).
 
-Current implementation note: the scaffold migration described below has happened. `app/` is now the native macOS app path, and the Electrobun proof of concept lives under `legacy/electrobun-app/` as reference-only material. The native app shell is currently local-only; ACP runtime is implemented (mock and real Devin backends), durable local persistence under `~/.level5build` via SQLite/GRDB is implemented for recent projects, sessions, and transcript caches, and the native Review pane is implemented as inspect-only Git working-tree review (see `docs/ARCHITECTURE.md`). Native release automation now builds signed and notarized DMG artifacts and updates the Homebrew cask; mutating review actions, production-grade retention/eviction, and cross-device sync remain future scope.
+Historical implementation note: the scaffold migration described below happened — for a time, `app/` was the native macOS app path (Swift/SwiftUI/XcodeGen/SwiftPM/GRDB) and the Electrobun proof of concept lived under `legacy/electrobun-app/` as reference-only material. ACP runtime (mock and real Devin backends), durable local persistence under `~/.level5build` via SQLite/GRDB, an inspect-only native Review pane, and signed/notarized DMG release automation with Homebrew cask updates were all implemented natively during this period. Per ADR 0002, that native app was later deleted entirely and `legacy/electrobun-app/` was promoted back to `app/`; none of the Swift/SwiftUI/GRDB implementation described below exists in the current codebase. This ADR is kept for historical context only.
 
 ## Context
 

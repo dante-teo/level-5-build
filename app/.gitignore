@@ -1,4 +1,7 @@
-.build/
-DerivedData/
-Generated/
-*.xcodeproj/
+node_modules/
+build/
+dist/
+artifacts/
+*.tsbuildinfo
+# Built by scripts/build-macos-effects.sh; see src/bun/macWindowEffects.ts
+src/bun/libMacWindowEffects.dylib

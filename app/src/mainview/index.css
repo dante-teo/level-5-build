@@ -1,0 +1,264 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@font-face {
+	font-family: "Barlow";
+	src: url("./assets/fonts/Barlow-Regular.otf") format("opentype");
+	font-display: swap;
+	font-style: normal;
+	font-weight: 400;
+}
+
+@font-face {
+	font-family: "Barlow";
+	src: url("./assets/fonts/Barlow-Medium.otf") format("opentype");
+	font-display: swap;
+	font-style: normal;
+	font-weight: 500;
+}
+
+@font-face {
+	font-family: "Barlow";
+	src: url("./assets/fonts/Barlow-SemiBold.otf") format("opentype");
+	font-display: swap;
+	font-style: normal;
+	font-weight: 600;
+}
+
+@font-face {
+	font-family: "Barlow";
+	src: url("./assets/fonts/Barlow-Bold.otf") format("opentype");
+	font-display: swap;
+	font-style: normal;
+	font-weight: 700;
+}
+
+@font-face {
+	font-family: "Departure Mono";
+	src: url("./assets/fonts/DepartureMono-Regular.otf") format("opentype");
+	font-display: swap;
+	font-style: normal;
+	font-weight: 400;
+}
+
+:root {
+	--radius: 0.625rem;
+
+	/* Level5 design tokens — translated 1:1 from app/Sources/Level5Design/L5Color.swift (light) */
+	--l5-background: #fafafc;
+	--l5-secondary-background: #f4f4f8;
+	--l5-surface: rgba(255, 255, 255, 0.72);
+	--l5-elevated-surface: rgba(255, 255, 255, 0.86);
+	--l5-text-primary: #171717;
+	--l5-text-secondary: #6b7280;
+	--l5-text-muted: #9ca3af;
+	--l5-border: rgba(0, 0, 0, 0.08);
+	--l5-accent: #3f5cf5;
+	--l5-accent-foreground: #ffffff;
+	--l5-selected-surface: rgba(63, 92, 245, 0.1);
+	--l5-success: #16a34a;
+	--l5-warning: #f59e0b;
+	--l5-danger: #dc2626;
+
+	/* shadcn-compatible aliases so existing utility classes keep resolving */
+	--background: var(--l5-background);
+	--foreground: var(--l5-text-primary);
+	--card: var(--l5-elevated-surface);
+	--card-foreground: var(--l5-text-primary);
+	--popover: var(--l5-elevated-surface);
+	--popover-foreground: var(--l5-text-primary);
+	--primary: var(--l5-accent);
+	--primary-foreground: var(--l5-accent-foreground);
+	--secondary: var(--l5-secondary-background);
+	--secondary-foreground: var(--l5-text-primary);
+	--muted: var(--l5-secondary-background);
+	--muted-foreground: var(--l5-text-secondary);
+	--accent: var(--l5-selected-surface);
+	--accent-foreground: var(--l5-text-primary);
+	--destructive: var(--l5-danger);
+	--border: var(--l5-border);
+	--input: var(--l5-border);
+	--ring: var(--l5-accent);
+}
+
+.dark {
+	/* Level5 design tokens — translated 1:1 from L5Color.swift (dark) */
+	--l5-background: #131416;
+	--l5-secondary-background: #1c1d20;
+	--l5-surface: rgba(255, 255, 255, 0.08);
+	--l5-elevated-surface: rgba(255, 255, 255, 0.12);
+	--l5-text-primary: #f0f0f0;
+	--l5-text-secondary: #b3b3b3;
+	--l5-text-muted: #858585;
+	--l5-border: rgba(255, 255, 255, 0.1);
+	--l5-accent: #6f8dff;
+	--l5-accent-foreground: #0b0e1a;
+	--l5-selected-surface: rgba(111, 141, 255, 0.18);
+	--l5-success: #3fd176;
+	--l5-warning: #fbbc05;
+	--l5-danger: #f87171;
+
+	--background: var(--l5-background);
+	--foreground: var(--l5-text-primary);
+	--card: var(--l5-elevated-surface);
+	--card-foreground: var(--l5-text-primary);
+	--popover: var(--l5-elevated-surface);
+	--popover-foreground: var(--l5-text-primary);
+	--primary: var(--l5-accent);
+	--primary-foreground: var(--l5-accent-foreground);
+	--secondary: var(--l5-secondary-background);
+	--secondary-foreground: var(--l5-text-primary);
+	--muted: var(--l5-secondary-background);
+	--muted-foreground: var(--l5-text-secondary);
+	--accent: var(--l5-selected-surface);
+	--accent-foreground: var(--l5-text-primary);
+	--destructive: var(--l5-danger);
+	--border: var(--l5-border);
+	--input: var(--l5-border);
+	--ring: var(--l5-accent);
+}
+
+@theme inline {
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+
+	/* Level5 color tokens as first-class Tailwind colors, e.g. bg-l5-surface, text-l5-text-secondary */
+	--color-l5-background: var(--l5-background);
+	--color-l5-secondary-background: var(--l5-secondary-background);
+	--color-l5-surface: var(--l5-surface);
+	--color-l5-elevated-surface: var(--l5-elevated-surface);
+	--color-l5-text-primary: var(--l5-text-primary);
+	--color-l5-text-secondary: var(--l5-text-secondary);
+	--color-l5-text-muted: var(--l5-text-muted);
+	--color-l5-border: var(--l5-border);
+	--color-l5-accent: var(--l5-accent);
+	--color-l5-accent-foreground: var(--l5-accent-foreground);
+	--color-l5-selected-surface: var(--l5-selected-surface);
+	--color-l5-success: var(--l5-success);
+	--color-l5-warning: var(--l5-warning);
+	--color-l5-danger: var(--l5-danger);
+
+	--font-sans: "Barlow", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	--font-mono: "Departure Mono", "SF Mono", SFMono-Regular, ui-monospace, monospace;
+
+	/* Level5 type scale (docs/DESIGN.md); pair with font-bold/font-semibold/font-medium at each usage site */
+	--text-display: 32px;
+	--text-display--line-height: 1.2;
+	--text-h1: 28px;
+	--text-h1--line-height: 1.2;
+	--text-h2: 22px;
+	--text-h2--line-height: 1.3;
+	--text-h3: 18px;
+	--text-h3--line-height: 1.3;
+	--text-body: 14px;
+	--text-body--line-height: 1.45;
+	--text-caption: 12px;
+	--text-caption--line-height: 1.35;
+	--text-mono: 13px;
+	--text-mono--line-height: 1.45;
+
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+
+	/* Level5 radius scale (docs/DESIGN.md / L5Radius) */
+	--radius-window: 28px;
+	--radius-panel: 24px;
+	--radius-card: 20px;
+	--radius-input: 18px;
+	--radius-button: 16px;
+	--radius-medium: 12px;
+	--radius-small: 8px;
+	--radius-chip: 999px;
+
+	/* Level5 elevation scale (docs/DESIGN.md / L5Elevation): quiet, low-opacity depth */
+	--shadow-e1: 0 6px 14px rgba(0, 0, 0, 0.08);
+	--shadow-e2: 0 12px 22px rgba(0, 0, 0, 0.12);
+	--shadow-e3: 0 20px 34px rgba(0, 0, 0, 0.16);
+
+	/* Level5 spacing scale (docs/DESIGN.md / L5Spacing): e.g. gap-l5-x5, p-l5-x4 */
+	--spacing-l5-x1: 4px;
+	--spacing-l5-x2: 8px;
+	--spacing-l5-x3: 12px;
+	--spacing-l5-x4: 16px;
+	--spacing-l5-x5: 20px;
+	--spacing-l5-x6: 24px;
+	--spacing-l5-x8: 32px;
+	--spacing-l5-x10: 40px;
+	--spacing-l5-x12: 48px;
+	--spacing-l5-x16: 64px;
+
+	/* Level5 fixed control sizes (docs/DESIGN.md / L5Size): e.g. size-l5-icon */
+	--size-l5-icon: 16px;
+	--size-l5-action: 24px;
+	--size-l5-control: 32px;
+	--size-l5-hit-target: 32px;
+
+	/* Level5 motion durations (docs/DESIGN.md "Motion"): the only three
+	   allowed durations, ease-out, no bounce. */
+	--duration-quick: 120ms;
+	--duration-standard: 180ms;
+	--duration-slow: 240ms;
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-family: "Barlow", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	}
+
+	code,
+	kbd,
+	pre,
+	samp {
+		font-family: "Departure Mono", "SF Mono", SFMono-Regular, ui-monospace, monospace;
+	}
+}
+
+@layer components {
+	.app-scrollbar-transparent {
+		scrollbar-width: none;
+	}
+
+	.app-scrollbar-transparent::-webkit-scrollbar {
+		display: none;
+		width: 0;
+		height: 0;
+	}
+}
+
+/* docs/DESIGN.md "Motion": Reduce Motion disables transitions/animations
+   (e.g. the context-usage ring's pulse, loading spinners, layout
+   transitions) rather than just speeding them up. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
+}

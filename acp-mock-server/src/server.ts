@@ -556,7 +556,7 @@ export class AcpMockServer {
 			status: "in_progress",
 			content: [
 				{ type: "terminal", terminalId },
-				{ type: "content", content: { type: "text", text: "pnpm run typecheck\npnpm test" } }
+				{ type: "content", content: { type: "text", text: "bun run typecheck\nbun test" } }
 			]
 		});
 		await this.checkpoint(turn);

@@ -2,11 +2,9 @@
 
 A standalone ACP v1 mock agent for testing clients. It speaks newline-delimited JSON-RPC over stdio and keeps stdout protocol-clean.
 
-## Native 1.0 role
+## Role
 
-This package is active shared test infrastructure, not Electrobun POC code. The native macOS 1.0 plan keeps `acp-mock-server/` at the repository root so native runtime and UI tests can run without Devin authentication. See `../docs/adr/0001-native-macos-client.md`.
-
-Do not move this package into `legacy/` when the Electrobun app moves to `legacy/electrobun-app/`.
+This package is active shared test infrastructure for `app/`, kept at the repository root so runtime and UI tests can run without Devin authentication. See `../docs/ARCHITECTURE.md`.
 
 ## Run
 
@@ -19,13 +17,13 @@ The server reads ACP messages from stdin and writes ACP responses/notifications 
 
 Use `./start.sh` when connecting an ACP client. It builds stale or missing TypeScript output with build logs redirected to stderr, then execs Node so stdout stays JSON-RPC-only. Avoid package-manager script wrappers for protocol clients because their banners can pollute ACP stdout.
 
-For native macOS app development, use the TCP entrypoint:
+A TCP-wrapped entrypoint is also available for manual testing outside a stdio pipe:
 
 ```bash
 ./start-tcp.sh
 ```
 
-`start-tcp.sh` listens on `127.0.0.1:58945` by default and uses the same mock ACP lifecycle as the stdio server. Override it with `ACP_MOCK_TCP_HOST` and `ACP_MOCK_TCP_PORT`.
+`start-tcp.sh` listens on `127.0.0.1:58945` by default and uses the same mock ACP lifecycle as the stdio server. Override it with `ACP_MOCK_TCP_HOST` and `ACP_MOCK_TCP_PORT`. `app/` does not use this TCP entrypoint — it spawns the mock server directly over stdio (see "App Mock Backend" below).
 
 Useful environment variables:
 
@@ -38,20 +36,14 @@ Useful environment variables:
 
 ## App Mock Backend
 
-The native desktop app is local-only by default. To run the current native shell against this mock backend for manual testing:
+`app/` is local-only by default. To run it against this mock backend for manual testing:
 
 ```bash
-./script/run_mock_app.sh
-```
-
-In mock mode, DEBUG builds of the native app connect to an independently running TCP mock server. `script/run_mock_app.sh` starts `acp-mock-server/start-tcp.sh`, waits for the port, and launches the app with `LEVEL5_USE_ACP_MOCK=1`. The app initializes ACP, creates a mock session only on first send from New Chat, and sends `session/prompt`; it never calls `session/list` (the native sidebar is sourced entirely from its own local durable cache, not from the mock server), and only calls `session/load` silently to prime a session's context the first time it's sent to in a given app run, never to repaint the sidebar or transcript. Delete removes rows locally via `session/delete`. Mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
-
-The retired Electrobun reference app still has its own manual mock command:
-
-```bash
-cd legacy/electrobun-app
+cd app
 bun run dev:mock
 ```
+
+In mock mode, `app/` spawns this mock server directly over stdio (`LEVEL5_USE_ACP_MOCK=1`, optionally overriding the entrypoint with `LEVEL5_ACP_MOCK_START_PATH`) instead of detecting/spawning the real Devin CLI. It initializes ACP, creates a mock session only on first send from New Chat, and sends `session/prompt`; it never calls `session/list` (the sidebar is sourced entirely from its own local durable SQLite cache, not from the mock server), and only calls `session/load` silently to prime a session's context the first time it's sent to in a given app run, never to repaint the sidebar or transcript. Delete removes rows locally via `session/delete`. Mock state is stored at `~/.level5-build/acp-mock-state.json` unless `ACP_MOCK_STATE_PATH` is set.
 
 ## ACP Surface Covered
 
@@ -156,10 +148,10 @@ For prompt testing, use the `sessionId` returned by `session/new`.
 ## Verification
 
 ```bash
-CI=true pnpm install --frozen-lockfile
-CI=true pnpm run build
-CI=true pnpm run typecheck
-CI=true pnpm test
+CI=true bun install --frozen-lockfile
+CI=true bun run build
+CI=true bun run typecheck
+CI=true bun test
 ```
 
 From the repo root, also check the helper scripts:
@@ -167,8 +159,4 @@ From the repo root, also check the helper scripts:
 ```bash
 bash -n acp-mock-server/start.sh
 bash -n acp-mock-server/start-tcp.sh
-bash -n script/build_and_run.sh
-bash -n script/run_mock_app.sh
 ```
-
-The native SwiftPM suite normally skips the subprocess integration. Run `LEVEL5_RUN_ACP_PROCESS_INTEGRATION=1 swift test` from `app/` when you need to verify `AcpProcessTransport` against the real stdio mock server.

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to dry-run. Defaults to the committed MARKETING_VERSION."
+        description: "Version to dry-run. Defaults to the committed package.json version."
         required: false
         type: string
 
@@ -15,15 +15,13 @@ permissions:
   contents: write
 
 jobs:
-  native-macos:
-    name: Native macOS release
-    runs-on: macos-15
+  macos:
+    name: macOS release
+    runs-on: macos-14
 
-    env:
-      APP_NAME: Level5 Build
-      SCHEME: Level5 Build
-      PROJECT_FILE: app/project.yml
-      PROJECT_PATH: app/Level5 Build.xcodeproj
+    defaults:
+      run:
+        working-directory: app
 
     steps:
       - name: Checkout
@@ -38,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          project_version="$(awk -F: '/^[[:space:]]+MARKETING_VERSION:/ { gsub(/[ "]/, "", $2); print $2; exit }' "$PROJECT_FILE")"
+          project_version="$(jq -r .version package.json)"
 
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             tag="$GITHUB_REF_NAME"
@@ -55,23 +53,16 @@ jobs:
             exit 1
           fi
 
-          if [[ "$version" != "$project_version" ]]; then
-            echo "note: $PROJECT_FILE MARKETING_VERSION is $project_version, but release version is $version; this build will use $version and a follow-up commit will sync $PROJECT_FILE on main"
-          fi
-
           prerelease="false"
           if [[ "$version" == *-* ]]; then
             prerelease="true"
           fi
-
-          artifact_name="Level5-Build-v${version}-macos-arm64.dmg"
 
           {
             echo "version=$version"
             echo "tag=$tag"
             echo "dry_run=$dry_run"
             echo "prerelease=$prerelease"
-            echo "artifact_name=$artifact_name"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check release secrets
@@ -113,20 +104,16 @@ jobs:
             exit 1
           fi
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          xcode-version: latest-stable
+          bun-version: 1.3.11
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Apply release version to project.yml
-        run: ./script/sync_native_version.sh "${{ steps.meta.outputs.version }}"
-
-      - name: Generate Xcode project
-        run: xcodegen generate --spec project.yml --project .
-        working-directory: app
+      - name: Apply release version
+        run: bun run version:sync -- "${{ steps.meta.outputs.tag }}"
 
       - name: Import Developer ID certificate
         env:
@@ -155,144 +142,31 @@ jobs:
             -k "$MACOS_KEYCHAIN_PASSWORD" \
             "$keychain_path"
 
-      - name: Archive native app
-        run: |
-          set -euo pipefail
-
-          xcodebuild archive \
-            -project "$PROJECT_PATH" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -destination "generic/platform=macOS" \
-            -archivePath "$RUNNER_TEMP/Level5Build.xcarchive" \
-            SKIP_INSTALL=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
-      - name: Sign app
-        id: sign
+      - name: Build and sign (electrobun build:stable)
         env:
+          ELECTROBUN_CODESIGN: "true"
+          ELECTROBUN_NOTARIZE: "true"
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
-        run: |
-          set -euo pipefail
-
-          export_root="$RUNNER_TEMP/level5-release"
-          app_path="$RUNNER_TEMP/Level5Build.xcarchive/Products/Applications/$APP_NAME.app"
-          staged_app="$export_root/$APP_NAME.app"
-          signing_identity="$ELECTROBUN_DEVELOPER_ID"
-
-          if [[ ! -d "$app_path" ]]; then
-            echo "error: archived app not found at $app_path" >&2
-            exit 1
-          fi
-
-          rm -rf "$export_root"
-          mkdir -p "$export_root"
-          ditto "$app_path" "$staged_app"
-
-          codesign \
-            --force \
-            --deep \
-            --options runtime \
-            --timestamp \
-            --sign "$signing_identity" \
-            "$staged_app"
-
-          codesign --verify --deep --strict --verbose=2 "$staged_app"
-
-          echo "app_path=$staged_app" >> "$GITHUB_OUTPUT"
-
-      - name: Notarize and staple app
-        env:
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
-          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+        run: bun run build:stable
+
+      - name: Package release artifact
+        id: package
         run: |
           set -euo pipefail
 
-          app_path="${{ steps.sign.outputs.app_path }}"
-          app_zip="$RUNNER_TEMP/Level5-Build-app.zip"
-
-          ditto -c -k --keepParent "$app_path" "$app_zip"
-          xcrun notarytool submit "$app_zip" \
-            --apple-id "$ELECTROBUN_APPLEID" \
-            --password "$ELECTROBUN_APPLEIDPASS" \
-            --team-id "$ELECTROBUN_TEAMID" \
-            --wait
-          xcrun stapler staple "$app_path"
-          xcrun stapler validate "$app_path"
-          spctl -a -vv "$app_path"
-
-      - name: Create signed DMG
-        id: dmg
-        env:
-          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
-        run: |
-          set -euo pipefail
-
-          app_path="${{ steps.sign.outputs.app_path }}"
-          artifact_path="$RUNNER_TEMP/level5-release/${{ steps.meta.outputs.artifact_name }}"
-          dmg_root="$RUNNER_TEMP/level5-dmg-root"
-          signing_identity="$ELECTROBUN_DEVELOPER_ID"
-
-          rm -rf "$dmg_root"
-          mkdir -p "$dmg_root"
-          ditto "$app_path" "$dmg_root/$APP_NAME.app"
-
-          hdiutil create \
-            -volname "$APP_NAME" \
-            -srcfolder "$dmg_root" \
-            -ov \
-            -format UDZO \
-            "$artifact_path"
-
-          codesign \
-            --force \
-            --timestamp \
-            --sign "$signing_identity" \
-            "$artifact_path"
-
-          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
-
-      - name: Notarize, staple, and validate DMG
-        env:
-          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
-          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
-          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
-        run: |
-          set -euo pipefail
-
-          dmg_path="${{ steps.dmg.outputs.artifact_path }}"
-          mount_point="$RUNNER_TEMP/level5-dmg-mount"
-
-          detach_dmg() {
-            hdiutil detach "$mount_point" || true
-          }
-
-          xcrun notarytool submit "$dmg_path" \
-            --apple-id "$ELECTROBUN_APPLEID" \
-            --password "$ELECTROBUN_APPLEIDPASS" \
-            --team-id "$ELECTROBUN_TEAMID" \
-            --wait
-          xcrun stapler staple "$dmg_path"
-          xcrun stapler validate "$dmg_path"
-          codesign --verify --verbose=2 "$dmg_path"
-          spctl -a -t open --context context:primary-signature -vv "$dmg_path"
-
-          mkdir -p "$mount_point"
-          hdiutil attach "$dmg_path" -mountpoint "$mount_point" -nobrowse -readonly
-          trap detach_dmg EXIT
-          test -d "$mount_point/$APP_NAME.app"
-          hdiutil detach "$mount_point"
-          trap - EXIT
+          output="$(GITHUB_REF_NAME="${{ steps.meta.outputs.tag }}" bun run release:package:mac)"
+          echo "$output"
+          echo "$output" | grep -E '^(artifact_name|artifact_path)=' >> "$GITHUB_OUTPUT"
 
       - name: Calculate artifact SHA-256
         id: sha
         run: |
           set -euo pipefail
 
-          sha256="$(shasum -a 256 "${{ steps.dmg.outputs.artifact_path }}" | awk '{ print $1 }')"
+          sha256="$(shasum -a 256 "${{ steps.package.outputs.artifact_path }}" | awk '{ print $1 }')"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload GitHub Release
@@ -303,7 +177,7 @@ jobs:
           name: ${{ steps.meta.outputs.tag }}
           prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
           generate_release_notes: true
-          files: ${{ steps.dmg.outputs.artifact_path }}
+          files: ${{ steps.package.outputs.artifact_path }}
 
       - name: Checkout Homebrew tap
         if: steps.meta.outputs.dry_run != 'true' && steps.meta.outputs.prerelease != 'true'
@@ -315,36 +189,32 @@ jobs:
 
       - name: Update Homebrew cask
         if: steps.meta.outputs.dry_run != 'true' && steps.meta.outputs.prerelease != 'true'
+        env:
+          HOMEBREW_CASK_SHA256: ${{ steps.sha.outputs.sha256 }}
+          HOMEBREW_CASK_ARTIFACT: ${{ steps.package.outputs.artifact_name }}
+          GITHUB_REF_NAME: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
 
-          cask_path="homebrew-tap/Casks/level5-build.rb"
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${{ steps.meta.outputs.tag }}/${{ steps.meta.outputs.artifact_name }}"
+          bun run release:cask -- ../homebrew-tap
 
-          mkdir -p "$(dirname "$cask_path")"
-          ./script/generate_homebrew_cask.sh \
-            "${{ steps.meta.outputs.version }}" \
-            "${{ steps.sha.outputs.sha256 }}" \
-            "$url" > "$cask_path"
+          git -C ../homebrew-tap config user.name "github-actions[bot]"
+          git -C ../homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C ../homebrew-tap add Casks/level5-build.rb
 
-          git -C homebrew-tap config user.name "github-actions[bot]"
-          git -C homebrew-tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git -C homebrew-tap add Casks/level5-build.rb
-
-          if git -C homebrew-tap diff --cached --quiet; then
+          if git -C ../homebrew-tap diff --cached --quiet; then
             echo "Homebrew cask already up to date."
             exit 0
           fi
 
-          git -C homebrew-tap commit -m "Update level5-build to ${{ steps.meta.outputs.version }}"
-          git -C homebrew-tap push
+          git -C ../homebrew-tap commit -m "Update level5-build to ${{ steps.meta.outputs.version }}"
+          git -C ../homebrew-tap push
 
       - name: Sync committed version to main
         if: steps.meta.outputs.dry_run != 'true'
         run: |
           set -euo pipefail
 
-          version="${{ steps.meta.outputs.version }}"
           worktree_path="$RUNNER_TEMP/level5-main-sync"
 
           cleanup() {
@@ -355,15 +225,15 @@ jobs:
           git fetch origin main
           git worktree add "$worktree_path" origin/main
 
-          (cd "$worktree_path" && ./script/sync_native_version.sh "$version")
+          (cd "$worktree_path/app" && bun run version:sync -- "${{ steps.meta.outputs.tag }}")
 
-          if git -C "$worktree_path" diff --quiet -- app/project.yml; then
-            echo "main is already in sync with $version"
+          if git -C "$worktree_path" diff --quiet -- app; then
+            echo "main is already in sync with ${{ steps.meta.outputs.version }}"
           else
             git -C "$worktree_path" config user.name "github-actions[bot]"
             git -C "$worktree_path" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git -C "$worktree_path" add app/project.yml
-            git -C "$worktree_path" commit -m "Sync native app version to $version [skip ci]"
+            git -C "$worktree_path" add app
+            git -C "$worktree_path" commit -m "Sync app version to ${{ steps.meta.outputs.version }} [skip ci]"
             git -C "$worktree_path" push origin HEAD:main
           fi
 

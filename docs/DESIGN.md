@@ -1,12 +1,12 @@
 ---
 version: 1
 name: Level5 Build Design System
-description: Native macOS SwiftUI design tokens and UI rules for the Level5 Build desktop AI coding agent.
+description: Design tokens and UI rules for the Level5 Build desktop AI coding agent (Electrobun/React/Tailwind).
 ---
 
 # Design System
 
-This document is the source of truth for Level5 Build's native macOS visual and interaction design. Before changing UI, read this document and reuse the `Level5Design` tokens, components, and layout patterns.
+This document is the source of truth for Level5 Build's visual and interaction design. Before changing UI, read this document and reuse the tokens, components, and layout patterns below.
 
 ## Overview
 
@@ -14,28 +14,29 @@ Level5 Build is a desktop-native AI coding environment. It should feel calm, foc
 
 Never design the app shell like a marketing website. Never imitate Windows settings panels. Do not use decoration without purpose.
 
-Native SwiftUI design primitives live in `app/Sources/Level5Design/`. App views should import `Level5Design` and consume typed `L5` APIs instead of hardcoding one-off colors, font sizes, radii, spacing, shadows, materials, or resource names.
+Design tokens are implemented as CSS custom properties and Tailwind v4 `@theme inline` entries in `app/src/mainview/index.css`. App code should consume the generated Tailwind utility classes (`bg-l5-surface`, `text-h2`, `rounded-card`, `shadow-e2`, ...) instead of hardcoding one-off colors, font sizes, radii, spacing, or shadow values. See `docs/ARCHITECTURE.md`'s "Design tokens" subsection for the implementation details.
 
-The module owns:
+This document still refers to token concepts by names like `L5Color`, `L5Font`, `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation` throughout — these are conceptual token-scale names, not a Swift API (there is no more native Swift/SwiftUI client; see [ADR 0002](adr/0002-revert-to-electrobun.md)). Each maps directly onto the CSS implementation:
 
-- `L5Color`: adaptive semantic color tokens that preserve the Level5 light-mode direction and provide dark-mode-safe variants.
-- `L5Font`: display, heading, body, caption, and monospace helpers backed by bundled Barlow and Departure Mono font resources.
-- `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation`: documented token scales for layout rhythm, corner treatment, fixed control dimensions, and quiet depth.
-- `L5Asset`: typed access to in-app identity artwork such as the Level5 mark.
-- `L5Icon` and `L5IconView`: semantic, tintable in-app icons backed by SF Symbols.
-- `L5ButtonStyle` and the `l5Surface`, `l5InputSurface`, and `l5CompactControl` modifiers for primitive controls and glass/material surfaces.
+| Conceptual name | CSS/Tailwind implementation |
+| --- | --- |
+| `L5Color.<token>` | `--l5-<token>` custom property / `bg-l5-<token>`, `text-l5-<token>`, `border-l5-<token>` utility classes |
+| `L5Font.<scale>` | `--text-<scale>` theme key / `text-<scale>` utility class (pair with a `font-*` weight utility) |
+| `L5Spacing.x<n>` | Tailwind's default spacing scale (`gap-<n>`, `p-<n>`, `px-<n>`, ...) |
+| `L5Radius.<name>` | `--radius-<name>` theme key / `rounded-<name>` utility class |
+| `L5Elevation.<name>` (E1/E2/E3) | `--shadow-<name>` theme key / `shadow-<name>` utility class |
+| `L5Icon`/`L5IconView` | `app/src/mainview/lib/icon-map.ts`'s `ICONS` map over `lucide-react` |
+| `L5ButtonStyle`, `l5InputSurface()`, `l5Surface()` | Tailwind utility class combinations on plain `<button>`/`<input>` elements, composed with `cn()` |
 
-`Level5BuildApp` calls `Level5DesignResources.registerFonts()` during startup. The app target owns the bundle app icon in `app/Resources/Assets.xcassets/AppIcon.appiconset`; `Level5Design` owns only reusable in-app identity resources.
+App icon artwork: the source image is `app/assets/AppIconSource.png`; the macOS bundle icon (`app/assets/App.icns`) and in-app icon (`app/src/mainview/assets/app-icon.png`) are regenerated from it — see `docs/ARCHITECTURE.md`'s "App icon packaging". Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
 
-App icon artwork is owned by the app target, not by `Level5Design`. The source image is `app/Resources/AppIconSource.png`; generated icon sizes live in `app/Resources/Assets.xcassets/AppIcon.appiconset`. Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
+In-app icons are not app icon artwork. They should be vector, monochrome, template/tintable, and readable at `16px`. Do not generate raster PNG icon sets for app chrome. Keep custom icon styling centralized in the `ICONS` map; ad hoc direct `lucide-react` imports are acceptable only for mechanical controls such as chevrons, close affordances, file-type glyphs, and backend-provided command icons where the exact icon is local to that control.
 
-In-app icons are not app icon artwork. They should be vector, monochrome, template/tintable, and readable at `16px`. Do not generate raster PNG icon sets for app chrome. Keep custom icon styling centralized in `L5Icon`; use direct SF Symbols only for mechanical controls such as chevrons, close affordances, file-type glyphs, and backend-provided command icons where the exact symbol is local to that control.
-
-The retired Electrobun proof of concept remains useful for product direction only. Native SwiftUI should not clone Tailwind gradients, shadcn implementation mechanics, CSS aliases, Electrobun window chrome, or retired scaffold images. New native UI uses `Level5Design`, system-adaptive macOS materials, and standard SwiftUI/AppKit behavior. Where current SDKs expose Liquid Glass APIs, use them behind availability checks for custom app-specific surfaces; on the macOS 14 deployment target, fall back to SwiftUI materials such as `.regularMaterial` and `.thinMaterial`.
+Where a rule below references a macOS-native pattern (e.g. "native `Menu`", "native traffic lights", "SwiftUI materials") it describes product/interaction intent — real OS-level window chrome (traffic lights, drag regions) and OS-level materials (`NSVisualEffectView` vibrancy via `app/src/bun/macWindowEffects.ts`, see `docs/ARCHITECTURE.md`'s "Window chrome") — not a literal SwiftUI API to call.
 
 ## Colors
 
-Use `L5Color` semantic colors and SwiftUI materials. Do not invent fixed local colors for app chrome.
+Use `L5Color` semantic color tokens (see the mapping table above) and the native macOS vibrancy bridge for glass surfaces. Do not invent fixed local colors for app chrome.
 
 Core tokens are implemented in `L5Color`:
 
@@ -64,9 +65,9 @@ Accent rules:
 
 ## Typography
 
-Primary product font direction is Barlow. Monospace text uses Departure Mono. Both families are bundled in `app/Sources/Level5Design/Resources/Fonts/`.
+Primary product font direction is Barlow. Monospace text uses Departure Mono. Both families are bundled in `app/src/mainview/assets/fonts/`.
 
-Use `L5Font` instead of constructing arbitrary `Font.custom` calls in app views.
+Use `L5Font` (the `text-*` scale utility classes) instead of one-off font-size values in app views.
 
 Type scale:
 
@@ -102,11 +103,11 @@ Rules:
 
 Use only the `L5Spacing` scale: `4`, `8`, `12`, `16`, `20`, `24`, `32`, `40`, `48`, and `64`. Layout rhythm should feel calm and readable, not loose or web-hero-like.
 
-The first screen should feel like a real app workspace, not a landing page. The current native shell uses native window chrome, a `NavigationSplitView` sidebar, a centered new-session prompt, structured transcript rows, a native composer, a new-session-only project picker backed by recent local folders, and an adaptive project dashboard for project-backed active sessions.
+The first screen should feel like a real app workspace, not a landing page. The current shell uses native window chrome, a resizable sidebar, a centered new-session prompt, structured transcript rows, a composer docked at the bottom, a new-session-only project picker backed by recent local folders, and an adaptive project dashboard for project-backed active sessions.
 
 ## Elevation & Depth
 
-Use `L5Elevation` and SwiftUI materials for depth. Shadows should create quiet hierarchy, not a floating-card collage.
+Use `L5Elevation` (the `shadow-e*` scale) and translucent/vibrancy surfaces for depth. Shadows should create quiet hierarchy, not a floating-card collage.
 
 Elevation scale:
 
@@ -238,7 +239,7 @@ Rules:
 - The `+` icon button opens the composer's "Add to prompt" menu: Add file first, then backend-provided slash commands.
 - Folder attachments, placeholders, and separate Skills groups should not appear unless real backed behavior is added. Devin currently exposes skill-like actions as slash commands.
 - Slash-command and skill tokens typed or inserted into the composer are highlighted using the single accent color.
-- The approval-mode control uses intrinsic width and the native SwiftUI `Menu` pattern for `Ask for approval`, `Approve for me`, and `Full access`.
+- The approval-mode control uses intrinsic width and a native-feeling button+popover menu pattern for `Ask for approval`, `Approve for me`, and `Full access`.
 - When a session has active or recently completed plan state, show a centered composer-adjacent `Plan N/M` chip above queued prompt previews. Clicking it opens a compact checklist popover with human-readable plan entries. Do not render plan updates as transcript rows.
 - Once runtime usage data exists, show a small context-usage ring immediately to the left of the Model selector. It uses accent below 70%, warning from 70%, and danger from 90%; Reduce Motion disables any pulse.
 - When a permission request is pending for the active session in `Ask for approval`, the approval prompt takes over the composer's input/toolbar area inside the same rounded container. It does not appear as a separate transcript card.
@@ -255,7 +256,7 @@ Rules:
 - Tool calls and errors appear as compact operational transcript rows. Statuses (runtime diagnostics, raw stderr, permission audit notes, notable stop reasons like `cancelled`/`refusal`/`max_tokens`) are never shown as transcript rows, regardless of source — they exist only as internal/persisted bookkeeping.
 - Tool rows auto-expand while `in_progress`, auto-collapse when `completed` unless manually expanded, and remain expanded when `failed`.
 - Expanded tool rows show normalized status, kind, and readable detail text. Collapsed rows keep the title and a one-line detail preview.
-- Chat message bodies (user and agent) render Markdown — bold/italic, inline code, links, lists, headings, blockquotes, and code blocks — via the `L5MarkdownTheme` (`MarkdownUI` theme built from `L5Font`/`L5Color`/`L5Spacing` tokens), not raw text, so authored formatting displays instead of literal `**`/backtick/`-` syntax.
+- Chat message bodies (user and agent) render Markdown — bold/italic, inline code, links, lists, headings, blockquotes, and code blocks — via `react-markdown` with components styled from the design tokens, not raw text, so authored formatting displays instead of literal `**`/backtick/`-` syntax.
 - Never show raw JSON, schema payloads, or ACP identifiers.
 - Avoid decorative message chrome.
 - When the composer visually overlays the tail of the scroll layer, reserve matching space with real layout measurement rather than a static padding guess.
@@ -263,7 +264,7 @@ Rules:
 
 ### Review Panel
 
-The native Review experience is an inspect-only third column for Git working-tree changes. It is available for New Chat with a selected project and for project-backed sessions.
+Review is an inspect-only third column for Git working-tree changes. It is available for New Chat with a selected project and for project-backed sessions.
 
 Width defaults to `600px` and is user-resizable from `420px` to `820px` for the current open interaction only. Do not persist width or open state.
 
@@ -284,7 +285,7 @@ Rules:
 - Resolve previews from the repository root even when the selected project is a subdirectory, and expand untracked directories into file rows.
 - Large per-file diffs over `200 KB` show a deterministic too-large state, not truncation.
 - Keep the continuous diff dense but readable; avoid card stacks inside the column.
-- Use adaptive `Level5Design` colors and materials for Review chrome. Diff semantics are derived from `L5Color.success`, `L5Color.danger`, `L5Color.accent`, and muted text tokens, not from a fixed dark editor palette.
+- Use the adaptive design tokens (see index.css) for Review chrome. Diff semantics are derived from `L5Color.success`, `L5Color.danger`, `L5Color.accent`, and muted text tokens, not from a fixed dark editor palette.
 - Do not show icon-only Review controls unless they have real backed behavior. Backed controls today are refresh, close, filter, running/stale hint, and project/root context.
 
 ### Diff Viewer
@@ -391,12 +392,12 @@ Rules:
 Do:
 
 - Read this document before changing UI.
-- Reuse `Level5Design` tokens, components, spacing, colors, radii, shadows, and layout patterns.
-- Use native SwiftUI/AppKit controls and materials where they fit.
+- Reuse the design tokens, components, spacing, colors, radii, shadows, and layout patterns (see the mapping table above).
+- Use native macOS window chrome and vibrancy where they fit; otherwise favor plain, composable Tailwind-styled components.
 - Keep the shell calm, precise, and fast.
-- Keep runtime and domain state out of `Level5Design`.
+- Keep runtime and domain state out of `index.css`/token files.
 - Keep in-app icons vector, monochrome, template/tintable, and readable at `16px`.
-- Keep app icon artwork in the app target, not in `Level5Design`.
+- Keep app icon artwork under `app/assets/`, not mixed into in-app UI assets.
 
 Don't:
 
@@ -411,8 +412,7 @@ Don't:
 - Add unnecessary borders.
 - Create landing-page hero layouts inside the app shell.
 - Use card backgrounds behind page sections.
-- Treat retired Electrobun, Tailwind, shadcn, CSS aliases, or old frameless-window rules as guidance for new native UI.
 
 Implementation is accepted only if spacing follows the scale, typography follows the scale, colors come from the token set, radius follows the token set, shadows follow the elevation set, overlay panels do not shift layout, there is one primary CTA per visual group, keyboard navigation works, loading and empty states exist, and no arbitrary styles are introduced.
 
-Run `pnpm dlx @google/design.md lint docs/DESIGN.md` before accepting design-document changes. The command must exit `0` with `errors: 0` and `warnings: 0`.
+Run `bunx @google/design.md lint docs/DESIGN.md` before accepting design-document changes. The command must exit `0` with `errors: 0` and `warnings: 0`.

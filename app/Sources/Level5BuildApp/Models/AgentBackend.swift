@@ -66,6 +66,7 @@ protocol AgentSessionClient: Sendable {
     func initialize() async throws
     func newSession(cwd: String) async throws -> AcpSessionResult
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult
+    func closeSession(sessionId: String) async throws
     func deleteSession(sessionId: String) async throws
     func listModelOptions(sessionId: String?) async throws -> (options: [ComposerModelOption], currentModelId: String?)
     func listSlashCommands(sessionId: String?) async throws -> [ComposerCommand]
@@ -111,6 +112,10 @@ extension AcpClientBackedSessionClient {
         var extra: [String: JSONValue] = ["mcpServers": .array([])]
         if let cwd { extra["cwd"] = .string(cwd) }
         return try await client.loadSession(.init(sessionId: sessionId, extra: extra))
+    }
+
+    func closeSession(sessionId: String) async throws {
+        try await client.closeSession(.init(sessionId: sessionId))
     }
 
     func deleteSession(sessionId: String) async throws {

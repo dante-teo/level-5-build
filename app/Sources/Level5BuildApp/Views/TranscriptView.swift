@@ -26,14 +26,14 @@ struct TranscriptView: View {
                 Color.clear
                     .frame(height: bottomInset)
             }
-            .padding(.horizontal, L5Spacing.x6)
+            .padding(.horizontal, L5TranscriptLayout.horizontalInset)
             .padding(.top, topContentInset)
-            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: L5TranscriptLayout.maxContentWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .overlay(alignment: .leading) {
             TranscriptScrollRail(progress: scrollProgress)
-                .padding(.leading, L5Spacing.x4)
+                .padding(.leading, L5TranscriptScrollRail.leadingPadding)
                 .allowsHitTesting(false)
         }
         .scrollContentBackground(.hidden)
@@ -397,12 +397,28 @@ private enum L5TranscriptScrollRail {
     static let markerSpacing = L5Spacing.x3
     static let markerCount = 12
     static let inactiveOpacity = L5Spacing.x2 / L5Spacing.x10
+    /// The rail overlay's own leading padding (see `TranscriptView.body`),
+    /// kept alongside `railWidth` so `L5TranscriptLayout` can size the
+    /// content inset that keeps message bubbles clear of it.
+    static let leadingPadding = L5Spacing.x4
 
     static func activeIndex(progress: CGFloat) -> Int {
         guard markerCount > 1 else { return 0 }
         let clampedProgress = min(max(progress, 0), 1)
         return min(markerCount - 1, max(0, Int((clampedProgress * CGFloat(markerCount - 1)).rounded())))
     }
+}
+
+/// Shared width metrics for the transcript's message column, so the
+/// composer below it (see `WorkspaceView.transcriptAndComposer`) can render
+/// at the exact same width and stay horizontally aligned with message
+/// bubbles instead of stretching to fill the whole workspace.
+enum L5TranscriptLayout {
+    static let maxContentWidth: CGFloat = 900
+    /// Comfortably clears the leading scroll rail (`leadingPadding` +
+    /// `railWidth`) with room to spare, and is applied symmetrically on the
+    /// trailing edge so the message column stays visually centered.
+    static let horizontalInset: CGFloat = L5TranscriptScrollRail.leadingPadding + L5TranscriptScrollRail.railWidth + L5Spacing.x3
 }
 
 enum TranscriptScrollMetrics {
@@ -444,45 +460,39 @@ private struct TranscriptRow: View {
     @State private var isManuallyExpanded: Bool?
 
     var body: some View {
-        HStack(alignment: .top, spacing: L5Spacing.x3) {
-            roleIcon
-                .frame(width: 26, height: 26)
-                .background(iconBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        VStack(alignment: .leading, spacing: L5Spacing.x1) {
+            Text(roleTitle)
+                .font(L5Font.caption)
+                .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: L5Spacing.x1) {
-                Text(roleTitle)
-                    .font(L5Font.caption)
-                    .foregroundStyle(.secondary)
-
-                if case let .tool(tool) = item.kind {
-                    ToolDisclosureContent(
-                        tool: tool,
-                        isExpanded: effectiveToolExpansion(tool),
-                        toggle: {
-                            guard AgentTranscriptStatusNormalizer.normalized(tool.status) != "failed" else { return }
-                            isManuallyExpanded = !effectiveToolExpansion(tool)
-                        }
-                    )
-                    .textSelection(.enabled)
-                    .onChange(of: tool.isExpanded) { _, newValue in
-                        if isManuallyExpanded == nil {
-                            isManuallyExpanded = newValue
-                        }
+            if case let .tool(tool) = item.kind {
+                ToolDisclosureContent(
+                    tool: tool,
+                    isExpanded: effectiveToolExpansion(tool),
+                    toggle: {
+                        guard AgentTranscriptStatusNormalizer.normalized(tool.status) != "failed" else { return }
+                        isManuallyExpanded = !effectiveToolExpansion(tool)
                     }
-                } else {
-                    Markdown(item.renderText)
-                        .markdownTheme(.level5)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                )
+                .textSelection(.enabled)
+                .onChange(of: tool.isExpanded) { _, newValue in
+                    if isManuallyExpanded == nil {
+                        isManuallyExpanded = newValue
+                    }
                 }
+            } else {
+                Markdown(item.renderText)
+                    .markdownTheme(.level5)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(L5Spacing.x4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(rowMaterial, in: RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous)
-                    .stroke(L5Color.border, lineWidth: 1)
-            }
+        }
+        .padding(L5Spacing.x4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(rowMaterial, in: RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous)
+                .stroke(L5Color.border, lineWidth: 1)
         }
     }
 
@@ -493,27 +503,6 @@ private struct TranscriptRow: View {
         return isManuallyExpanded ?? tool.isExpanded
     }
 
-    @ViewBuilder
-    private var roleIcon: some View {
-        switch item.role {
-        case .user:
-            L5IconView(.user)
-                .foregroundStyle(.white)
-        case .agent:
-            L5IconView(.agent)
-                .foregroundStyle(.white)
-        case .tool:
-            L5IconView(.tool)
-                .foregroundStyle(.secondary)
-        case .status:
-            L5IconView(.status)
-                .foregroundStyle(.secondary)
-        case .error:
-            L5IconView(.error)
-                .foregroundStyle(.white)
-        }
-    }
-
     private var roleTitle: String {
         switch item.role {
         case .user: "You"
@@ -521,16 +510,6 @@ private struct TranscriptRow: View {
         case .tool: item.renderStatus.map { "Tool - \($0)" } ?? "Tool"
         case .status: "Status"
         case .error: "Error"
-        }
-    }
-
-    private var iconBackground: Color {
-        switch item.role {
-        case .user: L5Color.accent
-        case .agent: Color(nsColor: .systemGreen)
-        case .tool: Color(nsColor: .systemOrange).opacity(0.14)
-        case .status: L5Color.secondaryBackground
-        case .error: Color(nsColor: .systemRed)
         }
     }
 

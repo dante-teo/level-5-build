@@ -237,8 +237,9 @@ struct WorkspaceView: View {
                 removeRecentProjectAction: removeRecentProjectAction,
                 validateProjectAction: validateProjectAction
             )
+            .padding(.horizontal, L5TranscriptLayout.horizontalInset)
+            .frame(maxWidth: L5TranscriptLayout.maxContentWidth)
             .frame(maxWidth: .infinity)
-            .padding(.horizontal, L5Spacing.x6)
             .padding(.bottom, L5Spacing.x5)
         }
     }

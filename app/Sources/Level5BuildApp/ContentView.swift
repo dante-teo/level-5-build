@@ -5,6 +5,7 @@ import SwiftUI
 
 public struct ContentView: View {
     @AppStorage("shell.sidebar.isCollapsed") private var isSidebarCollapsed = false
+    @EnvironmentObject private var appDelegate: Level5AppDelegate
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var model: AgentSessionModel
     @State private var recentProjects: [RecentProject] = []
@@ -126,6 +127,9 @@ public struct ContentView: View {
             columnVisibility = isSidebarCollapsed ? .detailOnly : .all
             loadRecentProjects()
             model.start()
+            appDelegate.terminationHandler = { [model] in
+                await model.prepareForTermination()
+            }
         }
         .onChange(of: columnVisibility) { _, visibility in
             isSidebarCollapsed = visibility == .detailOnly

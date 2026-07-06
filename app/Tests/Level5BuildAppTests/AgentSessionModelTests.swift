@@ -1375,6 +1375,67 @@ struct AgentSessionModelTests {
         #expect(clientB.initializeCount == 1)
     }
 
+    @Test("Sending into an already-restored session waits for start()'s composer priming instead of racing it")
+    func sendingIntoRestoredSessionWaitsForStartupPriming() async throws {
+        let fixture = try PersistenceFixture()
+        let homePath = RecentProjectStore.normalizedPath("/Users/tester")
+        try fixture.store.upsertSessionRow(.init(
+            sessionId: "s1",
+            projectKey: homePath,
+            backend: "devin",
+            title: "Home session",
+            detail: "d",
+            createdAt: 1
+        ))
+
+        let client = FakeAgentSessionClient()
+        client.newSessionResult = .init(sessionId: "primed")
+        // Simulates real Devin's slow startup (team settings fetch, MCP
+        // server connections) taking a few real seconds before its
+        // composer-priming `session/new` actually resolves.
+        client.blocksNewSession = true
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { _, _ in client },
+            persistenceStore: fixture.store,
+            gitStatusProvider: { _ in .unavailable() },
+            homeDirectoryPath: "/Users/tester"
+        )
+
+        // `start()` eagerly connects and primes the home-directory composer
+        // in the background — exactly like a real app launch. Wait only
+        // until that priming's `session/new` has actually been *entered*
+        // (not resolved — it's blocked) before acting, mirroring a real
+        // user who selects an old session and sends while app-launch's
+        // eager composer-priming is still in flight. Without sequencing
+        // against it, this would fire `session/load` + `session/prompt`
+        // concurrently with the still in-flight `session/new`, which real
+        // Devin's ACP server does not handle safely (see
+        // `AgentSessionModel.awaitComposerPriming`).
+        model.start()
+        try await waitUntil("composer priming has started") {
+            !client.newSessionCwds.isEmpty
+        }
+        model.selectSession("s1")
+        model.draft = "continue please"
+        model.sendDraft()
+
+        // Give the (non-priming) parts of the send path a moment to run;
+        // it must still be waiting on the blocked `session/new`, not
+        // already racing ahead into `session/load`/`session/prompt`.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.loadedSessionIds.isEmpty)
+        #expect(client.promptSessionIds.isEmpty)
+
+        client.releaseNewSession()
+
+        try await waitUntil("reconnect proceeds only after priming settles") {
+            client.promptSessionIds == ["s1"]
+        }
+        #expect(client.loadedSessionIds == ["s1"])
+    }
+
     @Test("One project's process exit does not disrupt another project's active turn")
     func multiProjectProcessExitIsIsolated() async throws {
         let clientA = FakeAgentSessionClient()
@@ -1803,6 +1864,313 @@ struct AgentSessionModelTests {
         #expect(model2.transcript.map(\.messageText).contains("response hello there"))
         #expect(model2.transcript.contains { $0.messageRole == .user })
     }
+
+    @Test("Sending into a relaunch-restored session after a failed reconnect leaves the composer usable, not stuck")
+    func relaunchSendFailureLeavesComposerUsable() async throws {
+        let fixture = try PersistenceFixture()
+
+        let client1 = FakeAgentSessionClient()
+        let model1 = AgentSessionModel(backendKind: .acpMock, makeClient: { client1 }, persistenceStore: fixture.store)
+        model1.selectSession("s1")
+        model1.draft = "hello there"
+        model1.sendDraft()
+        try await waitUntil("turn completed") {
+            model1.transcript.contains { $0.messageText == "response hello there" }
+        }
+
+        // Simulate a fresh launch: a second model instance/process, whose
+        // client has no live context for "s1" and fails to reconnect to it
+        // (e.g. the real backend has no in-memory record of the session in
+        // this brand-new process).
+        let client2 = FakeAgentSessionClient()
+        client2.loadSessionFailures.insert("s1")
+        let model2 = AgentSessionModel(backendKind: .acpMock, makeClient: { client2 }, persistenceStore: fixture.store)
+
+        model2.start()
+        // Let the initial connect settle before sending, so the send's own
+        // (already-connected, no-op) `ensureConnected` call can't coincide
+        // with — and be masked by — the connect-succeeded handler's own
+        // unconditional `runtimeMessage = nil`.
+        try await waitUntil("initial connect settled") { model2.availability == .available }
+        model2.selectSession("s1")
+        model2.draft = "continue please"
+        model2.sendDraft()
+
+        try await waitUntil("load failure surfaced") {
+            model2.transcript.contains { $0.errorText?.contains("Failed to load session") == true }
+        }
+
+        // The composer must not be left showing a stale "starting/sending"
+        // hint, nor stuck thinking a turn is still running, once the
+        // failure has been surfaced.
+        #expect(model2.runtimeMessage == nil)
+        #expect(model2.isActiveSessionRunning == false)
+
+        // A retry (e.g. once the backend/connection recovers) must still
+        // be possible rather than being permanently wedged.
+        client2.loadSessionFailures.remove("s1")
+        model2.draft = "continue please"
+        model2.sendDraft()
+        try await waitUntil("retry succeeded") {
+            client2.promptSessionIds.contains("s1")
+        }
+        #expect(model2.runtimeMessage == nil)
+    }
+
+    @Test("Reconnect priming a Devin session after a relaunch includes cwd, which real Devin requires or rejects the call")
+    func relaunchReconnectPrimingIncludesCwd() async throws {
+        let fixture = try PersistenceFixture()
+        let projectPath = RecentProjectStore.normalizedPath("/repo/project-a")
+
+        let client1 = FakeAgentSessionClient()
+        client1.newSessionResult = .init(sessionId: "s1")
+        let model1 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard cwd == projectPath else { throw AgentBackendError.missingDevinExecutable }
+                return client1
+            },
+            persistenceStore: fixture.store,
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let project = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model1.selectProject(project)
+        try await waitUntil { client1.newSessionCwds == [projectPath] }
+        model1.draft = "hello there"
+        model1.sendDraft()
+        try await waitUntil("turn completed") { client1.promptSessionIds == ["s1"] }
+
+        // Simulate a fresh launch/process: a new client with no live
+        // context for "s1", reconnecting to the same project directory.
+        let client2 = FakeAgentSessionClient()
+        let model2 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard cwd == projectPath else { throw AgentBackendError.missingDevinExecutable }
+                return client2
+            },
+            persistenceStore: fixture.store,
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        model2.start()
+        model2.selectSession("s1")
+        model2.draft = "continue please"
+        model2.sendDraft()
+
+        try await waitUntil("reconnect primed and prompt sent") { client2.promptSessionIds == ["s1"] }
+        #expect(client2.loadSessionCwdsSnapshot == [projectPath])
+
+        // Sending successfully isn't enough on its own: the agent's reply
+        // streams back as live `session/update` events over this
+        // reconnected client's own event stream, routed by client
+        // generation — it must actually reach the transcript, not just the
+        // outgoing prompt land.
+        try await waitUntil("agent reply reached the transcript") {
+            model2.transcript.contains { $0.messageText == "response continue please" }
+        }
+    }
+
+    @Test("Preparing for app termination closes every open session across every project before terminating its client")
+    func prepareForTerminationClosesOpenSessionsAcrossProjects() async throws {
+        let clientA = FakeAgentSessionClient()
+        clientA.newSessionResult = .init(sessionId: "a1")
+        let clientB = FakeAgentSessionClient()
+        clientB.newSessionResult = .init(sessionId: "b1")
+        let clientsByPath = [
+            RecentProjectStore.normalizedPath("/repo/project-a"): clientA,
+            RecentProjectStore.normalizedPath("/repo/project-b"): clientB
+        ]
+        let model = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, _ in
+                guard let client = clientsByPath[cwd] else { throw AgentBackendError.missingDevinExecutable }
+                return client
+            },
+            gitStatusProvider: { _ in .unavailable() }
+        )
+        let projectA = RecentProject(path: "/repo/project-a", displayName: "a", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        let projectB = RecentProject(path: "/repo/project-b", displayName: "b", createdAt: .distantPast, lastOpenedAt: .distantPast)
+
+        model.selectProject(projectA)
+        try await waitUntil { clientA.newSessionCwds == ["/repo/project-a"] }
+        model.draft = "hello a"
+        model.sendDraft()
+        try await waitUntil { clientA.prompts.count == 1 }
+
+        model.startNewChat()
+        model.selectProject(projectB)
+        try await waitUntil { clientB.newSessionCwds == ["/repo/project-b"] }
+        model.draft = "hello b"
+        model.sendDraft()
+        try await waitUntil { clientB.prompts.count == 1 }
+
+        // Killing these processes without first telling the backend it's
+        // done with "a1"/"b1" would leave both sessions considered "open"
+        // by a now-dead process, and a future relaunch's freshly spawned
+        // process for either project would be refused when it tries to
+        // reconnect ("already open in another process").
+        await model.prepareForTermination()
+
+        #expect(clientA.closedSessionIdsSnapshot == ["a1"])
+        #expect(clientB.closedSessionIdsSnapshot == ["b1"])
+    }
+
+    /// Opt-in only (`LEVEL5_RUN_REAL_DEVIN_INTEGRATION=1`): proves *why*
+    /// `prepareForTermination` must actually run before a process dies —
+    /// without it (simulating a `pkill`/`SIGKILL`/crash that bypasses
+    /// `Level5AppDelegate` entirely, leaving the old `devin acp` process
+    /// orphaned but still running), a reconnect from a fresh process is
+    /// refused by real Devin's own session-locking, not by anything in this
+    /// app's own logic.
+    @Test("Skipping session close before a process dies reproduces real Devin's 'already open in another process'")
+    func realDevinOrphanedProcessBlocksReconnect() async throws {
+        guard ProcessInfo.processInfo.environment["LEVEL5_RUN_REAL_DEVIN_INTEGRATION"] == "1" else {
+            print("Skipping real Devin integration: set LEVEL5_RUN_REAL_DEVIN_INTEGRATION=1 and be logged into the devin CLI")
+            return
+        }
+        guard DevinRuntime.resolveExecutableURL() != nil else {
+            print("Skipping real Devin integration: no devin executable on PATH")
+            return
+        }
+
+        let projectDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Level5BuildRealDevinTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectDirectory) }
+        let projectPath = projectDirectory.path
+
+        let model1 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, approvalMode in
+                try DevinAgentSessionClient(cwd: cwd, approvalMode: approvalMode)
+            }
+        )
+        let project = RecentProject(path: projectPath, displayName: "real-devin-test", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model1.selectProject(project)
+        try await waitUntil("composer primed", timeout: .seconds(60)) {
+            !model1.modelOptions.isEmpty
+        }
+        model1.draft = "Reply with just the word PONG and nothing else."
+        model1.sendDraft()
+        try await waitUntil("first reply", timeout: .seconds(120)) {
+            model1.transcript.contains { $0.messageRole == .agent && $0.messageText?.contains("PONG") == true }
+        }
+        let sessionId = try #require(model1.activeSessionId)
+        // Deliberately *not* calling `model1.prepareForTermination()` here:
+        // this leaves its `devin acp` process running, orphaned, exactly as
+        // a `pkill`/`SIGKILL`/crash that bypasses `Level5AppDelegate` would.
+
+        let model2 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, approvalMode in
+                try DevinAgentSessionClient(cwd: cwd, approvalMode: approvalMode)
+            }
+        )
+        model2.selectProject(project)
+        try await waitUntil("second client's composer primed", timeout: .seconds(60)) {
+            !model2.modelOptions.isEmpty
+        }
+        model2.selectSession(sessionId)
+        model2.draft = "Reply with just the word PONG2 and nothing else."
+        model2.sendDraft()
+
+        try await waitUntil("reconnect refused by the still-live orphan", timeout: .seconds(30)) {
+            model2.transcript.contains { $0.errorText?.contains("already open in another process") == true }
+        }
+
+        await model1.prepareForTermination()
+        await model2.prepareForTermination()
+    }
+
+    /// Opt-in only (`LEVEL5_RUN_REAL_DEVIN_INTEGRATION=1`): spawns the real
+    /// `devin acp` CLI twice against the same project directory, mirroring
+    /// exactly what a relaunch does — first send creates the session, then
+    /// a second `AgentSessionModel`/`DevinAgentSessionClient` pair (a fresh
+    /// process, no in-memory context) reconnects to it and sends again.
+    /// Unlike `relaunchReconnectPrimingIncludesCwd` (which only proves the
+    /// prompt was *sent*), this asserts the agent's actual reply text makes
+    /// it back into the transcript, against the real backend rather than
+    /// `FakeAgentSessionClient`.
+    @Test("A relaunch's real Devin reconnect still gets a real reply, not just an accepted prompt")
+    func realDevinRelaunchReconnectGetsReply() async throws {
+        guard ProcessInfo.processInfo.environment["LEVEL5_RUN_REAL_DEVIN_INTEGRATION"] == "1" else {
+            print("Skipping real Devin integration: set LEVEL5_RUN_REAL_DEVIN_INTEGRATION=1 and be logged into the devin CLI")
+            return
+        }
+        guard DevinRuntime.resolveExecutableURL() != nil else {
+            print("Skipping real Devin integration: no devin executable on PATH")
+            return
+        }
+
+        let projectDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Level5BuildRealDevinTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectDirectory) }
+        let projectPath = projectDirectory.path
+
+        let model1 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, approvalMode in
+                try DevinAgentSessionClient(cwd: cwd, approvalMode: approvalMode)
+            }
+        )
+        let project = RecentProject(path: projectPath, displayName: "real-devin-test", createdAt: .distantPast, lastOpenedAt: .distantPast)
+        model1.selectProject(project)
+        // `selectProject` eagerly kicks off its own composer-priming
+        // `session/new` in the background (see
+        // `connectAndPrimeComposerSessionForSelectedProjectIfNeeded`);
+        // sending immediately races it into a second, concurrent
+        // `session/new` against the same freshly spawned process. Wait for
+        // that priming to land (surfaced via its `configOptions`) first,
+        // matching how `multiProjectClientsSpawnPerProject` avoids the same
+        // race against `FakeAgentSessionClient`.
+        try await waitUntil("composer primed", timeout: .seconds(60)) {
+            !model1.modelOptions.isEmpty
+        }
+        model1.draft = "Reply with just the word PONG and nothing else."
+        model1.sendDraft()
+        try await waitUntil("first reply", timeout: .seconds(120)) {
+            // Role-gated: the optimistic user echo of this very prompt also
+            // contains "PONG" as a substring, so an unscoped search would
+            // pass immediately without actually waiting for the agent.
+            model1.transcript.contains { $0.messageRole == .agent && $0.messageText?.contains("PONG") == true }
+        }
+        let sessionId = try #require(model1.activeSessionId)
+        await model1.prepareForTermination()
+
+        let model2 = AgentSessionModel(
+            backendKind: .devin,
+            makeClient: { throw AgentBackendError.missingDevinExecutable },
+            makeProjectClient: { cwd, approvalMode in
+                try DevinAgentSessionClient(cwd: cwd, approvalMode: approvalMode)
+            }
+        )
+        model2.selectProject(project)
+        // Same race as model1's composer-priming `session/new`, but now
+        // against `selectSession` + `sendDraft`'s `session/load` +
+        // `session/prompt` for the *existing* session instead of a second
+        // `session/new` — wait for it to land first.
+        try await waitUntil("second client's composer primed", timeout: .seconds(60)) {
+            !model2.modelOptions.isEmpty
+        }
+        model2.selectSession(sessionId)
+        model2.draft = "Reply with just the word PONG2 and nothing else."
+        model2.sendDraft()
+
+        try await waitUntil("reconnect reply", timeout: .seconds(120)) {
+            model2.transcript.contains { $0.messageRole == .agent && $0.messageText?.contains("PONG2") == true }
+        }
+        try await waitUntil("turn completes cleanly") { model2.isActiveSessionRunning == false }
+        await model2.prepareForTermination()
+    }
 }
 
 private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Sendable {
@@ -1824,7 +2192,10 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var newSessionCwds: [String] = []
     var newSessionResult = AcpSessionResult(sessionId: "s1")
     var loadedSessionIds: [String] = []
+    var loadSessionCwds: [String?] = []
     var loadReplay: [String: [AgentTranscriptEvent]] = [:]
+    var loadSessionFailures: Set<String> = []
+    var closedSessionIds: [String] = []
     var deletedSessionIds: [String] = []
     var deleteSessionFailures: Set<String> = []
     var modelOptionSessionIds: [String?] = []
@@ -1861,8 +2232,11 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
     var blockBeforeUserEchoPrompts: Set<String> = []
     var blocksSetModel = false
     var blocksPrompts = false
+    var blocksNewSession = false
     private var setModelContinuation: CheckedContinuation<Void, Never>?
     private var setModelReleasePermits = 0
+    private var newSessionContinuation: CheckedContinuation<Void, Never>?
+    private var newSessionReleasePermits = 0
     private var userEchoContinuations: [CheckedContinuation<Void, Never>] = []
     private var userEchoReleasePermits = 0
     private var promptContinuations: [CheckedContinuation<Void, Never>] = []
@@ -1870,6 +2244,14 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
 
     var promptSessionIds: [String] {
         lock.withLock { prompts.map(\.sessionId) }
+    }
+
+    var loadSessionCwdsSnapshot: [String?] {
+        lock.withLock { loadSessionCwds }
+    }
+
+    var closedSessionIdsSnapshot: [String] {
+        lock.withLock { closedSessionIds }
     }
 
     var setModelRequestsSnapshot: [ModelRequest] {
@@ -1913,15 +2295,40 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
         if let names = lock.withLock({ availableCommandNamesOnNewSession }) {
             emitAvailableCommands(newSessionResult.sessionId ?? "", names: names)
         }
+        if lock.withLock({ blocksNewSession }) {
+            await withCheckedContinuation { continuation in
+                let shouldResume = lock.withLock {
+                    if newSessionReleasePermits > 0 {
+                        newSessionReleasePermits -= 1
+                        return true
+                    }
+                    newSessionContinuation = continuation
+                    return false
+                }
+                if shouldResume {
+                    continuation.resume()
+                }
+            }
+        }
         return newSessionResult
     }
 
     func loadSession(sessionId: String, cwd: String?) async throws -> AcpSessionResult {
-        lock.withLock { loadedSessionIds.append(sessionId) }
+        lock.withLock {
+            loadedSessionIds.append(sessionId)
+            loadSessionCwds.append(cwd)
+        }
+        if lock.withLock({ loadSessionFailures.contains(sessionId) }) {
+            throw FakeClientError.promptFailed
+        }
         for event in lock.withLock({ loadReplay[sessionId] ?? [] }) {
             emitTranscriptEvent(event, sessionId: sessionId)
         }
         return .init(sessionId: sessionId)
+    }
+
+    func closeSession(sessionId: String) async throws {
+        lock.withLock { closedSessionIds.append(sessionId) }
     }
 
     func deleteSession(sessionId: String) async throws {
@@ -2086,6 +2493,18 @@ private final class FakeAgentSessionClient: AgentSessionClient, @unchecked Senda
                 return nil
             }
             setModelContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+
+    func releaseNewSession() {
+        let continuation: CheckedContinuation<Void, Never>? = lock.withLock {
+            guard let continuation = newSessionContinuation else {
+                newSessionReleasePermits += 1
+                return nil
+            }
+            newSessionContinuation = nil
             return continuation
         }
         continuation?.resume()

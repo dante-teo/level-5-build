@@ -42,8 +42,24 @@ public struct AcpClient: Sendable {
         _ = try await request(AcpMethod.sessionDelete, params: params, as: JSONValue.self)
     }
 
+    /// Unlike every other request, `session/prompt` doesn't resolve until
+    /// the *entire* agent turn completes — which, for a real coding turn
+    /// with tool calls, routinely takes far longer than the short
+    /// (10-30s) default request timeout meant for quick RPCs like
+    /// `initialize`/`session/new`. Applying that default here caused the
+    /// request to time out and get reported as "Prompt failed" while the
+    /// agent was still legitimately working; the real reply would still
+    /// stream in via `session/update` notifications and even the eventual
+    /// `session/prompt` response would still arrive, just too late to
+    /// match a still-pending request — logged as an "unexpected response
+    /// id" and silently dropped. Detecting a genuinely stuck turn is
+    /// already `AgentSessionModel`'s idle-activity watchdog's job (it
+    /// resets on every inbound event, not on a fixed wall-clock budget),
+    /// so this uses a generous fixed upper bound purely as a last-resort
+    /// safety net against a leaked continuation, not as the real
+    /// timeout mechanism.
     public func prompt(_ params: AcpPromptParams) async throws -> AcpPromptResult {
-        try await request(AcpMethod.sessionPrompt, params: params, as: AcpPromptResult.self)
+        try await request(AcpMethod.sessionPrompt, params: params, as: AcpPromptResult.self, timeout: .seconds(21_600))
     }
 
     public func cancel(sessionId: String) async throws {
@@ -70,13 +86,13 @@ public struct AcpClient: Sendable {
         try await transport.respondError(id: id, error: AcpRpcError(code: code, message: message, data: data))
     }
 
-    private func request<T: Decodable>(_ method: String, params: some Encodable, as type: T.Type) async throws -> T {
+    private func request<T: Decodable>(_ method: String, params: some Encodable, as type: T.Type, timeout: Duration? = nil) async throws -> T {
         let encoded = try AcpProtocolCoding.encodeJSONValue(params)
         let jsonParams: JSONValue? = encoded
-        return try await request(method, params: jsonParams, as: type)
+        return try await request(method, params: jsonParams, as: type, timeout: timeout)
     }
 
-    private func request<T: Decodable>(_ method: String, params: JSONValue?, as type: T.Type) async throws -> T {
-        return try AcpProtocolCoding.decode(type, from: try await transport.request(method: method, params: params))
+    private func request<T: Decodable>(_ method: String, params: JSONValue?, as type: T.Type, timeout: Duration? = nil) async throws -> T {
+        return try AcpProtocolCoding.decode(type, from: try await transport.request(method: method, params: params, timeout: timeout))
     }
 }

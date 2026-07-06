@@ -18,9 +18,6 @@ public enum L5Icon: Equatable {
     case settings
     case sourceDocument
     case sourceWeb
-    case status
-    case tool
-    case user
     case workingTreeChanges
 
     public var systemName: String {
@@ -42,16 +39,13 @@ public enum L5Icon: Equatable {
         case .settings: "gearshape"
         case .sourceDocument: "doc"
         case .sourceWeb: "link"
-        case .status: "info.circle"
-        case .tool: "wrench.and.screwdriver"
-        case .user: "person.fill"
         case .workingTreeChanges: "plus.rectangle"
         }
     }
 
     var weight: Font.Weight {
         switch self {
-        case .agent, .awaitingPermission, .completed, .error, .running, .user:
+        case .agent, .awaitingPermission, .completed, .error, .running:
             .semibold
         default:
             .medium

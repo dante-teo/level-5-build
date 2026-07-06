@@ -60,6 +60,32 @@ struct AcpTransportTests {
         #expect(diagnostic.message.contains("unexpected response id"))
     }
 
+    @Test("session/prompt is not bound by the transport's short default request timeout")
+    func promptIgnoresShortDefaultTimeout() async throws {
+        // A real agent turn (tool calls, edits, etc.) routinely takes far
+        // longer than the short default meant for quick RPCs like
+        // `initialize`. `AcpClient.prompt` must use its own generous
+        // timeout instead of the transport's default, or a legitimately
+        // long-running turn gets reported as "Prompt failed" while the
+        // agent is still working — see `AcpClient.prompt`.
+        let harness = TransportHarness(timeout: .milliseconds(20))
+        let client = AcpClient(transport: harness.transport)
+
+        let request = Task {
+            try await client.prompt(.init(sessionId: "s1", prompt: []))
+        }
+        _ = try await harness.nextSent()
+
+        // Outlive the transport's short default timeout by several times
+        // over before finally responding: if `prompt` were bound by that
+        // default, awaiting below would throw `requestTimedOut` instead of
+        // succeeding.
+        try await Task.sleep(for: .milliseconds(100))
+        await harness.transport.handleLine(#"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#)
+        let result = try await request.value
+        #expect(result.stopReason == "end_turn")
+    }
+
     @Test("Task cancellation removes pending continuation")
     func taskCancellation() async throws {
         let harness = TransportHarness(timeout: .seconds(5))

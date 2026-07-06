@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 public struct Level5BuildApp: App {
+    @NSApplicationDelegateAdaptor(Level5AppDelegate.self) private var appDelegate
     @FocusedValue(\.shellCommands) private var shellCommands
 
     public init() {
@@ -12,6 +13,7 @@ public struct Level5BuildApp: App {
     public var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(appDelegate)
         }
         .defaultSize(width: 1120, height: 760)
         .commands {

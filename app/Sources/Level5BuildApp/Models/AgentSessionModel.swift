@@ -117,6 +117,19 @@ final class AgentSessionModel {
     /// that project. Reused as the real session on first send. Empty string
     /// means "creation in flight" (reservation to avoid duplicate creates).
     private var primingSessionIdByProjectKey: [String: String] = [:]
+    /// The in-flight `ensureConnected` + `primeComposerSession` task for a
+    /// project key, if any (see `start()`/
+    /// `connectAndPrimeComposerSessionForSelectedProjectIfNeeded`). Real
+    /// Devin's ACP server does not handle that composer-priming
+    /// `session/new` racing an unrelated `session/load`/`session/prompt`
+    /// against the same process safely (observed: the whole process can
+    /// exit), so `send`/`createSessionAndSend` await this before issuing
+    /// their own RPCs rather than launching them concurrently. Stale
+    /// (already-completed) entries are harmless to leave behind — awaiting
+    /// a finished `Task` returns immediately — so this is only ever
+    /// overwritten by a newer priming attempt for the same key, never
+    /// explicitly cleared.
+    private var primingTaskByProjectKey: [String: Task<Void, Never>] = [:]
     /// Sessions whose server-side context (history, config) is already
     /// known to the *current* process for their project — either because
     /// they were created/primed this run (`createSessionAndSend`,
@@ -349,7 +362,7 @@ final class AgentSessionModel {
         guard backendKind == .acpMock || backendKind == .devin else { return }
         hydrateAllPersistedSessions()
         let key = currentSidebarProjectKey
-        Task {
+        primingTaskByProjectKey[key] = Task {
             await ensureConnected(projectKey: key)
             if isNewSession {
                 await primeComposerSession(forProjectKey: key)
@@ -476,7 +489,7 @@ final class AgentSessionModel {
             availability = .available
             runtimeMessage = nil
         }
-        Task {
+        primingTaskByProjectKey[key] = Task {
             await ensureConnected(projectKey: key)
             await primeComposerSession(forProjectKey: key)
         }
@@ -522,6 +535,15 @@ final class AgentSessionModel {
         } catch {
             primingSessionIdByProjectKey[key] = nil
         }
+    }
+
+    /// Waits for any `start()`/`selectProject`/`clearSelectedProject`
+    /// composer-priming in flight for `key` to finish before the caller
+    /// issues its own RPC against the same client — see
+    /// `primingTaskByProjectKey`.
+    private func awaitComposerPriming(forProjectKey key: String) async {
+        guard let task = primingTaskByProjectKey[key] else { return }
+        await task.value
     }
 
     func refreshProjectDashboard() {
@@ -627,14 +649,46 @@ final class AgentSessionModel {
     /// affected project's `devin acp` process. Projects with a turn in
     /// flight are restarted once that turn finishes instead of killing it.
     private func restartClientsForApprovalModeChange() {
-        for key in clients.keys {
+        for key in Array(clients.keys) {
             let hasActiveTurn = activeTurns.keys.contains { sessionProjectKeyBySessionId[$0] == key }
             if hasActiveTurn {
                 pendingApprovalModeRestartProjectKeys.insert(key)
             } else {
-                terminateClient(forProjectKey: key)
+                Task { await closeSessionsAndTerminateClient(forProjectKey: key) }
             }
         }
+    }
+
+    /// Every session this run created or primed for `key`'s client, in the
+    /// shape real Devin needs to `session/close` them: closing a session
+    /// with no active turn is a cheap no-op server-side, but skipping it
+    /// leaves that session considered "open" by the process this is about
+    /// to kill regardless.
+    private func openSessionIds(forProjectKey key: String) -> Set<String> {
+        var ids = primedSessionIds[key] ?? []
+        if let primingSessionId = primingSessionIdByProjectKey[key], !primingSessionId.isEmpty {
+            ids.insert(primingSessionId)
+        }
+        return ids
+    }
+
+    /// Best-effort `session/close` for every session `key`'s client still
+    /// considers open. Real Devin refuses a future `session/load` for a
+    /// session a live process still holds open with "already open in
+    /// another process" — including one this app orphaned by killing that
+    /// process without saying goodbye — so every session that process
+    /// created or primed must be explicitly closed before it's terminated,
+    /// whether that's an approval-mode restart or app quit
+    /// (`prepareForTermination`). Failures are swallowed: the client is
+    /// being torn down regardless, and a backend that can't close cleanly
+    /// (or doesn't implement `session/close` at all) must not block that.
+    private func closeSessionsAndTerminateClient(forProjectKey key: String) async {
+        if let client = clients[key] {
+            for sessionId in openSessionIds(forProjectKey: key) {
+                try? await client.closeSession(sessionId: sessionId)
+            }
+        }
+        terminateClient(forProjectKey: key)
     }
 
     private func terminateClient(forProjectKey key: String) {
@@ -657,11 +711,27 @@ final class AgentSessionModel {
         sessionProjectKeyBySessionId.filter { $0.value == key }.map(\.key)
     }
 
-    private func applyDeferredApprovalModeRestartIfNeeded(projectKey key: String) {
+    private func applyDeferredApprovalModeRestartIfNeeded(projectKey key: String) async {
         guard pendingApprovalModeRestartProjectKeys.contains(key) else { return }
         let stillRunning = activeTurns.keys.contains { sessionProjectKeyBySessionId[$0] == key }
         guard !stillRunning else { return }
-        terminateClient(forProjectKey: key)
+        await closeSessionsAndTerminateClient(forProjectKey: key)
+    }
+
+    /// Gives every spawned backend process a chance to release its sessions
+    /// before this app process exits. Called from
+    /// `Level5AppDelegate.applicationShouldTerminate` (graceful Cmd+Q/Dock
+    /// quit) and from its `SIGTERM`/`SIGINT` signal handlers (e.g.
+    /// `script/build_and_run.sh`'s `pkill -x`) before actually terminating,
+    /// since an orphaned `devin acp` process that this app just kills on
+    /// quit (the previous behavior) keeps every session it had open locked
+    /// from a future relaunch's freshly spawned process — the same
+    /// "already open in another process" failure a live approval-mode
+    /// restart already had to guard against above.
+    func prepareForTermination() async {
+        for key in Array(clients.keys) {
+            await closeSessionsAndTerminateClient(forProjectKey: key)
+        }
     }
 
     func respondToPermission(optionId: String) {
@@ -948,6 +1018,7 @@ final class AgentSessionModel {
 
     private func createSessionAndSend(_ snapshot: ComposerDraft) async {
         let key = projectKey(for: selectedProjectPath)
+        await awaitComposerPriming(forProjectKey: key)
         guard await ensureConnected(projectKey: key) else { return }
         guard let client = clients[key] else { return }
         do {
@@ -1028,6 +1099,7 @@ final class AgentSessionModel {
 
     private func send(_ snapshot: ComposerDraft, to sessionId: String, isAlreadyMarkedRunning: Bool = false) async {
         let key = projectKey(forSessionId: sessionId)
+        await awaitComposerPriming(forProjectKey: key)
         guard await ensureConnected(projectKey: key) else {
             if isAlreadyMarkedRunning {
                 clearActiveTurn(sessionId)
@@ -1042,6 +1114,13 @@ final class AgentSessionModel {
                     clearActiveTurn(sessionId)
                     updateRunningFlags()
                 }
+                // `primeSessionForSend` already appended a visible "Load
+                // failed" transcript error; don't also leave the composer
+                // stuck showing a stale "Starting.../Sending..." hint that
+                // no longer describes anything actually in flight.
+                if isActiveProjectKey(key) {
+                    runtimeMessage = nil
+                }
                 return
             }
         }
@@ -1051,12 +1130,17 @@ final class AgentSessionModel {
         pendingUserEchoes[sessionId, default: []].append(displayMessage)
         appendUser(displayMessage, to: sessionId)
         markObservedActivity(for: sessionId)
+        // The prompt is now genuinely in flight and its live progress
+        // (plan updates, tool calls, streamed text) renders directly in the
+        // transcript below; holding the transient "Starting.../Sending..."
+        // hint up top for the entire — possibly long-running — turn would
+        // just be stale, misleading chrome once real progress is visible.
+        if isActiveProjectKey(key) {
+            runtimeMessage = nil
+        }
         do {
             let result = try await client.prompt(sessionId: sessionId, blocks: snapshot.promptBlocks)
             guard isCurrentTurn(sessionId: sessionId, turnId: turnId) else { return }
-            if isActiveProjectKey(key) {
-                runtimeMessage = nil
-            }
             apply(.stopReason(result.stopReason), to: sessionId)
             updateCompletionState(sessionId: sessionId, stopReason: result.stopReason)
             refreshDashboardStatus()
@@ -1077,7 +1161,7 @@ final class AgentSessionModel {
         clearActiveTurn(sessionId)
         updateRunningFlags()
         refreshReviewCountsIfSupported()
-        applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
+        await applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
         await startNextQueuedPromptIfNeeded(for: sessionId)
     }
 
@@ -1101,7 +1185,16 @@ final class AgentSessionModel {
     private func primeSessionForSend(_ sessionId: String, projectKey key: String, client: AgentSessionClient) async -> Bool {
         suppressingPrimeReplayForSessionIds.insert(sessionId)
         do {
-            let result = try await client.loadSession(sessionId: sessionId, cwd: nil)
+            // Real Devin's `session/load`, like `session/new`, requires
+            // `cwd` in params — without it the call fails outright with a
+            // "missing field cwd" deserialization error, breaking every
+            // existing-session reconnect for a session this process hasn't
+            // primed yet (a freshly spawned process has no other way to
+            // know which project's session it's loading). For Devin, a
+            // project's own key *is* its normalized cwd (see
+            // `projectKey(for:)`), so `key` is always the right value here;
+            // mock ignores `cwd` entirely.
+            let result = try await client.loadSession(sessionId: sessionId, cwd: key)
             sessionProjectKeyBySessionId[sessionId] = key
             applyModelConfig(result.configOptions, sessionId: sessionId)
             await refreshSessionSlashCommands(sessionId, projectKey: key)
@@ -1439,9 +1532,7 @@ final class AgentSessionModel {
                         cleanupUnhealthyRuntime(message: "Agent runtime disconnected: turn idle timeout", projectKey: key)
                     }
                 } else {
-                    await MainActor.run {
-                        applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
-                    }
+                    await applyDeferredApprovalModeRestartIfNeeded(projectKey: key)
                 }
             } catch {
                 await MainActor.run {

@@ -22,6 +22,7 @@ struct WorkspaceView: View {
     let isActiveSessionRunning: Bool
     let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
+    let selectedProjectBranch: String?
     let recentProjects: [RecentProject]
     let canSendWithButton: Bool
     let canEditComposer: Bool
@@ -65,6 +66,7 @@ struct WorkspaceView: View {
                         isActiveSessionRunning: isActiveSessionRunning,
                         isModelSaveInFlight: isModelSaveInFlight,
                         selectedProject: selectedProject,
+                        selectedProjectBranch: selectedProjectBranch,
                         recentProjects: recentProjects,
                         canSendWithButton: canSendWithButton,
                         canEditComposer: canEditComposer,
@@ -218,6 +220,7 @@ struct WorkspaceView: View {
                 isModelSaveInFlight: isModelSaveInFlight,
                 isNewSession: false,
                 selectedProject: selectedProject,
+                selectedProjectBranch: nil,
                 recentProjects: recentProjects,
                 canSendWithButton: canSendWithButton,
                 canEditComposer: canEditComposer,
@@ -259,6 +262,7 @@ private struct NewSessionView: View {
     let isActiveSessionRunning: Bool
     let isModelSaveInFlight: Bool
     let selectedProject: RecentProject?
+    let selectedProjectBranch: String?
     let recentProjects: [RecentProject]
     let canSendWithButton: Bool
     let canEditComposer: Bool
@@ -303,6 +307,7 @@ private struct NewSessionView: View {
                     isModelSaveInFlight: isModelSaveInFlight,
                     isNewSession: true,
                     selectedProject: selectedProject,
+                    selectedProjectBranch: selectedProjectBranch,
                     recentProjects: recentProjects,
                     canSendWithButton: canSendWithButton,
                     canEditComposer: canEditComposer,

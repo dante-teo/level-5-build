@@ -18,6 +18,7 @@ struct ComposerView: View {
     let isModelSaveInFlight: Bool
     let isNewSession: Bool
     let selectedProject: RecentProject?
+    let selectedProjectBranch: String?
     let recentProjects: [RecentProject]
     let canSendWithButton: Bool
     let canEditComposer: Bool
@@ -180,6 +181,7 @@ struct ComposerView: View {
             if isNewSession {
                 ComposerContextFooter(
                     selectedProject: selectedProject,
+                    selectedProjectBranch: selectedProjectBranch,
                     recentProjects: recentProjects,
                     selectProjectAction: selectProjectAction,
                     clearProjectAction: clearProjectAction,
@@ -1082,6 +1084,7 @@ private struct SlashCommandAutocomplete: View {
 
 private struct ComposerContextFooter: View {
     let selectedProject: RecentProject?
+    let selectedProjectBranch: String?
     let recentProjects: [RecentProject]
     let selectProjectAction: (URL) -> Void
     let clearProjectAction: () -> Void
@@ -1115,7 +1118,9 @@ private struct ComposerContextFooter: View {
                 )
             }
 
-            FooterItem(title: "macos", systemImage: "point.3.connected.trianglepath.dotted")
+            if let selectedProjectBranch {
+                FooterItem(title: selectedProjectBranch, systemImage: "point.3.connected.trianglepath.dotted")
+            }
 
             Spacer()
         }

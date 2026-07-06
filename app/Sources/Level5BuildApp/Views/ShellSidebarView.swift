@@ -10,80 +10,57 @@ struct ShellSidebarView: View {
     let deleteSessionAction: (String) -> Void
 
     var body: some View {
-        List {
-            Section {
-                Level5IdentityHeader()
-                    .listRowInsets(EdgeInsets(top: L5Spacing.x3, leading: L5Spacing.x3, bottom: L5Spacing.x3, trailing: L5Spacing.x3))
+        VStack(spacing: 0) {
+            List {
+                Section {
+                    Button(action: newChatAction) {
+                        Label {
+                            Text("New Chat")
+                        } icon: {
+                            L5IconView(.newChat)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
 
-                Button(action: newChatAction) {
-                    Label {
-                        Text("New Chat")
-                    } icon: {
-                        L5IconView(.newChat)
+                Section("Chats") {
+                    if sessions.isEmpty {
+                        Text("No saved chats yet")
+                            .font(L5Font.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, L5Spacing.x1)
+                    } else {
+                        ForEach(sessions) { session in
+                            SidebarSessionRow(
+                                session: session,
+                                isActive: session.sessionId == activeSessionId,
+                                selectAction: {
+                                    selectSessionAction(session.sessionId)
+                                },
+                                deleteAction: {
+                                    deleteSessionAction(session.sessionId)
+                                }
+                            )
+                        }
                     }
                 }
-                .buttonStyle(.plain)
             }
+            .listStyle(.sidebar)
 
-            Section("Chats") {
-                if sessions.isEmpty {
-                    Text("No saved chats yet")
-                        .font(L5Font.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.vertical, L5Spacing.x1)
-                } else {
-                    ForEach(sessions) { session in
-                        SidebarSessionRow(
-                            session: session,
-                            isActive: session.sessionId == activeSessionId,
-                            selectAction: {
-                                selectSessionAction(session.sessionId)
-                            },
-                            deleteAction: {
-                                deleteSessionAction(session.sessionId)
-                            }
-                        )
-                    }
+            Divider()
+
+            Button {} label: {
+                Label {
+                    Text("Settings")
+                } icon: {
+                    L5IconView(.settings)
                 }
             }
-
-            Section {
-                Button {} label: {
-                    Label {
-                        Text("Settings")
-                    } icon: {
-                        L5IconView(.settings)
-                    }
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(EdgeInsets(top: L5Spacing.x3, leading: L5Spacing.x3, bottom: L5Spacing.x3, trailing: L5Spacing.x3))
         }
-        .listStyle(.sidebar)
-    }
-}
-
-private struct Level5IdentityHeader: View {
-    var body: some View {
-        HStack(spacing: L5Spacing.x3) {
-            L5Asset.mark
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 34, height: 34)
-                .clipShape(RoundedRectangle(cornerRadius: L5Radius.small, style: .continuous))
-
-            VStack(alignment: .leading, spacing: L5Spacing.x1) {
-                Text("Level5")
-                    .font(L5Font.h3)
-                    .foregroundStyle(L5Color.textPrimary)
-
-                Text("Native workspace")
-                    .font(L5Font.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, L5Spacing.x1)
     }
 }
 

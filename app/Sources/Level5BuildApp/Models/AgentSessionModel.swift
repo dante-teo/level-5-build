@@ -69,6 +69,7 @@ final class AgentSessionModel {
     private(set) var sessions: [AgentSessionRow] = []
     private(set) var activeSessionId: String?
     private(set) var selectedProject: RecentProject?
+    private(set) var selectedProjectBranch: String?
     private(set) var activeSessionProjectPath: String?
     private(set) var dashboardState: ProjectDashboardState?
     private(set) var runtimeMessage: String?
@@ -103,6 +104,7 @@ final class AgentSessionModel {
     private var defaultModelId: String?
     private var dashboardRefreshGeneration = 0
     private var reviewRefreshGeneration = 0
+    private var selectedProjectBranchRefreshGeneration = 0
     /// One ACP client per project. Keyed by `Self.sharedClientKey` for the
     /// mock backend (a single shared server handles every project), or by
     /// the normalized project path for Devin (one spawned `devin acp`
@@ -439,6 +441,7 @@ final class AgentSessionModel {
         selectedProject = project
         reconcileReviewContext(previousPath: previousReviewPath)
         connectAndPrimeComposerSessionForSelectedProjectIfNeeded()
+        refreshSelectedProjectBranch()
     }
 
     func clearSelectedProject() {
@@ -447,6 +450,28 @@ final class AgentSessionModel {
         selectedProject = nil
         reconcileReviewContext(previousPath: previousReviewPath)
         connectAndPrimeComposerSessionForSelectedProjectIfNeeded()
+        refreshSelectedProjectBranch()
+    }
+
+    /// The composer's footer shows the current branch for whichever project
+    /// is selected for the *next* new chat (see `selectedProject`) — distinct
+    /// from `dashboardState.gitStatus.branch`, which tracks the *active
+    /// session's* project instead. Re-fetched on every selection change and
+    /// cleared immediately (rather than left stale) when no project is
+    /// selected.
+    private func refreshSelectedProjectBranch() {
+        selectedProjectBranchRefreshGeneration += 1
+        let generation = selectedProjectBranchRefreshGeneration
+        guard let projectPath = selectedProjectPath else {
+            selectedProjectBranch = nil
+            return
+        }
+        selectedProjectBranch = nil
+        Task {
+            let status = await gitStatusProvider(projectPath)
+            guard selectedProjectBranchRefreshGeneration == generation else { return }
+            selectedProjectBranch = status.isAvailable ? status.branch : nil
+        }
     }
 
     func openReview() {

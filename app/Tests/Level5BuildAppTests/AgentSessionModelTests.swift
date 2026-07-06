@@ -1238,14 +1238,20 @@ struct AgentSessionModelTests {
         model.sendDraft()
         try await waitUntil("two dashboard") { model.dashboardState?.projectPath == "/repo/two" }
 
-        // Session creation and `beginTurn` each kick off their own dashboard
-        // refresh, so switching sessions after both sends leaves 4 pending
-        // `gitStatusProvider` calls in flight (2 per session, both blocked
-        // on `client.blocksPrompts` before either turn's own completion
-        // could trigger yet another). Only the *last* one for the
-        // currently active project (project two) should win.
+        // `selectProject` also kicks off its own `gitStatusProvider` call to
+        // refresh `selectedProjectBranch`, ahead of session creation and
+        // `beginTurn`'s own dashboard refreshes, so switching sessions after
+        // both sends leaves 6 pending `gitStatusProvider` calls in flight (1
+        // for `selectProject` + 2 per session, all blocked on
+        // `client.blocksPrompts` before either turn's own completion could
+        // trigger yet another). Only the *last* dashboard one for the
+        // currently active project (project two) should win; the two
+        // `selectProject` releases are consumed but their value is
+        // irrelevant since they only feed `selectedProjectBranch`.
+        await gate.release(.unavailable())
         await gate.release(.init(isAvailable: true, root: "/repo/one", branch: "stale", changedFiles: 99))
         await gate.release(.init(isAvailable: true, root: "/repo/one", branch: "stale", changedFiles: 99))
+        await gate.release(.unavailable())
         await gate.release(.init(isAvailable: true, root: "/repo/two", branch: "stale", changedFiles: 99))
         await gate.release(.init(isAvailable: true, root: "/repo/two", branch: "main", changedFiles: 1))
         try await waitUntil { model.dashboardState?.gitStatus.branch == "main" }

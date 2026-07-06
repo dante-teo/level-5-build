@@ -231,6 +231,7 @@ Rules:
 - Stop immediately restores composer editing for that selected session, sends ACP `session/cancel`, cancels any pending permission request with ACP's cancelled outcome, clears queued prompts for that same session, preserves already-streamed transcript rows, suppresses stale late output from that cancelled turn, and records a compact cancelled status (never rendered as a transcript row).
 - If the user sends again immediately after Stop, stale output must remain suppressed until the backend echoes the new prompt's user message so cancelled-turn output does not appear as part of the new turn.
 - In the empty-chat state, the composer footer shows `Choose project` when no project is selected, or the selected folder name when project context exists.
+- The footer's Git branch indicator shows the selected project's real current branch once fetched; hide it entirely (no placeholder label) while no project is selected or Git status is unavailable, per the runtime-backed-controls rule above.
 - The project popover supports search, recent project folders, `New project`, and `Don't work in a project`.
 - Recent project rows show the folder name and a muted, middle-truncated path. Missing folders are disabled, visibly marked, and removable rather than silently deleted.
 - Once a chat has visible transcript content, hide the project footer and lock project context until New Chat.

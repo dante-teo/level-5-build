@@ -73,6 +73,7 @@ public struct ContentView: View {
                         isActiveSessionRunning: model.isActiveSessionRunning,
                         isModelSaveInFlight: model.sessionModelSaveInFlight,
                         selectedProject: model.selectedProject,
+                        selectedProjectBranch: model.selectedProjectBranch,
                         recentProjects: recentProjects,
                         canSendWithButton: model.canSendWithButton,
                         canEditComposer: model.canEditComposer,

@@ -104,6 +104,7 @@ private struct ComposerSmokeHarness: View {
             isModelSaveInFlight: false,
             isNewSession: pendingPermissionRequest == nil,
             selectedProject: nil,
+            selectedProjectBranch: nil,
             recentProjects: [],
             canSendWithButton: false,
             canEditComposer: pendingPermissionRequest == nil,

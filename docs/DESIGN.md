@@ -165,6 +165,17 @@ Rules:
 - Bottom account/settings areas may use a quiet divider.
 - The floating app capsule sits just outside the sidebar edge. Only the collapse/expand icon inside the capsule is clickable; app logo/name text are display-only.
 
+### Settings
+
+Settings is a centered modal dialog (`role="dialog"`, `E3` elevation, backdrop-blurred scrim), opened from the sidebar's `Settings` row and dismissed by its close button, `Escape`, or clicking the scrim.
+
+Rules:
+
+- Keep the dialog to a single narrow column (`max-w-sm`); do not grow it into a multi-pane preferences window.
+- Each setting is a labeled native control (e.g. a `<select>`) rather than a custom picker, matching the "small fixed enum choice" pattern already used elsewhere (e.g. the approval-mode popover).
+- Settings changes persist immediately on change; there is no separate Save/Cancel step.
+- Do not block the dialog open/interaction on the setting's own async load — disable the control instead until the current value is known.
+
 ### Workspace
 
 The workspace is the primary content area.

@@ -3,13 +3,17 @@ import {
 	AGENT_CLIENT_CAPABILITIES,
 	ACP_MOCK_SPAWN_FAILURE_MESSAGE,
 	DEVIN_MISSING_CLI_MESSAGE,
+	OMP_MISSING_CLI_MESSAGE,
 	buildAgentSpawnOptions,
 	buildMockSpawnOptions,
 	buildSelectedPermissionResponse,
 	buildDevinSpawnOptions,
+	buildOmpSpawnOptions,
 	devinPermissionMode,
 	isAcpMockEnabled,
 	isDevinAvailable,
+	isOmpAvailable,
+	normalizeAcpProvider,
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
 	selectedAgentBackend,
@@ -41,9 +45,11 @@ describe("Devin ACP runtime", () => {
 
 	test("selects Devin by default and mock only when explicitly enabled", () => {
 		expect(isAcpMockEnabled({})).toBe(false);
-		expect(selectedAgentBackend({})).toBe("devin");
+		expect(selectedAgentBackend({}, "devin")).toBe("devin");
 		expect(isAcpMockEnabled({ LEVEL5_USE_ACP_MOCK: "1" })).toBe(true);
-		expect(selectedAgentBackend({ LEVEL5_USE_ACP_MOCK: "1" })).toBe("mock");
+		expect(selectedAgentBackend({ LEVEL5_USE_ACP_MOCK: "1" }, "devin")).toBe("mock");
+		expect(selectedAgentBackend({}, "omp")).toBe("omp");
+		expect(selectedAgentBackend({ LEVEL5_USE_ACP_MOCK: "1" }, "omp")).toBe("mock");
 	});
 
 	test("builds the mock ACP process command without requiring Devin on PATH", () => {
@@ -71,6 +77,22 @@ describe("Devin ACP runtime", () => {
 				env: { LEVEL5_USE_ACP_MOCK: "1", LEVEL5_ACP_MOCK_START_PATH: "/tmp/repo/acp-mock-server/start.sh" },
 			}).cmd,
 		).toContain("/tmp/repo/acp-mock-server/start.sh");
+		expect(buildAgentSpawnOptions({ approvalMode: "ask", cwd: "/tmp/project", env: {}, provider: "omp" }).cmd).toEqual(["omp", "acp"]);
+	});
+
+	test("builds the omp ACP process command", () => {
+		expect(buildOmpSpawnOptions({ cwd: "/tmp/project", env: {} })).toMatchObject({
+			cmd: ["omp", "acp"],
+			cwd: "/tmp/project",
+			env: {},
+		});
+	});
+
+	test("normalizes unknown ACP providers conservatively", () => {
+		expect(normalizeAcpProvider("omp")).toBe("omp");
+		expect(normalizeAcpProvider("devin")).toBe("devin");
+		expect(normalizeAcpProvider(undefined)).toBe("devin");
+		expect(normalizeAcpProvider("bogus")).toBe("devin");
 	});
 
 	test("initializes with honest v1 client capabilities", () => {
@@ -114,10 +136,16 @@ describe("Devin ACP runtime", () => {
 	test("missing CLI error tells the user how to recover", () => {
 		expect(DEVIN_MISSING_CLI_MESSAGE).toContain("Install the Devin CLI");
 		expect(DEVIN_MISSING_CLI_MESSAGE).toContain("devin auth login");
+		expect(OMP_MISSING_CLI_MESSAGE).toContain("Install omp");
+		expect(OMP_MISSING_CLI_MESSAGE).toContain("omp` is on PATH");
 		expect(ACP_MOCK_SPAWN_FAILURE_MESSAGE).toContain("ACP mock backend");
 	});
 
 	test("missing CLI detector returns false for an empty PATH", () => {
 		expect(isDevinAvailable({ PATH: "" })).toBe(false);
+	});
+
+	test("missing omp CLI detector returns false for an empty PATH", () => {
+		expect(isOmpAvailable({ PATH: "" })).toBe(false);
 	});
 });

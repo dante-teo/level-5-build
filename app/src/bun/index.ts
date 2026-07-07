@@ -17,10 +17,14 @@ import {
 	ACP_MOCK_SPAWN_FAILURE_MESSAGE,
 	DEFAULT_APPROVAL_MODE,
 	DEVIN_MISSING_CLI_MESSAGE,
+	OMP_MISSING_CLI_MESSAGE,
+	SETTINGS_KEY_ACP_PROVIDER,
 	buildAgentSpawnOptions,
 	buildSelectedPermissionResponse,
 	devinPermissionMode,
 	isDevinAvailable,
+	isOmpAvailable,
+	normalizeAcpProvider,
 	selectedAgentBackend,
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
@@ -30,6 +34,7 @@ import { getProjectGitStatus } from "./git/status";
 import { getFileDiffPreview, getProjectReviewSnapshot } from "./git/review";
 import { applyMacWindowEffects } from "./macWindowEffects";
 import { openDatabase } from "./persistence/database";
+import { getSetting, setSetting } from "./persistence/settingsStore";
 import { listRecentProjects as listRecentProjectsStore, upsertSelectedFolder } from "./persistence/recentProjectStore";
 import {
 	deleteSession as deletePersistedSession,
@@ -52,6 +57,7 @@ import {
 import { APPROVAL_MODE_LABELS } from "../shared/rpc";
 import type {
 	AppRPC,
+	AcpProviderId,
 	ApprovalModeId,
 	AgentRunStatus,
 	CancelAgentPromptParams,
@@ -159,10 +165,17 @@ class AgentRuntimeContext {
 	// session -- not merely when the next prompt is sent -- to bridge any
 	// race between a new send and the cancelled turn's last trailing output.
 	readonly staleSessionIds = new Set<string>();
+	acpProvider: AcpProviderId;
 
 	constructor(private readonly emitUpdate: (sessionId: string, update: AgentUpdate) => void) {
 		this.hiddenIds = hiddenSessionIds(this.db);
+		this.acpProvider = normalizeAcpProvider(getSetting(this.db, SETTINGS_KEY_ACP_PROVIDER));
 		this.hydratePersistedSessions();
+	}
+
+	setAcpProvider(provider: AcpProviderId): void {
+		this.acpProvider = provider;
+		setSetting(this.db, SETTINGS_KEY_ACP_PROVIDER, provider);
 	}
 
 	/**
@@ -274,13 +287,13 @@ class AgentRuntimeContext {
 }
 
 /**
- * One spawned `devin --permission-mode <mode> acp` process per project
- * directory, keyed by normalized project path (see AGENTS.md). Owns its own
- * process/transport/ACP client, turn/permission state, config, and slash
- * commands, so one project's process exiting, timing out, or streaming
- * events cannot leak into another project's transcript. The durable cache
- * (sessions/transcripts/hidden ids) is shared cross-project state owned by
- * `AgentRuntimeContext`, not duplicated here.
+ * One spawned ACP backend process (`devin`, `omp`, or the mock server) per
+ * project directory, keyed by normalized project path (see AGENTS.md). Owns
+ * its own process/transport/ACP client, turn/permission state, config, and
+ * slash commands, so one project's process exiting, timing out, or
+ * streaming events cannot leak into another project's transcript. The
+ * durable cache (sessions/transcripts/hidden ids) is shared cross-project
+ * state owned by `AgentRuntimeContext`, not duplicated here.
  */
 class ProjectAgentConnection {
 	private process: Bun.PipedSubprocess | null = null;
@@ -620,9 +633,10 @@ class ProjectAgentConnection {
 	}
 
 	private async ensureProcess(cwd: string): Promise<void> {
-		const backend = selectedAgentBackend();
-		const permissionMode = backend === "mock" ? "mock" : devinPermissionMode(this.approvalMode);
-		const spawnFailureMessage = backend === "mock" ? ACP_MOCK_SPAWN_FAILURE_MESSAGE : DEVIN_MISSING_CLI_MESSAGE;
+		const backend = selectedAgentBackend(process.env, this.runtime.acpProvider);
+		const permissionMode = backend === "devin" ? devinPermissionMode(this.approvalMode) : backend;
+		const spawnFailureMessage =
+			backend === "mock" ? ACP_MOCK_SPAWN_FAILURE_MESSAGE : backend === "omp" ? OMP_MISSING_CLI_MESSAGE : DEVIN_MISSING_CLI_MESSAGE;
 		if (this.process) {
 			if (this.processCwd === cwd && this.processPermissionMode === permissionMode) {
 				return;
@@ -636,7 +650,10 @@ class ProjectAgentConnection {
 			if (backend === "devin" && !isDevinAvailable()) {
 				throw new AcpError("spawn_failure", DEVIN_MISSING_CLI_MESSAGE);
 			}
-			const options = buildAgentSpawnOptions({ approvalMode: this.approvalMode, cwd });
+			if (backend === "omp" && !isOmpAvailable()) {
+				throw new AcpError("spawn_failure", OMP_MISSING_CLI_MESSAGE);
+			}
+			const options = buildAgentSpawnOptions({ approvalMode: this.approvalMode, cwd, provider: this.runtime.acpProvider });
 			const subprocess = Bun.spawn({
 				...options,
 				stdin: "pipe",
@@ -1184,6 +1201,14 @@ class AgentAcpClient {
 		return listRecentProjectsStore(this.runtime.db).map(({ path, displayName }) => ({ path, displayName }));
 	}
 
+	getAcpProvider(): AcpProviderId {
+		return this.runtime.acpProvider;
+	}
+
+	setAcpProvider(provider: AcpProviderId): void {
+		this.runtime.setAcpProvider(provider);
+	}
+
 	/**
 	 * Selecting a session in the sidebar is pure local retrieval: it never
 	 * talks to the agent runtime, only the durable cache already held in
@@ -1445,6 +1470,15 @@ const rpc = BrowserView.defineRPC<AppRPC>({
 			listRecentProjects: async () => {
 				agentClient ??= new AgentAcpClient(sendAgentUpdate);
 				return agentClient.listRecentProjects();
+			},
+			getAcpProvider: async () => {
+				agentClient ??= new AgentAcpClient(sendAgentUpdate);
+				return agentClient.getAcpProvider();
+			},
+			setAcpProvider: async (params: { provider: AcpProviderId }) => {
+				agentClient ??= new AgentAcpClient(sendAgentUpdate);
+				agentClient.setAcpProvider(normalizeAcpProvider(params.provider));
+				return true;
 			},
 			listAgentSlashCommands: async () => {
 				return agentClient?.listSlashCommands() ?? [];

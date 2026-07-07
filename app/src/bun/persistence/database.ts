@@ -101,6 +101,17 @@ const MIGRATIONS: ReadonlyArray<{ identifier: string; migrate: (db: Database) =>
 			`);
 		},
 	},
+	{
+		identifier: "createSettings",
+		migrate: (db) => {
+			db.run(`
+				CREATE TABLE IF NOT EXISTS settings (
+					key TEXT PRIMARY KEY,
+					value TEXT NOT NULL
+				)
+			`);
+		},
+	},
 ];
 
 /**

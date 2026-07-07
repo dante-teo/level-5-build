@@ -19,6 +19,7 @@ import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
 import { cn } from "@/lib/utils";
 import { REVIEW_PANE_DEFAULT_WIDTH, ReviewPane } from "@/ReviewPane";
+import { SettingsDialog } from "@/SettingsDialog";
 import { isDashboardPinnedAtom, isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
 import {
 	APPROVAL_MODE_LABELS,
@@ -404,6 +405,7 @@ function App() {
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
 	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const [runStatus, setRunStatus] = useState<AgentRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
 	const [pendingPermission, setPendingPermission] = useState<AgentPermissionRequest | null>(null);
@@ -1674,6 +1676,7 @@ function App() {
 									aria-label="Settings"
 									title="Settings"
 									className="h-11 w-full justify-start gap-3 px-3 text-body font-medium text-muted-foreground hover:bg-white/70 hover:text-foreground"
+									onClick={() => setIsSettingsOpen(true)}
 								>
 									<ICONS.settings className="size-4 shrink-0" strokeWidth={1.8} />
 									<span className="truncate">Settings</span>
@@ -2374,6 +2377,7 @@ function App() {
 					</section>
 				</div>
 			) : null}
+			{isSettingsOpen ? <SettingsDialog onClose={() => setIsSettingsOpen(false)} /> : null}
 		</div>
 	);
 }

@@ -55,6 +55,12 @@ Core tokens are implemented in `L5Color`:
 - `warning`: light `#F59E0B`, dark `#FBBC05`
 - `danger`: light `#DC2626`, dark `#F87171`
 
+Theme behavior:
+
+- The app follows the system appearance through CSS `prefers-color-scheme`; there is no in-app theme selector or persisted override.
+- App chrome, cards, popovers, dialogs, chips, composer surfaces, and Review surfaces must use adaptive semantic tokens (`bg-l5-surface`, `bg-l5-elevated-surface`, `bg-muted`, `text-foreground`, `border-border`, and related aliases), not fixed white/black utility colors.
+- Fixed literal colors are allowed only for token definitions, shadow/glass highlight mechanics, native-material rim effects, and explicit semantic foreground contrast where the token already names that contrast.
+
 Accent rules:
 
 - Use exactly one accent color throughout the application.
@@ -192,6 +198,7 @@ Rules:
 - Let the bottom composer anchor the interaction model.
 - The transcript scroll layer spans the full workspace/window behind the floating sidebar and top chrome. Keep transcript content centered for readability, and apply left clearance while the sidebar pane is expanded so readable content is not covered.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
+- The transcript uses a custom visual scroll indicator on the left edge of the agent pane. It is not an interactive scrollbar replacement: keep native wheel/trackpad scrolling on the transcript container, keep the indicator partial-height and vertically centered, and render it as stacked horizontal dashes where low-opacity dashes show the rail and higher-opacity dashes show the current scroll position.
 
 ### Top Bar
 
@@ -293,6 +300,7 @@ Contains:
 Rules:
 
 - Opening Review may collapse the sidebar on narrow windows to preserve workspace width.
+- Review content must clear the floating top-bar controls; keep a top inset tied to the same frame/top-control height instead of hardcoding an unrelated padding.
 - Review is non-mutating: no commit, revert, staging, discard, approval, or permission-answering actions.
 - Use Git as the source of truth; do not show ignored files or recursive submodule contents.
 - Resolve previews from the repository root even when the selected project is a subdirectory, and expand untracked directories into file rows.

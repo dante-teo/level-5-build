@@ -8,7 +8,6 @@ import {
 	Folder,
 	GitBranch,
 	GitCommitHorizontal,
-	GitCompare,
 	GitPullRequest,
 	Hand,
 	Laptop,
@@ -22,6 +21,7 @@ import {
 	Paperclip,
 	PanelLeftClose,
 	PanelLeftOpen,
+	PanelRight,
 	Pencil,
 	Plus,
 	RefreshCw,
@@ -61,7 +61,7 @@ export const ICONS = {
 	newChat: SquarePen, // L5Icon.newChat (square.and.pencil)
 	pullRequest: GitPullRequest, // L5Icon.pullRequest (globe)
 	refresh: RefreshCw, // L5Icon.refresh (arrow.clockwise)
-	review: GitCompare, // L5Icon equivalent: inspect-only Review pane toggle
+	review: PanelRight, // L5Icon equivalent: inspect-only Review pane toggle
 	running: LoaderCircle, // L5Icon.running (circle.dotted)
 	settings: Settings, // L5Icon.settings (gearshape)
 	sourceDocument: FileText, // L5Icon.sourceDocument (doc)

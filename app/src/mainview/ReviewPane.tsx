@@ -78,7 +78,7 @@ function DiffGutterNumber({ value }: { value: number | undefined }) {
 function UnifiedDiffView({ diff }: { diff: string }) {
 	const lines = parseUnifiedDiffLines(diff);
 	return (
-		<pre className="app-scrollbar-transparent max-h-[32rem] overflow-auto rounded-medium bg-muted/40 p-3 font-mono text-mono leading-5 text-foreground">
+		<pre className="app-scrollbar-transparent overflow-x-auto rounded-medium bg-muted/40 p-3 font-mono text-mono leading-5 text-foreground">
 			{lines.map((line, index) => (
 				<div
 					key={index}
@@ -167,7 +167,7 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 	const badge = statusBadgeFor(file);
 
 	return (
-		<section className="rounded-card border border-border bg-white/70">
+		<section className="rounded-card border border-border bg-l5-secondary-background">
 			<div className="flex items-center gap-2 border-b border-border px-3 py-2">
 				<span className={cn("shrink-0 rounded-chip px-2 py-0.5 text-caption font-medium", STATUS_BADGE_CLASSES[badge])}>
 					{badge}
@@ -196,11 +196,12 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 type ReviewPaneProps = {
 	cwd: string;
 	width: number;
+	topInset: number;
 	onWidthChange: (width: number) => void;
 	onClose: () => void;
 };
 
-export function ReviewPane({ cwd, width, onWidthChange, onClose }: ReviewPaneProps) {
+export function ReviewPane({ cwd, width, topInset, onWidthChange, onClose }: ReviewPaneProps) {
 	const [snapshot, setSnapshot] = useState<ProjectReviewSnapshot | null>(null);
 	const [isLoading, setIsLoading] = useState(false);
 	const [filter, setFilter] = useState("");
@@ -249,8 +250,8 @@ export function ReviewPane({ cwd, width, onWidthChange, onClose }: ReviewPanePro
 	return (
 		<aside
 			aria-label="Review changed files"
-			className="electrobun-webkit-app-region-no-drag fixed bottom-0 right-0 top-0 z-20 flex flex-col border-l border-border bg-white/92 backdrop-blur-2xl"
-			style={{ width: `${width}px` }}
+			className="l5-adaptive-surface electrobun-webkit-app-region-no-drag fixed bottom-0 right-0 top-0 z-20 flex flex-col border-l border-border"
+			style={{ width: `${width}px`, paddingTop: `${topInset}px` }}
 			onDoubleClick={(event) => event.stopPropagation()}
 		>
 			{/* DESIGN.md "Review Panel": user-resizable 420-820px, "keep a

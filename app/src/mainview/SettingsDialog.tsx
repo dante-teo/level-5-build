@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
 import { ACP_PROVIDER_LABELS, type AcpProviderId } from "@shared/rpc";
@@ -53,7 +54,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="settings-title"
-				className="w-full max-w-sm rounded-panel border border-border bg-white/92 p-5 shadow-e3 backdrop-blur-2xl"
+				className="l5-adaptive-surface w-full max-w-sm rounded-panel border border-border p-5 shadow-e3"
 			>
 				<div className="flex items-start justify-between gap-3">
 					<h2 id="settings-title" className="text-h3 font-semibold text-foreground">
@@ -70,22 +71,26 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 				</div>
 
 				<div className="mt-5">
-					<label htmlFor="acp-provider-select" className="block text-caption font-semibold text-muted-foreground">
+					<div className="block text-caption font-semibold text-muted-foreground">
 						Agent provider
-					</label>
-					<select
-						id="acp-provider-select"
-						value={provider}
-						disabled={isLoading}
-						onChange={(event) => void handleChange(event.target.value as AcpProviderId)}
-						className="mt-2 h-10 w-full rounded-2xl border border-border bg-white/80 px-3 text-body font-medium text-foreground disabled:opacity-50"
-					>
-						{ACP_PROVIDER_OPTIONS.map((option) => (
-							<option key={option.value} value={option.value}>
-								{option.label}
-							</option>
-						))}
-					</select>
+					</div>
+					<Select value={provider} disabled={isLoading} onValueChange={(value) => void handleChange(value as AcpProviderId)}>
+						<SelectTrigger
+							aria-label="Agent provider"
+							className="mt-2 h-10 w-full border-border bg-l5-surface px-3 text-body font-medium"
+						>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent position="popper" align="start">
+							<SelectGroup>
+								{ACP_PROVIDER_OPTIONS.map((option) => (
+									<SelectItem key={option.value} value={option.value}>
+										{option.label}
+									</SelectItem>
+								))}
+							</SelectGroup>
+						</SelectContent>
+					</Select>
 				</div>
 			</section>
 		</div>

@@ -4,6 +4,7 @@ import {
 	type MouseEvent,
 	type PointerEvent,
 	type ReactNode,
+	type RefObject,
 	type UIEvent,
 	useEffect,
 	useMemo,
@@ -15,6 +16,7 @@ import LiquidGlass from "liquid-glass-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { useStickToBottom } from "use-stick-to-bottom";
 import type { LucideIcon } from "lucide-react";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
 import { cn } from "@/lib/utils";
@@ -66,6 +68,10 @@ const COMPOSER_MAX_HEIGHT = 192;
 const DASHBOARD_REFRESH_DEBOUNCE_MS = 500;
 const DASHBOARD_RESERVED_WIDTH_REM = 24;
 const MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM = 42;
+const AGENT_SCROLL_INDICATOR_LEFT_INSET = 14;
+const AGENT_SCROLL_INDICATOR_MIN_RAIL_HEIGHT = 132;
+const AGENT_SCROLL_INDICATOR_MAX_RAIL_HEIGHT = 220;
+const AGENT_SCROLL_INDICATOR_MIN_THUMB_HEIGHT = 48;
 // DESIGN.md: "Review should preserve at least a 520px workspace; hide the
 // Review toggle when the window cannot fit the workspace... even after
 // sidebar collapse."
@@ -142,6 +148,13 @@ type QueuedPrompt = {
 	text: string;
 	attachments: AttachmentItem[];
 };
+
+const adaptivePopoverClass =
+	"l5-adaptive-surface border border-border text-foreground shadow-e2";
+const adaptiveDialogClass = "l5-adaptive-surface border border-border shadow-e3";
+const adaptiveChipClass =
+	"l5-adaptive-chip electrobun-webkit-app-region-no-drag rounded-chip border border-border text-caption font-medium text-muted-foreground shadow-e1";
+const adaptiveHoverClass = "hover:bg-muted/70";
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 	return (
@@ -1678,7 +1691,7 @@ function App() {
 								aria-label="New chat"
 								title="New chat"
 								disabled={isRunning}
-								className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-text hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-40"
+								className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-text hover:bg-l5-glass-control-hover disabled:cursor-not-allowed disabled:opacity-40"
 								onClick={() => void handleNewChat()}
 							>
 								<ICONS.newChat className="size-4 shrink-0" strokeWidth={1.8} />
@@ -1708,8 +1721,8 @@ function App() {
 														className={cn(
 															"h-10 w-full justify-start gap-2 px-3 text-body font-medium",
 															isActive
-																? "bg-l5-accent/22 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
-																: "text-l5-glass-muted hover:bg-white/12 hover:text-l5-glass-text",
+																? "bg-l5-selected-surface text-l5-glass-text ring-1 ring-inset ring-l5-glass-border"
+																: "text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text",
 															isRunning ? "cursor-not-allowed opacity-60" : "",
 														)}
 														onClick={() => void handleSelectSession(session.sessionId)}
@@ -1735,7 +1748,7 @@ function App() {
 								<SidebarButton
 									aria-label="Settings"
 									title="Settings"
-									className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-muted hover:bg-white/12 hover:text-l5-glass-text"
+									className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text"
 									onClick={() => setIsSettingsOpen(true)}
 								>
 									<ICONS.settings className="size-4 shrink-0" strokeWidth={1.8} />
@@ -1752,7 +1765,7 @@ function App() {
 							onPointerDown={handleResizePointerDown}
 							onPointerMove={handleResizePointerMove}
 						>
-							<div className="mx-auto h-full w-px rounded-full bg-transparent transition-colors hover:bg-white/35" />
+							<div className="mx-auto h-full w-px rounded-full bg-transparent transition-colors hover:bg-l5-glass-border" />
 						</div>
 					</>
 				)}
@@ -1792,7 +1805,7 @@ function App() {
 
 			{contextMenu && menuSession ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed z-30 w-44 rounded-card border border-border bg-white/92 p-1.5 shadow-e2 backdrop-blur-2xl"
+					className={cn("electrobun-webkit-app-region-no-drag fixed z-30 w-44 rounded-card p-1.5", adaptivePopoverClass)}
 					style={{ left: contextMenu.x, top: contextMenu.y }}
 					onDoubleClick={(event) => event.stopPropagation()}
 					onPointerDown={(event) => event.stopPropagation()}
@@ -1812,7 +1825,13 @@ function App() {
 			{isDashboardEligible ? (
 				<div
 					className="electrobun-webkit-app-region-no-drag fixed z-40"
-					style={{ top: `${FRAME_TOP_CONTROL_TOP}px`, right: `${FRAME_INSET * 2}px` }}
+					style={{
+						top: `${FRAME_TOP_CONTROL_TOP}px`,
+						right:
+							isReviewEligible && canFitReviewColumnIfSidebarCollapsed
+								? `${FRAME_INSET * 2 + FRAME_TOP_CONTROL_SIZE + FRAME_TOP_CONTROL_GAP}px`
+								: `${FRAME_INSET * 2}px`,
+					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
 					<div className="relative">
@@ -1867,7 +1886,7 @@ function App() {
 										value={gitBranchSummary(gitStatus)}
 										icon={<ICONS.branch className="size-3.5" strokeWidth={1.8} />}
 									/>
-									<DashboardRow label="Plan" value={planSummary(planItems)} />
+									<DashboardPlanSection items={planItems} />
 									<DashboardRow
 										label="Sources"
 										value={attachmentSummary(attachments.length, lastSubmittedAttachmentCount)}
@@ -1884,9 +1903,7 @@ function App() {
 					className="electrobun-webkit-app-region-no-drag fixed z-40"
 					style={{
 						top: `${FRAME_TOP_CONTROL_TOP}px`,
-						right: isDashboardEligible
-							? `${FRAME_INSET * 2 + FRAME_TOP_CONTROL_SIZE + FRAME_TOP_CONTROL_GAP}px`
-							: `${FRAME_INSET * 2}px`,
+						right: `${FRAME_INSET * 2}px`,
 					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
@@ -1920,6 +1937,7 @@ function App() {
 				<ReviewPane
 					cwd={projectFolder}
 					width={reviewPaneWidth}
+					topInset={FRAME_TOP_BAR_HEIGHT + FRAME_INSET}
 					onWidthChange={setReviewPaneWidth}
 					onClose={() => setIsReviewOpen(false)}
 				/>
@@ -1936,38 +1954,46 @@ function App() {
 				<div className={cn("mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col", hasConversation ? "" : "justify-center")}>
 					<div className={cn("flex min-h-0 w-full flex-col", hasConversation ? "relative h-full" : "")}>
 						{hasConversation ? (
-							<div
-								ref={transcriptScrollRef}
-								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pt-24"
-								style={{
-									left: `${workspaceContentLeftInset}px`,
-									right: `${dashboardReservedWidth + reviewReservedWidth}px`,
-								}}
-							>
-								{/* DESIGN.md "Chat": spacing between messages is 20px (L5Spacing.x5). */}
-								<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-									{transcriptItems.map((item) => {
-										if (item.type === "message") {
-											return <MessageBubble key={item.key} message={item.message} />;
-										}
-										if (item.type === "tool") {
-											return <ToolCallCard key={item.key} tool={item.tool} />;
-										}
-										return <ErrorCard key={item.key} message={item.message} />;
-									})}
-									{/* Reserves space for the composer overlay, which sits on top of this
-									    scroll layer (see DESIGN.md §13). Lives inside the tracked content
-									    (not a padding style on the scroll container) so useStickToBottom's
-									    own resize observer reacts when the composer's height changes. */}
-									<div aria-hidden="true" style={{ height: `${composerHeight + 32}px` }} />
+							<>
+								<div
+									ref={transcriptScrollRef}
+									className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pt-24"
+									style={{
+										left: `${workspaceContentLeftInset}px`,
+										right: `${dashboardReservedWidth + reviewReservedWidth}px`,
+									}}
+								>
+									{/* DESIGN.md "Chat": spacing between messages is 20px (L5Spacing.x5). */}
+									<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+										{transcriptItems.map((item) => {
+											if (item.type === "message") {
+												return <MessageBubble key={item.key} message={item.message} />;
+											}
+											if (item.type === "tool") {
+												return <ToolCallCard key={item.key} tool={item.tool} />;
+											}
+											return <ErrorCard key={item.key} message={item.message} />;
+										})}
+										{/* Reserves space for the composer overlay, which sits on top of this
+										    scroll layer (see DESIGN.md §13). Lives inside the tracked content
+										    (not a padding style on the scroll container) so useStickToBottom's
+										    own resize observer reacts when the composer's height changes. */}
+										<div aria-hidden="true" style={{ height: `${composerHeight + 32}px` }} />
+									</div>
 								</div>
-							</div>
+								<AgentScrollIndicator
+									scrollRef={transcriptScrollRef}
+									contentRef={transcriptContentRef}
+									left={workspaceContentLeftInset}
+									right={dashboardReservedWidth + reviewReservedWidth}
+								/>
+							</>
 						) : null}
 
 						{(planItems && planItems.length > 0) || composerStatus ? (
 							<div className="mx-auto mb-2 flex w-full max-w-3xl shrink-0 items-center justify-center gap-2">
 								{composerStatus ? (
-									<div className="electrobun-webkit-app-region-no-drag rounded-chip border border-border bg-white/85 px-3 py-1.5 text-caption font-medium text-muted-foreground shadow-e1 backdrop-blur-xl">
+									<div className={cn(adaptiveChipClass, "px-3 py-1.5")}>
 										{composerStatus}
 									</div>
 								) : null}
@@ -1991,7 +2017,7 @@ function App() {
 								{queuedPrompts.map((queued, index) => (
 									<div
 										key={queued.id}
-										className="electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border border-border bg-white/85 py-1.5 pl-3 pr-1.5 text-caption font-medium text-muted-foreground shadow-e1 backdrop-blur-xl"
+										className={cn(adaptiveChipClass, "flex items-center gap-2 py-1.5 pl-3 pr-1.5")}
 									>
 										<ICONS.chat className="size-3.5 shrink-0" strokeWidth={1.8} />
 										<span className="min-w-0 flex-1 truncate" title={queued.text}>
@@ -2075,7 +2101,10 @@ function App() {
 										<div
 											role="menu"
 											aria-label="Add to prompt"
-											className="electrobun-webkit-app-region-no-drag app-scrollbar-transparent absolute bottom-[calc(100%+8px)] left-0 z-30 max-h-[420px] w-[320px] overflow-y-auto rounded-panel border border-border bg-white/92 p-2 text-foreground shadow-e2 backdrop-blur-2xl"
+											className={cn(
+												"electrobun-webkit-app-region-no-drag app-scrollbar-transparent absolute bottom-[calc(100%+8px)] left-0 z-30 max-h-[420px] w-[320px] overflow-y-auto rounded-panel p-2",
+												adaptivePopoverClass,
+											)}
 											onDoubleClick={(event) => event.stopPropagation()}
 											onPointerDown={(event) => event.stopPropagation()}
 										>
@@ -2138,7 +2167,10 @@ function App() {
 										aria-haspopup="menu"
 										aria-expanded={isApprovalMenuOpen}
 										aria-label="Approval mode"
-										className="flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-body font-semibold text-foreground transition-colors hover:bg-white/65 disabled:cursor-not-allowed disabled:opacity-40"
+										className={cn(
+											"flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-body font-semibold text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+											adaptiveHoverClass,
+										)}
 										onClick={() => setIsApprovalMenuOpen((value) => !value)}
 									>
 										<currentApprovalOption.icon className="size-4 text-l5-accent" strokeWidth={1.8} />
@@ -2150,7 +2182,10 @@ function App() {
 										<div
 											role="menu"
 											aria-label="Approval mode"
-											className="electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[320px] rounded-panel border border-border bg-white/92 p-3 text-foreground shadow-e2 backdrop-blur-2xl"
+											className={cn(
+												"electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[320px] rounded-panel p-3",
+												adaptivePopoverClass,
+											)}
 											onDoubleClick={(event) => event.stopPropagation()}
 											onPointerDown={(event) => event.stopPropagation()}
 										>
@@ -2208,9 +2243,9 @@ function App() {
 									className={cn(
 										"relative flex size-11 shrink-0 items-center justify-center rounded-full transition-colors",
 										isRunning
-											? "bg-foreground text-background shadow-[0_10px_24px_rgba(17,24,39,0.2)] hover:bg-foreground/90"
+											? "bg-foreground text-background shadow-e2 hover:bg-foreground/90"
 											: prompt.trim()
-											? "bg-foreground text-background shadow-[0_10px_24px_rgba(17,24,39,0.2)] hover:bg-foreground/90"
+											? "bg-foreground text-background shadow-e2 hover:bg-foreground/90"
 											: "bg-muted text-muted-foreground",
 									)}
 									disabled={isRunning ? isStopping : !prompt.trim()}
@@ -2247,7 +2282,8 @@ function App() {
 										aria-label={projectFolder ? `Choose project, current project ${projectLabel(projectFolder)}` : "Choose project"}
 										disabled={isRunning}
 										className={cn(
-											"flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors hover:bg-white/60",
+											"flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors",
+											adaptiveHoverClass,
 											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
 											isRunning ? "cursor-not-allowed opacity-40" : "",
 										)}
@@ -2276,7 +2312,10 @@ function App() {
 										<div
 											role="dialog"
 											aria-label="Choose project"
-											className="electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[336px] rounded-panel border border-border bg-white/92 p-3 text-foreground shadow-e2 backdrop-blur-2xl"
+											className={cn(
+												"electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[336px] rounded-panel p-3",
+												adaptivePopoverClass,
+											)}
 											onDoubleClick={(event) => event.stopPropagation()}
 											onPointerDown={(event) => event.stopPropagation()}
 										>
@@ -2373,7 +2412,7 @@ function App() {
 						aria-modal="true"
 						aria-labelledby="delete-chat-title"
 						aria-describedby="delete-chat-description"
-						className="w-full max-w-sm rounded-panel border border-border bg-white/92 p-5 shadow-e3 backdrop-blur-2xl"
+						className={cn("w-full max-w-sm rounded-panel p-5", adaptiveDialogClass)}
 					>
 						<div className="flex items-start gap-3">
 							<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
@@ -2398,7 +2437,7 @@ function App() {
 							</button>
 							<button
 								type="button"
-								className="h-10 rounded-2xl bg-destructive px-4 text-body font-semibold text-white shadow-[0_10px_24px_rgba(220,38,38,0.2)] transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
+								className="h-10 rounded-2xl bg-destructive px-4 text-body font-semibold text-primary-foreground shadow-e2 transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
 								disabled={isRunning && deleteTarget.sessionId === activeSessionId}
 								onClick={() => void confirmDeleteSession()}
 							>
@@ -2425,7 +2464,7 @@ function IconButton({ children, label, className, ...props }: IconButtonProps) {
 			aria-label={label}
 			title={label}
 			className={cn(
-				"flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-white/65 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
+				"flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
 				className,
 			)}
 			{...props}
@@ -2437,11 +2476,152 @@ function IconButton({ children, label, className, ...props }: IconButtonProps) {
 
 function DashboardRow({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
 	return (
-		<div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-white/48 px-3 py-2">
+		<div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-muted/55 px-3 py-2">
 			<div className="text-caption font-semibold text-muted-foreground">{label}</div>
 			<div className="flex min-w-0 items-center justify-end gap-1.5 text-right text-[13px] font-semibold text-foreground">
 				{icon ? <span className="shrink-0 text-muted-foreground">{icon}</span> : null}
 				<span className="min-w-0 truncate">{value}</span>
+			</div>
+		</div>
+	);
+}
+
+function DashboardPlanSection({ items }: { items: AgentPlanItem[] | null }) {
+	if (!items || items.length === 0) {
+		return <DashboardRow label="Plan" value={planSummary(items)} />;
+	}
+
+	return (
+		<section className="rounded-2xl bg-muted/55 px-3 py-2.5">
+			<div className="flex items-center justify-between gap-3">
+				<div className="text-caption font-semibold text-muted-foreground">Plan</div>
+				<div className="shrink-0 text-caption font-semibold text-muted-foreground">
+					{items.filter((item) => item.status === "completed").length}/{items.length}
+				</div>
+			</div>
+			<div className="mt-2 flex flex-col gap-1.5">
+				{items.map((item, index) => (
+					<div key={`${item.title}-${index}`} className="flex items-start gap-2 text-[13px] font-semibold leading-5 text-foreground">
+						<ICONS.statusDot className={cn("mt-[7px] size-2 shrink-0 fill-current", statusDotClass(item.status ?? ""))} strokeWidth={0} />
+						<span className="min-w-0 flex-1 break-words">{item.title}</span>
+						{item.status ? (
+							<span className="shrink-0 text-caption font-medium text-muted-foreground">{item.status}</span>
+						) : null}
+					</div>
+				))}
+			</div>
+		</section>
+	);
+}
+
+function AgentScrollIndicator({
+	scrollRef,
+	contentRef,
+	left,
+	right,
+}: {
+	scrollRef: RefObject<HTMLElement | null>;
+	contentRef: RefObject<HTMLElement | null>;
+	left: number;
+	right: number;
+}) {
+	const [metrics, setMetrics] = useState({ isVisible: false, railHeight: AGENT_SCROLL_INDICATOR_MIN_RAIL_HEIGHT, thumbTop: 0, thumbHeight: 0 });
+
+	useEffect(() => {
+		const scrollElement = scrollRef.current;
+		if (!scrollElement) {
+			return;
+		}
+		const element = scrollElement;
+
+		let frame = 0;
+		function update() {
+			frame = 0;
+			const maxScroll = element.scrollHeight - element.clientHeight;
+			if (maxScroll <= 8) {
+				setMetrics((current) => (current.isVisible ? { ...current, isVisible: false } : current));
+				return;
+			}
+
+			const railHeight = Math.round(
+				Math.min(
+					AGENT_SCROLL_INDICATOR_MAX_RAIL_HEIGHT,
+					Math.max(AGENT_SCROLL_INDICATOR_MIN_RAIL_HEIGHT, element.clientHeight * 0.32),
+				),
+			);
+			const viewportRatio = element.clientHeight / element.scrollHeight;
+			const thumbHeight = Math.round(
+				Math.max(AGENT_SCROLL_INDICATOR_MIN_THUMB_HEIGHT, Math.min(railHeight, railHeight * viewportRatio)),
+			);
+			const thumbTop = Math.round((element.scrollTop / maxScroll) * (railHeight - thumbHeight));
+			setMetrics((current) => {
+				const next = { isVisible: true, railHeight, thumbTop, thumbHeight };
+				return current.isVisible === next.isVisible &&
+					current.railHeight === next.railHeight &&
+					current.thumbTop === next.thumbTop &&
+					current.thumbHeight === next.thumbHeight
+					? current
+					: next;
+			});
+		}
+
+		function scheduleUpdate() {
+			if (frame) {
+				return;
+			}
+			frame = window.requestAnimationFrame(update);
+		}
+
+		const resizeObserver = new ResizeObserver(scheduleUpdate);
+		resizeObserver.observe(element);
+		if (contentRef.current) {
+			resizeObserver.observe(contentRef.current);
+		}
+		element.addEventListener("scroll", scheduleUpdate, { passive: true });
+		window.addEventListener("resize", scheduleUpdate);
+		update();
+
+		return () => {
+			if (frame) {
+				window.cancelAnimationFrame(frame);
+			}
+			resizeObserver.disconnect();
+			element.removeEventListener("scroll", scheduleUpdate);
+			window.removeEventListener("resize", scheduleUpdate);
+		};
+	}, [contentRef, scrollRef]);
+
+	if (!metrics.isVisible) {
+		return null;
+	}
+
+	const dashCount = Math.max(18, Math.min(28, Math.round(metrics.railHeight / 8)));
+	const activeStart = Math.floor((metrics.thumbTop / metrics.railHeight) * dashCount);
+	const activeCount = Math.max(3, Math.ceil((metrics.thumbHeight / metrics.railHeight) * dashCount));
+	const activeEnd = activeStart + activeCount;
+
+	return (
+		<div
+			aria-hidden="true"
+			className="pointer-events-none fixed top-1/2 z-20 -translate-y-1/2"
+			style={{
+				left: `${left + AGENT_SCROLL_INDICATOR_LEFT_INSET}px`,
+				maxWidth: `calc(100vw - ${left + right}px)`,
+			}}
+		>
+			<div className="flex w-5 flex-col items-center justify-between" style={{ height: `${metrics.railHeight}px` }}>
+				{Array.from({ length: dashCount }).map((_, index) => {
+					const isActive = index >= activeStart && index < activeEnd;
+					return (
+						<div
+							key={index}
+							className={cn(
+								"h-[3px] w-3 rounded-full transition-[background-color,opacity] duration-quick",
+								isActive ? "bg-foreground opacity-80" : "bg-muted-foreground opacity-35",
+							)}
+						/>
+					);
+				})}
 			</div>
 		</div>
 	);
@@ -2486,7 +2666,7 @@ function AttachmentChip({ attachment, onRemove }: { attachment: AttachmentItem; 
 			<button
 				type="button"
 				aria-label={`Remove ${attachment.name}`}
-				className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-white/70 hover:text-foreground"
+				className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 				onClick={() => onRemove(attachment.id)}
 			>
 				<ICONS.close className="size-3" strokeWidth={2} />
@@ -2529,13 +2709,16 @@ function ContextUsageRing({ used, size }: { used: number; size: number }) {
 
 			<div
 				role="tooltip"
-				className="pointer-events-none absolute bottom-[calc(100%+12px)] left-1/2 z-30 w-[196px] -translate-x-1/2 rounded-2xl border border-border bg-white/95 px-4 py-3 text-center opacity-0 shadow-e2 backdrop-blur-2xl transition-opacity duration-quick group-hover:opacity-100 group-focus:opacity-100"
+				className={cn(
+					"pointer-events-none absolute bottom-[calc(100%+12px)] left-1/2 z-30 w-[196px] -translate-x-1/2 rounded-2xl px-4 py-3 text-center opacity-0 transition-opacity duration-quick group-hover:opacity-100 group-focus:opacity-100",
+					adaptivePopoverClass,
+				)}
 			>
 				<div className="text-[13px] font-medium text-muted-foreground">Context window:</div>
 				<div className="mt-1 text-body font-semibold text-foreground">
 					{usedPercent}% used ({leftPercent}% left)
 				</div>
-				<div className="absolute left-1/2 top-full -mt-1.5 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-b border-r border-border bg-white/95" />
+				<div className="absolute left-1/2 top-full -mt-1.5 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-b border-r border-border bg-l5-elevated-surface" />
 			</div>
 		</div>
 	);
@@ -2554,26 +2737,27 @@ function SelectControl({
 	options: Array<{ value: string; label: string }>;
 	onChange: (value: string) => void;
 }) {
+	const selectedOption = options.find((option) => option.value === value) ?? options[0];
+
 	return (
-		<label className="relative inline-flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-body font-semibold text-foreground transition-colors hover:bg-white/65">
-			{icon}
-			<span className="pointer-events-none">
-				{options.find((option) => option.value === value)?.label ?? value}
-			</span>
-			<ICONS.chevronDown className="pointer-events-none size-4 text-muted-foreground" strokeWidth={1.8} />
-			<select
+		<Select value={selectedOption?.value ?? value} onValueChange={onChange}>
+			<SelectTrigger
 				aria-label={label}
-				value={value}
-				className="absolute inset-0 cursor-pointer opacity-0"
-				onChange={(event) => onChange(event.target.value)}
+				className="h-auto border-transparent bg-transparent px-2 py-2 text-body font-semibold shadow-none hover:bg-muted/70"
 			>
-				{options.map((option) => (
-					<option key={option.value} value={option.value}>
-						{option.label}
-					</option>
-				))}
-			</select>
-		</label>
+				{icon}
+				<SelectValue>{selectedOption?.label ?? value}</SelectValue>
+			</SelectTrigger>
+			<SelectContent position="popper" align="end" className="min-w-[10rem]">
+				<SelectGroup>
+					{options.map((option) => (
+						<SelectItem key={option.value} value={option.value}>
+							{option.label}
+						</SelectItem>
+					))}
+				</SelectGroup>
+			</SelectContent>
+		</Select>
 	);
 }
 
@@ -2600,11 +2784,11 @@ const MARKDOWN_COMPONENTS: Components = {
 		return isBlock ? (
 			<code className={cn("font-mono text-[13px]", className)}>{children}</code>
 		) : (
-			<code className="rounded bg-black/[0.06] px-1 py-0.5 font-mono text-[13px]">{children}</code>
+			<code className="rounded bg-muted px-1 py-0.5 font-mono text-[13px]">{children}</code>
 		);
 	},
 	pre: ({ children }) => (
-		<pre className="app-scrollbar-transparent my-2 overflow-x-auto rounded-xl bg-black/[0.05] p-3 last:mb-0">
+		<pre className="app-scrollbar-transparent my-2 overflow-x-auto rounded-xl bg-muted/70 p-3 last:mb-0">
 			{children}
 		</pre>
 	),
@@ -2628,7 +2812,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 			<div
 				className={cn(
 					"max-w-3xl rounded-card px-4 py-3 text-body leading-6 shadow-e1",
-					isUser ? "bg-l5-selected-surface text-foreground" : "bg-white/78 text-foreground",
+					isUser ? "bg-l5-selected-surface text-foreground" : "bg-l5-elevated-surface text-foreground",
 				)}
 			>
 				<ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.text}</ReactMarkdown>
@@ -2662,7 +2846,7 @@ function PlanChip({
 				aria-label={`Plan progress: ${completed} of ${total} steps complete`}
 				onClick={onToggle}
 				className={cn(
-					"electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border bg-white/85 px-3 py-1.5 text-caption font-medium shadow-e1 backdrop-blur-xl transition-colors",
+					"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border px-3 py-1.5 text-caption font-medium shadow-e1 transition-colors",
 					isOpen ? "border-l5-accent/28 text-l5-accent" : "border-border text-muted-foreground",
 				)}
 			>
@@ -2676,7 +2860,10 @@ function PlanChip({
 				<div
 					role="dialog"
 					aria-label="Plan checklist"
-					className="absolute bottom-[calc(100%+8px)] left-1/2 z-30 w-72 -translate-x-1/2 rounded-card border border-border bg-white/95 p-3 text-foreground shadow-e2 backdrop-blur-2xl"
+					className={cn(
+						"absolute bottom-[calc(100%+8px)] left-1/2 z-30 w-72 -translate-x-1/2 rounded-card p-3",
+						adaptivePopoverClass,
+					)}
 					onPointerDown={(event) => event.stopPropagation()}
 				>
 					<div className="flex flex-col gap-2">
@@ -2706,7 +2893,7 @@ function ToolCallCard({ tool }: { tool: ToolCallView }) {
 	const isExpanded = manualExpanded ?? (isInProgress || isFailed);
 
 	return (
-		<section className="w-full max-w-3xl rounded-card border border-border bg-white/68 p-4 shadow-e1">
+		<section className="w-full max-w-3xl rounded-card border border-border bg-l5-elevated-surface p-4 shadow-e1">
 			<button
 				type="button"
 				className="flex w-full items-center gap-3 text-left"
@@ -2854,7 +3041,7 @@ function ApprovalPrompt({
 						onMouseEnter={() => setHighlightedIndex(index)}
 						onClick={() => void submitOption(option.optionId)}
 					>
-						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-caption font-semibold text-muted-foreground shadow-sm">
+						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-l5-elevated-surface text-caption font-semibold text-muted-foreground shadow-sm">
 							{index + 1}
 						</span>
 						<span className="min-w-0 flex-1 truncate">{option.name}</span>

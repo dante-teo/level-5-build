@@ -1,8 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
-
 @font-face {
 	font-family: "Barlow";
 	src: url("./assets/fonts/Barlow-Regular.otf") format("opentype");
@@ -44,6 +42,7 @@
 }
 
 :root {
+	color-scheme: light dark;
 	--radius: 0.625rem;
 
 	/* Level5 design tokens — translated 1:1 from app/Sources/Level5Design/L5Color.swift (light) */
@@ -96,54 +95,37 @@
 	--ring: var(--l5-accent);
 }
 
-.dark {
-	/* Level5 design tokens — translated 1:1 from L5Color.swift (dark) */
-	--l5-background: #131416;
-	--l5-secondary-background: #1c1d20;
-	--l5-surface: rgba(255, 255, 255, 0.08);
-	--l5-elevated-surface: rgba(255, 255, 255, 0.12);
-	--l5-text-primary: #f0f0f0;
-	--l5-text-secondary: #b3b3b3;
-	--l5-text-muted: #858585;
-	--l5-border: rgba(255, 255, 255, 0.1);
-	--l5-accent: #6f8dff;
-	--l5-accent-foreground: #0b0e1a;
-	--l5-selected-surface: rgba(111, 141, 255, 0.18);
-	--l5-success: #3fd176;
-	--l5-warning: #fbbc05;
-	--l5-danger: #f87171;
-	--l5-glass-pane: rgba(30, 30, 30, 0.55);
-	--l5-glass-pane-strong: rgba(20, 20, 20, 0.7);
-	--l5-glass-control: rgba(255, 255, 255, 0.08);
-	--l5-glass-control-hover: rgba(255, 255, 255, 0.15);
-	--l5-glass-border: rgba(255, 255, 255, 0.1);
-	--l5-glass-highlight: rgba(255, 255, 255, 0.05);
-	--l5-glass-text: #f0f0f0;
-	--l5-glass-muted: #b3b3b3;
-	--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.24);
-	--l5-topbar-gradient-top: rgba(19, 20, 22, 0.96);
-	--l5-topbar-gradient-mid: rgba(19, 20, 22, 0.75);
-	--l5-topbar-gradient-bottom: rgba(19, 20, 22, 0);
-	--l5-topbar-control-foreground: #ffffff;
-
-	--background: var(--l5-background);
-	--foreground: var(--l5-text-primary);
-	--card: var(--l5-elevated-surface);
-	--card-foreground: var(--l5-text-primary);
-	--popover: var(--l5-elevated-surface);
-	--popover-foreground: var(--l5-text-primary);
-	--primary: var(--l5-accent);
-	--primary-foreground: var(--l5-accent-foreground);
-	--secondary: var(--l5-secondary-background);
-	--secondary-foreground: var(--l5-text-primary);
-	--muted: var(--l5-secondary-background);
-	--muted-foreground: var(--l5-text-secondary);
-	--accent: var(--l5-selected-surface);
-	--accent-foreground: var(--l5-text-primary);
-	--destructive: var(--l5-danger);
-	--border: var(--l5-border);
-	--input: var(--l5-border);
-	--ring: var(--l5-accent);
+@media (prefers-color-scheme: dark) {
+	:root {
+		/* Level5 design tokens — translated 1:1 from L5Color.swift (dark) */
+		--l5-background: #131416;
+		--l5-secondary-background: #1c1d20;
+		--l5-surface: rgba(255, 255, 255, 0.08);
+		--l5-elevated-surface: rgba(255, 255, 255, 0.12);
+		--l5-text-primary: #f0f0f0;
+		--l5-text-secondary: #b3b3b3;
+		--l5-text-muted: #858585;
+		--l5-border: rgba(255, 255, 255, 0.1);
+		--l5-accent: #6f8dff;
+		--l5-accent-foreground: #0b0e1a;
+		--l5-selected-surface: rgba(111, 141, 255, 0.18);
+		--l5-success: #3fd176;
+		--l5-warning: #fbbc05;
+		--l5-danger: #f87171;
+		--l5-glass-pane: rgba(30, 30, 30, 0.55);
+		--l5-glass-pane-strong: rgba(20, 20, 20, 0.7);
+		--l5-glass-control: rgba(255, 255, 255, 0.08);
+		--l5-glass-control-hover: rgba(255, 255, 255, 0.15);
+		--l5-glass-border: rgba(255, 255, 255, 0.1);
+		--l5-glass-highlight: rgba(255, 255, 255, 0.05);
+		--l5-glass-text: #f0f0f0;
+		--l5-glass-muted: #b3b3b3;
+		--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.24);
+		--l5-topbar-gradient-top: rgba(19, 20, 22, 0.96);
+		--l5-topbar-gradient-mid: rgba(19, 20, 22, 0.75);
+		--l5-topbar-gradient-bottom: rgba(19, 20, 22, 0);
+		--l5-topbar-control-foreground: #ffffff;
+	}
 }
 
 @theme inline {
@@ -352,16 +334,40 @@
 
 	.l5-liquid-popover {
 		background:
-			linear-gradient(135deg, rgba(255, 255, 255, 0.2), transparent 38%),
-			rgba(255, 255, 255, 0.86);
-		backdrop-filter: blur(30px) saturate(1.55);
-		-webkit-backdrop-filter: blur(30px) saturate(1.55);
+			linear-gradient(135deg, var(--l5-glass-highlight), transparent 38%),
+			color-mix(in srgb, var(--l5-background) 82%, transparent);
+		backdrop-filter: blur(64px) saturate(1.75);
+		-webkit-backdrop-filter: blur(64px) saturate(1.75);
+		box-shadow:
+			inset 0 1px 0 var(--l5-glass-highlight),
+			0 18px 42px rgba(0, 0, 0, 0.2),
+			0 1px 3px rgba(0, 0, 0, 0.12);
 	}
 
-	.dark .l5-liquid-popover {
+	.l5-adaptive-surface {
 		background:
-			linear-gradient(135deg, rgba(255, 255, 255, 0.12), transparent 38%),
-			rgba(18, 23, 34, 0.86);
+			linear-gradient(135deg, var(--l5-glass-highlight), transparent 38%),
+			color-mix(in srgb, var(--l5-background) 82%, transparent);
+		backdrop-filter: blur(64px) saturate(1.75);
+		-webkit-backdrop-filter: blur(64px) saturate(1.75);
+		box-shadow:
+			inset 0 1px 0 var(--l5-glass-highlight),
+			0 18px 42px rgba(0, 0, 0, 0.2),
+			0 1px 3px rgba(0, 0, 0, 0.12);
+	}
+
+	.l5-adaptive-chip {
+		background-color: color-mix(in srgb, var(--l5-background) 74%, transparent);
+		backdrop-filter: blur(40px) saturate(1.55);
+		-webkit-backdrop-filter: blur(40px) saturate(1.55);
+	}
+
+	@supports not (background-color: color-mix(in srgb, black, transparent)) {
+		.l5-liquid-popover,
+		.l5-adaptive-surface,
+		.l5-adaptive-chip {
+			background-color: var(--l5-background);
+		}
 	}
 }
 

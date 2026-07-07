@@ -11,10 +11,10 @@ import {
 	useState,
 } from "react";
 import { useAtom } from "jotai";
+import LiquidGlass from "liquid-glass-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { useStickToBottom } from "use-stick-to-bottom";
 import type { LucideIcon } from "lucide-react";
-import appIcon from "@/assets/app-icon.png";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
 import { cn } from "@/lib/utils";
@@ -45,13 +45,19 @@ import {
 
 const SIDEBAR_MIN_WIDTH = 260;
 const SIDEBAR_MAX_WIDTH = 420;
-const SIDEBAR_COLLAPSED_WIDTH = 0;
-const SIDEBAR_FLOATING_TOGGLE_GAP = 8;
-const SIDEBAR_FLOATING_TOGGLE_TOP = 30;
-// Matches the dashboard trigger capsule's natural height (size-11 icon + p-1.5 padding + border).
-// Both floating top capsules sit inside an invisible row of this height so they share one
-// vertical center line regardless of their own content height.
-const SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT = 58;
+const FRAME_INSET = 8;
+const SIDEBAR_TOP_BAR_HEIGHT = 44;
+const SIDEBAR_COLLAPSE_BUTTON_SIZE = 20;
+const SIDEBAR_COLLAPSE_BUTTON_RIGHT_INSET = 16;
+const FRAME_TOP_CONTROL_TOP = 8;
+const FRAME_TOP_CONTROL_SIZE = 44;
+const FRAME_TOP_BAR_HEIGHT = FRAME_TOP_CONTROL_TOP * 2 + FRAME_TOP_CONTROL_SIZE;
+const FRAME_TOP_GRADIENT_HEIGHT = FRAME_TOP_BAR_HEIGHT;
+const FRAME_TOP_CONTROL_GAP = 6;
+const MAC_TRAFFIC_LIGHT_X = 18;
+const MAC_TRAFFIC_LIGHT_CLUSTER_WIDTH = 64;
+const FRAME_COLLAPSED_LEFT_CONTROLS = MAC_TRAFFIC_LIGHT_X + MAC_TRAFFIC_LIGHT_CLUSTER_WIDTH + FRAME_TOP_CONTROL_GAP;
+const WORKSPACE_SIDEBAR_CLEARANCE = 32;
 // Taller idle/empty composer (~150px total with the toolbar row) to match
 // the reference composer's generous vertical padding around the
 // placeholder, rather than a tight single-line input.
@@ -150,6 +156,31 @@ function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 		>
 			{children}
 		</button>
+	);
+}
+
+function LiquidGlassButton({ children, className, style, ...props }: SidebarButtonProps) {
+	return (
+		<div className={cn("l5-topbar-glass-control electrobun-webkit-app-region-no-drag relative shrink-0", className)} style={style}>
+			<LiquidGlass
+				cornerRadius={FRAME_TOP_CONTROL_SIZE / 2}
+				padding="0"
+				displacementScale={38}
+				blurAmount={0.08}
+				aberrationIntensity={2}
+				elasticity={0.12}
+				style={{ position: "absolute", top: "50%", left: "50%" }}
+			>
+				<button
+					type="button"
+					className="flex items-center justify-center rounded-full text-l5-topbar-control transition-colors hover:text-l5-topbar-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35 disabled:cursor-not-allowed"
+					style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
+					{...props}
+				>
+					{children}
+				</button>
+			</LiquidGlass>
+		</div>
 	);
 }
 
@@ -447,8 +478,17 @@ function App() {
 	const gitRefreshTimerRef = useRef<number | null>(null);
 	const projectFolderRef = useRef<string | null>(null);
 	const activeSessionIdRef = useRef<string | null>(null);
-	const SidebarToggleIcon = isSidebarCollapsed ? ICONS.sidebarExpand : ICONS.sidebarCollapse;
-	const renderedSidebarWidth = isSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : clampSidebarWidth(sidebarWidth);
+	const expandedSidebarWidth = clampSidebarWidth(sidebarWidth);
+	const workspaceContentLeftInset = isSidebarCollapsed
+		? 0
+		: FRAME_INSET + expandedSidebarWidth + WORKSPACE_SIDEBAR_CLEARANCE;
+	const sidebarToggleSize = isSidebarCollapsed ? FRAME_TOP_CONTROL_SIZE : SIDEBAR_COLLAPSE_BUTTON_SIZE;
+	const sidebarToggleLeft = isSidebarCollapsed
+		? FRAME_COLLAPSED_LEFT_CONTROLS
+		: FRAME_INSET + expandedSidebarWidth - SIDEBAR_COLLAPSE_BUTTON_RIGHT_INSET - SIDEBAR_COLLAPSE_BUTTON_SIZE;
+	const sidebarToggleTop = isSidebarCollapsed
+		? FRAME_TOP_CONTROL_TOP
+		: FRAME_INSET + (SIDEBAR_TOP_BAR_HEIGHT - SIDEBAR_COLLAPSE_BUTTON_SIZE) / 2;
 	const currentApprovalOption =
 		APPROVAL_MODE_OPTIONS.find((option) => option.value === approvalMode) ?? APPROVAL_MODE_OPTIONS[0];
 	const modelConfigOption = agentConfigOptions.find((option) => option.id === "model");
@@ -470,14 +510,14 @@ function App() {
 	const isDashboardEligible = Boolean(activeSessionId && projectFolder);
 	const dashboardReservedWidthPixels = remToPixels(DASHBOARD_RESERVED_WIDTH_REM);
 	const minWorkspaceWidthWithDashboard = remToPixels(MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM);
-	const workspaceWidth = Math.max(viewportWidth - renderedSidebarWidth, 0);
-	const canReserveDashboardSpace = workspaceWidth - dashboardReservedWidthPixels >= minWorkspaceWidthWithDashboard;
+	const workspaceReadableWidth = Math.max(viewportWidth - workspaceContentLeftInset, 0);
+	const canReserveDashboardSpace = workspaceReadableWidth - dashboardReservedWidthPixels >= minWorkspaceWidthWithDashboard;
 	const dashboardReservedWidth =
 		isDashboardEligible && isDashboardPinned && canReserveDashboardSpace ? dashboardReservedWidthPixels : 0;
 	// Available for New Chat with a selected project and for project-backed
 	// active sessions, matching native's Review eligibility.
 	const isReviewEligible = Boolean(projectFolder);
-	const canFitReviewColumn = workspaceWidth - reviewPaneWidth >= MIN_WORKSPACE_WIDTH_WITH_REVIEW;
+	const canFitReviewColumn = workspaceReadableWidth - reviewPaneWidth >= MIN_WORKSPACE_WIDTH_WITH_REVIEW;
 	// DESIGN.md "Review Panel": "hide the Review toggle when the window
 	// cannot fit the workspace... even after sidebar collapse" -- checked
 	// against a hypothetically-collapsed sidebar (collapsed width is
@@ -493,7 +533,6 @@ function App() {
 			: shouldShowSessionContext
 				? activeSessionTitle
 				: "Level5";
-	const topBarSubtitle = projectFolder ? folderDisplayName(projectFolder) : null;
 	// Durable, independently-tracked list of the 10 most-recently-opened
 	// project folders (see AGENTS.md / RecentProjectStore), not merely
 	// derived from sessions -- a folder opened but never chatted in still
@@ -1276,7 +1315,7 @@ function App() {
 
 		event.preventDefault();
 		event.currentTarget.setPointerCapture(event.pointerId);
-		setSidebarWidth(clampSidebarWidth(event.clientX));
+		setSidebarWidth(clampSidebarWidth(event.clientX - FRAME_INSET));
 	}
 
 	function handleResizePointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -1284,7 +1323,7 @@ function App() {
 			return;
 		}
 
-		setSidebarWidth(clampSidebarWidth(event.clientX));
+		setSidebarWidth(clampSidebarWidth(event.clientX - FRAME_INSET));
 	}
 
 	async function handleChooseProject(folder: string) {
@@ -1591,34 +1630,55 @@ function App() {
 			onDoubleClick={() => electroview.rpc?.request.toggleMaximizeWindow()}
 		>
 			<div
-				className="electrobun-webkit-app-region-drag fixed left-24 right-0 top-0 z-50 h-8"
+				className="electrobun-webkit-app-region-drag fixed left-32 right-0 top-0 z-10"
+				style={{ height: `${FRAME_TOP_BAR_HEIGHT}px` }}
 				aria-hidden="true"
 				onDoubleClick={(event) => {
 					event.stopPropagation();
 					void electroview.rpc?.request.toggleMaximizeWindow();
 				}}
 			/>
-			<aside
+			<div aria-hidden="true" className="fixed inset-0 z-0 bg-l5-background" />
+			<div
+				aria-hidden="true"
+				className="l5-frame-top-gradient pointer-events-none fixed inset-x-0 top-0 z-20"
+				style={{ height: `${FRAME_TOP_GRADIENT_HEIGHT}px` }}
+			/>
+			<div
 				className={cn(
-					"relative flex h-full shrink-0 flex-col overflow-hidden bg-l5-surface backdrop-blur-2xl transition-[width] duration-standard ease-out",
+					"l5-liquid-pane fixed z-30 flex flex-col overflow-hidden text-l5-glass-text transition-[opacity,transform,width] duration-standard ease-out",
 					isSidebarCollapsed
-						? "min-w-0 max-w-0 border-r-0 shadow-none"
-						: "min-w-[260px] max-w-[420px] border-r border-border shadow-e1",
+						? "pointer-events-none -translate-x-4 opacity-0"
+						: "translate-x-0 opacity-100",
 				)}
-				style={{ width: `${renderedSidebarWidth}px` }}
+				style={{
+					left: `${FRAME_INSET}px`,
+					top: `${FRAME_INSET}px`,
+					bottom: `${FRAME_INSET}px`,
+					width: `${expandedSidebarWidth}px`,
+					borderRadius: "26px",
+				}}
 				aria-label="Project sidebar"
+				aria-hidden={isSidebarCollapsed}
 				onDoubleClick={(event) => event.stopPropagation()}
 			>
 				{isSidebarCollapsed ? null : (
 					<>
-						<div className="h-12 shrink-0" />
+						<div
+							className="electrobun-webkit-app-region-drag relative shrink-0 border-b border-white/10 bg-gradient-to-b from-white/12 to-transparent"
+							style={{ height: `${SIDEBAR_TOP_BAR_HEIGHT}px` }}
+							onDoubleClick={(event) => {
+								event.stopPropagation();
+								void electroview.rpc?.request.toggleMaximizeWindow();
+							}}
+						/>
 
-						<div className="flex min-h-0 flex-1 flex-col px-3 pb-4 pt-0">
+						<div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-0">
 							<SidebarButton
 								aria-label="New chat"
 								title="New chat"
 								disabled={isRunning}
-								className="h-11 w-full justify-start gap-3 px-3 text-body font-medium text-foreground hover:bg-white/70 disabled:cursor-not-allowed disabled:opacity-40"
+								className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-text hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-40"
 								onClick={() => void handleNewChat()}
 							>
 								<ICONS.newChat className="size-4 shrink-0" strokeWidth={1.8} />
@@ -1626,16 +1686,16 @@ function App() {
 							</SidebarButton>
 
 							<section className="mt-3 flex min-h-0 flex-1 flex-col" aria-label="All chats">
-								<div className="flex h-9 shrink-0 items-center justify-between px-3 text-[13px] font-semibold text-muted-foreground">
+								<div className="flex h-9 shrink-0 items-center justify-between px-3 text-[13px] font-semibold text-l5-glass-muted">
 									<span>All chats</span>
 									<ICONS.more className="size-4" strokeWidth={1.8} />
 								</div>
 								{sessions.length === 0 ? (
-									<div className="flex flex-1 items-start justify-center px-3 pt-3 text-center text-body font-semibold text-muted-foreground">
+									<div className="flex flex-1 items-start justify-center px-3 pt-3 text-center text-body font-semibold text-l5-glass-muted">
 										No recent chats
 									</div>
 								) : (
-									<div className="min-h-0 flex-1 overflow-y-auto pr-1">
+									<div className="app-scrollbar-transparent min-h-0 flex-1 overflow-y-auto pr-1">
 										<div className="flex flex-col gap-1">
 											{sessions.map((session) => {
 												const isActive = session.sessionId === activeSessionId;
@@ -1648,8 +1708,8 @@ function App() {
 														className={cn(
 															"h-10 w-full justify-start gap-2 px-3 text-body font-medium",
 															isActive
-																? "bg-l5-selected-surface text-foreground"
-																: "text-muted-foreground hover:bg-white/70 hover:text-foreground",
+																? "bg-l5-accent/22 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+																: "text-l5-glass-muted hover:bg-white/12 hover:text-l5-glass-text",
 															isRunning ? "cursor-not-allowed opacity-60" : "",
 														)}
 														onClick={() => void handleSelectSession(session.sessionId)}
@@ -1671,11 +1731,11 @@ function App() {
 								)}
 							</section>
 
-							<div className="border-t border-border pt-3">
+							<div className="border-t border-white/12 pt-3">
 								<SidebarButton
 									aria-label="Settings"
 									title="Settings"
-									className="h-11 w-full justify-start gap-3 px-3 text-body font-medium text-muted-foreground hover:bg-white/70 hover:text-foreground"
+									className="h-11 w-full justify-start gap-3 px-3 text-body font-semibold text-l5-glass-muted hover:bg-white/12 hover:text-l5-glass-text"
 									onClick={() => setIsSettingsOpen(true)}
 								>
 									<ICONS.settings className="size-4 shrink-0" strokeWidth={1.8} />
@@ -1688,25 +1748,47 @@ function App() {
 							role="separator"
 							aria-orientation="vertical"
 							aria-label="Resize sidebar"
-							className="electrobun-webkit-app-region-no-drag absolute inset-y-0 right-[-4px] w-2 cursor-col-resize"
+							className="electrobun-webkit-app-region-no-drag absolute inset-y-4 right-[-5px] w-3 cursor-col-resize"
 							onPointerDown={handleResizePointerDown}
 							onPointerMove={handleResizePointerMove}
 						>
-							<div className="mx-auto h-full w-px bg-transparent transition-colors hover:bg-border" />
+							<div className="mx-auto h-full w-px rounded-full bg-transparent transition-colors hover:bg-white/35" />
 						</div>
 					</>
 				)}
-			</aside>
+			</div>
 
-			{/* Opaque backdrop for the workspace column only (right of the
-			    sidebar), now that the outer container is transparent to let
-			    the sidebar reveal real vibrancy. Chat/composer content must
-			    stay fully opaque regardless of the window's own transparency. */}
 			<div
-				aria-hidden="true"
-				className="fixed inset-y-0 z-0 bg-l5-background"
-				style={{ left: `${renderedSidebarWidth}px`, right: 0 }}
-			/>
+				className={cn(
+					"l5-sidebar-toggle-shell electrobun-webkit-app-region-no-drag fixed z-50",
+					"transition-[background-color,border-color,color,height,left,top,width] duration-standard ease-out",
+					isSidebarCollapsed ? "l5-sidebar-toggle-shell-collapsed" : "l5-sidebar-toggle-shell-expanded",
+				)}
+				style={{
+					left: `${sidebarToggleLeft}px`,
+					top: `${sidebarToggleTop}px`,
+					width: `${sidebarToggleSize}px`,
+					height: `${sidebarToggleSize}px`,
+				}}
+				onDoubleClick={(event) => event.stopPropagation()}
+			>
+				<button
+					type="button"
+					aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+					title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+					className={cn(
+						"flex h-full w-full items-center justify-center rounded-full transition-[background-color,color] duration-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
+						isSidebarCollapsed ? "text-l5-topbar-control" : "text-l5-glass-text",
+					)}
+					onClick={() => setIsSidebarCollapsed((value) => !value)}
+				>
+					{isSidebarCollapsed ? (
+						<ICONS.sidebarExpand className="size-6 shrink-0" strokeWidth={1.9} />
+					) : (
+						<ICONS.sidebarCollapse className="size-4 shrink-0" strokeWidth={1.9} />
+					)}
+				</button>
+			</div>
 
 			{contextMenu && menuSession ? (
 				<div
@@ -1727,90 +1809,37 @@ function App() {
 				</div>
 			) : null}
 
-			<div
-				className="electrobun-webkit-app-region-no-drag fixed z-10 flex items-center"
-				style={{
-					left: `${renderedSidebarWidth + SIDEBAR_FLOATING_TOGGLE_GAP}px`,
-					top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`,
-					height: `${SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT}px`,
-				}}
-				onDoubleClick={(event) => event.stopPropagation()}
-			>
-				<div
-					className={cn(
-						"inline-flex w-auto items-center gap-2 border border-border bg-white/80 py-1 pl-1.5 text-muted-foreground shadow-e1 backdrop-blur-2xl",
-						shouldShowSessionContext
-							? "min-h-14 max-w-[32.5rem] rounded-full pr-4"
-							: "h-11 rounded-full pr-4",
-					)}
-				>
-					<SidebarButton
-						aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-						title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-						className="size-9 justify-center rounded-full hover:bg-accent hover:text-foreground"
-						onClick={() => setIsSidebarCollapsed((value) => !value)}
-					>
-						<SidebarToggleIcon className="size-5 shrink-0" strokeWidth={1.8} />
-					</SidebarButton>
-					{shouldShowSessionContext ? (
-						<div className="min-w-0 py-1">
-							<div className="flex min-w-0 items-center gap-2">
-								<span className="min-w-0 truncate text-body font-semibold leading-5 text-foreground">{topBarTitle}</span>
-								<ICONS.more className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-							</div>
-							{topBarSubtitle ? (
-								<div className="truncate text-caption font-medium leading-4 text-muted-foreground">{topBarSubtitle}</div>
-							) : null}
-						</div>
-					) : (
-						<>
-							<img src={appIcon} alt="" className="size-6 shrink-0 rounded-full" />
-							<span className="shrink-0 text-body font-semibold text-foreground">{topBarTitle}</span>
-						</>
-					)}
-				</div>
-			</div>
-
 			{isDashboardEligible ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed right-6 z-30 flex items-center"
-					style={{ top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`, height: `${SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT}px` }}
+					className="electrobun-webkit-app-region-no-drag fixed z-40"
+					style={{ top: `${FRAME_TOP_CONTROL_TOP}px`, right: `${FRAME_INSET * 2}px` }}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
 					<div className="relative">
-						<div
+						<LiquidGlassButton
+							aria-label="Toggle dashboard"
+							title="Toggle dashboard"
+							aria-pressed={isDashboardPinned}
 							className={cn(
-								"rounded-[30px] border bg-white/78 p-1.5 shadow-e1 backdrop-blur-2xl transition-[border-color,box-shadow,background-color] duration-standard",
-								isDashboardPinned
-									? "border-[rgba(63,92,245,0.28)] bg-white/88 shadow-[0_12px_34px_rgba(63,92,245,0.22)]"
-									: "border-border",
+								"transition-[color,transform] duration-standard",
+								isDashboardPinned ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
 							)}
+							style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
+							onClick={() => {
+								const shouldOpen = !isDashboardPinned;
+								setIsDashboardPinned(shouldOpen);
+								if (shouldOpen) {
+									void refreshProjectGitStatus(projectFolder);
+								}
+							}}
 						>
-							<IconButton
-								label="Toggle dashboard"
-								aria-pressed={isDashboardPinned}
-								className={cn(
-									"size-11 rounded-[22px] transition-[background-color,color,box-shadow,transform] duration-standard hover:bg-white/72",
-									isDashboardPinned
-										? "bg-l5-selected-surface text-l5-accent shadow-[inset_0_0_0_1px_rgba(63,92,245,0.18),0_8px_22px_rgba(63,92,245,0.16)]"
-										: "text-muted-foreground",
-								)}
-								onClick={() => {
-									const shouldOpen = !isDashboardPinned;
-									setIsDashboardPinned(shouldOpen);
-									if (shouldOpen) {
-										void refreshProjectGitStatus(projectFolder);
-									}
-								}}
-							>
-								<ICONS.dashboard className="size-5" strokeWidth={1.9} />
-							</IconButton>
-						</div>
+							<ICONS.dashboard className="size-5" strokeWidth={1.9} />
+						</LiquidGlassButton>
 
 						{isDashboardPinned ? (
 							<section
 								aria-label="Session dashboard"
-								className="absolute right-0 top-full mt-2 w-[21rem] max-w-[calc(100vw-3rem)] rounded-panel border border-border bg-white/88 p-4 text-foreground shadow-e2 backdrop-blur-2xl"
+								className="l5-liquid-popover absolute right-0 top-full mt-3 w-[21rem] max-w-[calc(100vw-3rem)] rounded-panel border border-border p-4 text-foreground shadow-e2"
 								onPointerDown={(event) => event.stopPropagation()}
 							>
 								<div className="flex items-center gap-3">
@@ -1852,42 +1881,38 @@ function App() {
 
 			{isReviewEligible && canFitReviewColumnIfSidebarCollapsed ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed z-30 flex items-center"
+					className="electrobun-webkit-app-region-no-drag fixed z-40"
 					style={{
-						top: `${SIDEBAR_FLOATING_TOGGLE_TOP}px`,
-						height: `${SIDEBAR_FLOATING_TOGGLE_ROW_HEIGHT}px`,
-						right: isDashboardEligible ? "5.75rem" : "1.5rem",
+						top: `${FRAME_TOP_CONTROL_TOP}px`,
+						right: isDashboardEligible
+							? `${FRAME_INSET * 2 + FRAME_TOP_CONTROL_SIZE + FRAME_TOP_CONTROL_GAP}px`
+							: `${FRAME_INSET * 2}px`,
 					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
-					<div
+					<LiquidGlassButton
+						aria-label="Toggle review"
+						title="Toggle review"
+						aria-pressed={isReviewOpen}
 						className={cn(
-							"rounded-[30px] border bg-white/78 p-1.5 shadow-e1 backdrop-blur-2xl transition-[border-color,box-shadow,background-color] duration-standard",
-							isReviewOpen ? "border-l5-accent/28 bg-white/88 shadow-e2" : "border-border",
+							"transition-[color,transform] duration-standard",
+							isReviewOpen ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
 						)}
+						style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
+						onClick={() => {
+							const opening = !isReviewOpen;
+							// DESIGN.md "Layout": "Opening Review may collapse the
+							// sidebar on narrow windows." Only collapses -- never
+							// re-expands on close, and never collapses if the
+							// current (expanded) sidebar width already leaves room.
+							if (opening && !isSidebarCollapsed && !canFitReviewColumn) {
+								setIsSidebarCollapsed(true);
+							}
+							setIsReviewOpen(opening);
+						}}
 					>
-						<IconButton
-							label="Toggle review"
-							aria-pressed={isReviewOpen}
-							className={cn(
-								"size-11 rounded-[22px] transition-[background-color,color,box-shadow,transform] duration-standard hover:bg-white/72",
-								isReviewOpen ? "bg-l5-selected-surface text-l5-accent shadow-e1" : "text-muted-foreground",
-							)}
-							onClick={() => {
-								const opening = !isReviewOpen;
-								// DESIGN.md "Layout": "Opening Review may collapse the
-								// sidebar on narrow windows." Only collapses -- never
-								// re-expands on close, and never collapses if the
-								// current (expanded) sidebar width already leaves room.
-								if (opening && !isSidebarCollapsed && !canFitReviewColumn) {
-									setIsSidebarCollapsed(true);
-								}
-								setIsReviewOpen(opening);
-							}}
-						>
-							<ICONS.review className="size-5" strokeWidth={1.9} />
-						</IconButton>
-					</div>
+						<ICONS.review className="size-5" strokeWidth={1.9} />
+					</LiquidGlassButton>
 				</div>
 			) : null}
 
@@ -1902,7 +1927,10 @@ function App() {
 
 			<main
 				className="electrobun-webkit-app-region-no-drag flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-20 transition-[margin] duration-standard ease-out"
-				style={{ marginRight: `${dashboardReservedWidth + reviewReservedWidth}px` }}
+				style={{
+					marginRight: `${dashboardReservedWidth + reviewReservedWidth}px`,
+					paddingLeft: `${24 + workspaceContentLeftInset}px`,
+				}}
 				aria-label="Workspace"
 			>
 				<div className={cn("mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col", hasConversation ? "" : "justify-center")}>
@@ -1911,7 +1939,10 @@ function App() {
 							<div
 								ref={transcriptScrollRef}
 								className="app-scrollbar-transparent fixed bottom-0 right-0 top-0 overflow-y-auto overscroll-contain px-6 pt-24"
-								style={{ left: `${renderedSidebarWidth}px`, right: `${dashboardReservedWidth + reviewReservedWidth}px` }}
+								style={{
+									left: `${workspaceContentLeftInset}px`,
+									right: `${dashboardReservedWidth + reviewReservedWidth}px`,
+								}}
 							>
 								{/* DESIGN.md "Chat": spacing between messages is 20px (L5Spacing.x5). */}
 								<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-5">

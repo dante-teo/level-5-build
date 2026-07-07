@@ -61,6 +61,19 @@
 	--l5-success: #16a34a;
 	--l5-warning: #f59e0b;
 	--l5-danger: #dc2626;
+	--l5-glass-pane: rgba(255, 255, 255, 0.4);
+	--l5-glass-pane-strong: rgba(244, 244, 248, 0.55);
+	--l5-glass-control: rgba(0, 0, 0, 0.05);
+	--l5-glass-control-hover: rgba(0, 0, 0, 0.1);
+	--l5-glass-border: rgba(0, 0, 0, 0.08);
+	--l5-glass-highlight: rgba(255, 255, 255, 0.35);
+	--l5-glass-text: #171717;
+	--l5-glass-muted: #6b7280;
+	--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.1);
+	--l5-topbar-gradient-top: rgba(250, 250, 252, 0.96);
+	--l5-topbar-gradient-mid: rgba(250, 250, 252, 0.75);
+	--l5-topbar-gradient-bottom: rgba(250, 250, 252, 0);
+	--l5-topbar-control-foreground: #09090b;
 
 	/* shadcn-compatible aliases so existing utility classes keep resolving */
 	--background: var(--l5-background);
@@ -99,6 +112,19 @@
 	--l5-success: #3fd176;
 	--l5-warning: #fbbc05;
 	--l5-danger: #f87171;
+	--l5-glass-pane: rgba(30, 30, 30, 0.55);
+	--l5-glass-pane-strong: rgba(20, 20, 20, 0.7);
+	--l5-glass-control: rgba(255, 255, 255, 0.08);
+	--l5-glass-control-hover: rgba(255, 255, 255, 0.15);
+	--l5-glass-border: rgba(255, 255, 255, 0.1);
+	--l5-glass-highlight: rgba(255, 255, 255, 0.05);
+	--l5-glass-text: #f0f0f0;
+	--l5-glass-muted: #b3b3b3;
+	--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.24);
+	--l5-topbar-gradient-top: rgba(19, 20, 22, 0.96);
+	--l5-topbar-gradient-mid: rgba(19, 20, 22, 0.75);
+	--l5-topbar-gradient-bottom: rgba(19, 20, 22, 0);
+	--l5-topbar-control-foreground: #ffffff;
 
 	--background: var(--l5-background);
 	--foreground: var(--l5-text-primary);
@@ -155,6 +181,15 @@
 	--color-l5-success: var(--l5-success);
 	--color-l5-warning: var(--l5-warning);
 	--color-l5-danger: var(--l5-danger);
+	--color-l5-glass-pane: var(--l5-glass-pane);
+	--color-l5-glass-pane-strong: var(--l5-glass-pane-strong);
+	--color-l5-glass-control: var(--l5-glass-control);
+	--color-l5-glass-control-hover: var(--l5-glass-control-hover);
+	--color-l5-glass-border: var(--l5-glass-border);
+	--color-l5-glass-highlight: var(--l5-glass-highlight);
+	--color-l5-glass-text: var(--l5-glass-text);
+	--color-l5-glass-muted: var(--l5-glass-muted);
+	--color-l5-topbar-control: var(--l5-topbar-control-foreground);
 
 	--font-sans: "Barlow", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	--font-mono: "Departure Mono", "SF Mono", SFMono-Regular, ui-monospace, monospace;
@@ -246,6 +281,87 @@
 		display: none;
 		width: 0;
 		height: 0;
+	}
+
+	.l5-liquid-pane {
+		background:
+			linear-gradient(135deg, var(--l5-glass-highlight), transparent 34%),
+			linear-gradient(180deg, var(--l5-glass-pane), var(--l5-glass-pane-strong));
+		border: 1px solid transparent;
+		background-clip: padding-box;
+		box-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.24),
+			inset 0 -1px 0 rgba(0, 0, 0, 0.06),
+			inset 1px 0 0 rgba(255, 255, 255, 0.1),
+			inset -1px 0 0 rgba(0, 0, 0, 0.05),
+			0 8px 18px rgba(0, 0, 0, 0.12),
+			0 1px 3px rgba(0, 0, 0, 0.08);
+		backdrop-filter: blur(34px) saturate(1.65);
+		-webkit-backdrop-filter: blur(34px) saturate(1.65);
+	}
+
+	.l5-frame-top-gradient {
+		background: linear-gradient(
+			to bottom,
+			var(--l5-topbar-gradient-top) 0%,
+			var(--l5-topbar-gradient-mid) 75%,
+			var(--l5-topbar-gradient-bottom) 100%
+		);
+		backdrop-filter: blur(18px) saturate(1.2);
+		-webkit-backdrop-filter: blur(18px) saturate(1.2);
+	}
+
+	.l5-topbar-glass-control .glass {
+		box-shadow: none !important;
+	}
+
+	.l5-sidebar-toggle-shell {
+		border-radius: 999px;
+		border: 1px solid transparent;
+		color: var(--l5-glass-text);
+		overflow: hidden;
+		will-change: left, top, width, height, background-color, border-color;
+	}
+
+	.l5-sidebar-toggle-shell-collapsed {
+		background:
+			linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 42%),
+			var(--l5-glass-control);
+		border-color: var(--l5-glass-border);
+		backdrop-filter: blur(28px) saturate(1.55);
+		-webkit-backdrop-filter: blur(28px) saturate(1.55);
+		box-shadow: none;
+		color: var(--l5-topbar-control-foreground);
+	}
+
+	.l5-sidebar-toggle-shell-expanded {
+		background: transparent;
+		border-color: transparent;
+		box-shadow: none;
+		color: var(--l5-glass-text);
+	}
+
+	.l5-topbar-glass-control button:hover,
+	.l5-sidebar-toggle-shell button:hover {
+		background-color: var(--l5-glass-pane-control-hover);
+	}
+
+	.l5-topbar-glass-control:has(button[aria-pressed="true"]) button {
+		color: var(--l5-accent);
+	}
+
+	.l5-liquid-popover {
+		background:
+			linear-gradient(135deg, rgba(255, 255, 255, 0.2), transparent 38%),
+			rgba(255, 255, 255, 0.86);
+		backdrop-filter: blur(30px) saturate(1.55);
+		-webkit-backdrop-filter: blur(30px) saturate(1.55);
+	}
+
+	.dark .l5-liquid-popover {
+		background:
+			linear-gradient(135deg, rgba(255, 255, 255, 0.12), transparent 38%),
+			rgba(18, 23, 34, 0.86);
 	}
 }
 

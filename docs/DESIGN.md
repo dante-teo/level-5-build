@@ -85,19 +85,19 @@ Do not introduce arbitrary font sizes. Match display text to its container: use 
 
 The primary layout is:
 
-`Sidebar | Workspace | Optional Review Column`
+`Floating Sidebar | Workspace | Optional Review Column`
 
 Rules:
 
-- Sidebar is user-resizable from `260px` to `420px`.
-- Collapsing the sidebar hides it completely (`0px`) rather than leaving an icon rail.
-- Workspace grows to fill remaining space.
+- Sidebar is a floating liquid-glass pane inset from the window edge, user-resizable from `260px` to `420px`.
+- Collapsing the sidebar hides the pane completely (`0px`) rather than leaving an icon rail.
+- Workspace remains full-window behind the floating pane; readable chat/composer content receives left clearance while the pane is expanded so it is not covered.
 - Review, when open, is a true third column to the right of the workspace.
 - Review should preserve at least a `520px` workspace; hide the Review toggle when the window cannot fit the workspace, resize handle, and default Review column even after sidebar collapse.
 - The Review column is user-resizable for the current open interaction and should keep a visible drag target between the workspace and Review.
 - The project dashboard adapts inside the workspace between reserved wide layout and compact popover/overlay behavior.
 - Reserved dashboard space should still feel visually connected to the transcript area, not like a separate app column.
-- Top bar always spans the full workspace width.
+- Top bar is an overlay across the full window/workspace, not a reserved layout row.
 - Top bar actions remain right aligned and should be kept minimal.
 - Window controls remain native.
 
@@ -107,7 +107,7 @@ The first screen should feel like a real app workspace, not a landing page. The 
 
 ## Elevation & Depth
 
-Use `L5Elevation` (the `shadow-e*` scale) and translucent/vibrancy surfaces for depth. Shadows should create quiet hierarchy, not a floating-card collage.
+Use `L5Elevation` (the `shadow-e*` scale), translucent/vibrancy surfaces, and rim/highlight lines for depth. Shadows should create quiet hierarchy, not a floating-card collage.
 
 Elevation scale:
 
@@ -119,7 +119,8 @@ Elevation scale:
 Rules:
 
 - Never stack heavy shadows.
-- Prefer material contrast and spacing before adding extra depth.
+- Prefer material contrast, rim highlights, and spacing before adding extra depth.
+- Liquid-glass panes should read from material, blur, tint, and edge highlights first. Use no shadow or only a very small grounding shadow.
 - Avoid excessive borders; use boundaries only when needed for readability or interaction.
 
 ## Shapes
@@ -155,7 +156,10 @@ Contains workspace switcher, navigation, project groups, recent conversations, s
 Rules:
 
 - Never collapse into icon-only mode automatically.
-- Manual collapse hides the sidebar completely. Keep the collapse/expand affordance outside the sidebar so it remains reachable when the sidebar is hidden.
+- Manual collapse hides the sidebar completely. Keep the collapse/expand affordance reachable when the sidebar is hidden.
+- The expanded sidebar is a floating liquid-glass pane, currently inset `8px` from the window on the left/top/bottom with `26px` corner radius.
+- The native macOS traffic lights are real OS controls visually embedded in the pane's top glass row. Do not fake or hide them.
+- The pane's top row is about `44px` high. The in-pane collapse button is a small circular icon aligned to that row; when collapsed, the same affordance animates into the left top-bar position and grows to the top-bar control size.
 - Selected rows use a subtle surface tint plus the accent color.
 - Session rows in the current chat UI live under an `All chats` header. The empty state should sit close to the header, not centered deep in the sidebar.
 - The active session row may show a compact right-aligned state indicator: spinner while running, quiet completion glyph when done, and no indicator while idle.
@@ -163,7 +167,6 @@ Rules:
 - Delete is available only through the row context menu as `Delete Chat...` and must use native destructive confirmation before calling the backend.
 - Group hierarchy should be readable without heavy separators.
 - Bottom account/settings areas may use a quiet divider.
-- The floating app capsule sits just outside the sidebar edge. Only the collapse/expand icon inside the capsule is clickable; app logo/name text are display-only.
 
 ### Settings
 
@@ -187,25 +190,24 @@ Rules:
 - Do not place decorative cards behind content.
 - Preserve open space when the conversation is empty.
 - Let the bottom composer anchor the interaction model.
-- The transcript scroll layer spans from the sidebar edge to the right edge of the window and sits behind the foreground composer/top chrome. Keep transcript content centered for readability, but do not constrain the scroll container itself to the message column.
+- The transcript scroll layer spans the full workspace/window behind the floating sidebar and top chrome. Keep transcript content centered for readability, and apply left clearance while the sidebar pane is expanded so readable content is not covered.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
 
 ### Top Bar
 
-Height is content-driven. The current workspace toolbar row uses circular `44px` icon buttons plus vertical padding, for an effective height of about `60px`.
+Height is content-driven. The current workspace toolbar row uses circular `44px` icon buttons plus symmetric `8px` vertical padding, for an effective height of about `60px`.
 
 Rules:
 
 - The workspace top bar is a translucent overlay, not a second opaque app header.
 - Use native/material glass behavior with a top-to-bottom fade so transcript content can begin under it while remaining readable through scroll content inset.
 - Do not hide the macOS traffic-light controls to achieve this treatment.
-- Controls align right and stay sparse.
-- The floating capsule stays just outside the sidebar edge and always contains the sidebar collapse/expand button.
-- When no project-backed chat is active, the capsule shows the app icon and `Level5`.
-- When a project-backed chat is active, the capsule may replace the app identity with a compact session title and muted project subtitle.
+- Controls stay sparse. Dashboard and Review align to the right edge; the sidebar expand affordance aligns near the traffic-light cluster when the sidebar is collapsed.
+- Do not show an app/session title capsule in the top bar.
 - A project-backed active session may show a top-right dashboard trigger. When the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
 - Any selected project or project-backed session may show a top-right Review trigger when the default Review column can fit.
 - Dashboard and Review triggers use the same circular glass treatment. Review keeps the same icon in open and closed states.
+- Top-bar controls use high-contrast foreground colors and no shadow. Hover darkens the whole circular glass surface slightly.
 - Interactive controls inside draggable regions must opt out of drag behavior.
 
 ### Project Dashboard

@@ -4,7 +4,7 @@ This app is a desktop-native AI coding agent environment. It is intended to feel
 
 ## Current state
 
-`app/` is the active app shell (Bun + Electrobun + React). It provides a frameless native-chrome window with a resizable sidebar, a centered new-session workspace, a tokenized prompt composer, local project selection in the new-session footer, approval-mode controls, a Settings dialog for choosing the ACP provider, structured transcript rows with per-session follow-tail scrolling, per-session queued prompts, a resizable inspect-only Review column for Git working-tree changes, and keyboard shortcuts for major actions.
+`app/` is the active app shell (Bun + Electrobun + React). It provides a frameless native-chrome window with a floating resizable liquid-glass sidebar, a centered new-session workspace, a tokenized prompt composer, local project selection in the new-session footer, approval-mode controls, a Settings dialog for choosing the ACP provider, structured transcript rows with per-session follow-tail scrolling, per-session queued prompts, a resizable inspect-only Review column for Git working-tree changes, and keyboard shortcuts for major actions.
 
 The app spawns and drives a real agent backend over ACP for a Settings-selected ACP provider (`Devin`, the default, or `Oh My Pi (omp)`; see the sidebar Settings dialog), persisted across restarts, with one concurrent backend process per open project so multiple projects can run turns at the same time — a `devin acp` process for the Devin provider, an `omp acp` process for the omp provider. If the selected provider's CLI isn't found and `LEVEL5_USE_ACP_MOCK=1` isn't set, agent actions are disabled and the composer shows an actionable "CLI not found" message naming the missing tool; it does not pretend a message was sent. Setting `LEVEL5_USE_ACP_MOCK=1` opts into the repo-local ACP mock server for the same session lifecycle path regardless of the selected provider: startup model and slash-command discovery, first-send `session/new`, prompt turns, per-session in-memory queues, optimistic session model switching, and `session/delete` (best-effort against the backend; real Devin does not yet support `session/delete` server-side, but the app deletes the session locally regardless and remembers not to show it again — see `docs/ARCHITECTURE.md`). There is no ACP `session/list` call anywhere: the sidebar is sourced entirely from the local durable cache, and `session/load` only ever runs silently to prime a session's server-side context the first time it's sent to in a given app run — never to repaint the transcript. Selecting a session does not change sidebar recency; only live sent or received message activity does.
 
@@ -26,7 +26,7 @@ The product target stayed the same across that migration: a calm desktop AI codi
 
 The target product is a calm desktop AI coding agent with these core surfaces:
 
-- A fixed project/sidebar area for workspaces, project groups, recent conversations, settings, and account context.
+- A floating project/sidebar pane for workspaces, project groups, recent conversations, settings, and account context.
 - A primary workspace for chat, agent plans, progress, code-change summaries, and empty or ready states.
 - A bottom prompt composer for text, attachments, agent selection, and sending.
 - A review surface for changed files and diffs; approval, revert, and commit actions are future extensions beyond the current inspect-only pane.

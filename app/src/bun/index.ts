@@ -379,6 +379,12 @@ class ProjectAgentConnection {
 				await this.ensureInitialized();
 				if (params.sessionId) {
 					await this.primeSession(params.sessionId, cwd);
+					// A prepared New Chat already has a session id in the
+					// renderer, but it is intentionally absent from SQLite
+					// until the first real send. Persist it before
+					// session/prompt can stream transcript rows that foreign-key
+					// to sessions.
+					this.persistCurrentSession(cwd);
 				} else {
 					// An actual send: persist now, even if this reuses an
 					// unpersisted warm-up session from prepareSession/the
@@ -550,6 +556,7 @@ class ProjectAgentConnection {
 			this.primedSessionIds.delete(this.sessionId);
 			this.sessionId = null;
 			this.currentCwd = null;
+			this.sessionPersisted = false;
 		}
 
 		const cachedTranscript = this.runtime.transcripts.get(sessionId);
@@ -1611,11 +1618,16 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 const isMacOS = process.platform === "darwin";
+const TRAFFIC_LIGHT_OFFSET = {
+	x: 18,
+	y: 22,
+} as const;
 
 mainWindow = new BrowserWindow({
 	title: "Level5 Build",
 	url,
 	titleBarStyle: "hiddenInset",
+	trafficLightOffset: TRAFFIC_LIGHT_OFFSET,
 	// Required for the sidebar/floating capsules' translucent surfaces to
 	// reveal genuine NSVisualEffectView vibrancy (see applyMacWindowEffects)
 	// instead of flatly blurring an opaque window background.
@@ -1628,6 +1640,8 @@ mainWindow = new BrowserWindow({
 	},
 	rpc,
 });
+
+mainWindow.setWindowButtonPosition(TRAFFIC_LIGHT_OFFSET.x, TRAFFIC_LIGHT_OFFSET.y);
 
 if (isMacOS) {
 	const { vibrancy, shadow } = applyMacWindowEffects(mainWindow);

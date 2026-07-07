@@ -1,4 +1,9 @@
 import { type PointerEvent, useEffect, useState } from "react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { parseUnifiedDiffLines } from "@/diffFormat";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
@@ -57,8 +62,8 @@ function formatBytes(bytes: number): string {
 
 function ReviewErrorState({ message, rawOutput }: { message: string; rawOutput?: string }) {
 	return (
-		<div className="rounded-card border border-border bg-muted/40 p-4 text-body text-muted-foreground">
-			<div className="font-medium text-foreground">{message}</div>
+		<Alert>
+			<AlertTitle>{message}</AlertTitle>
 			{rawOutput && rawOutput !== message ? (
 				<details className="mt-2">
 					<summary className="cursor-pointer text-caption">Details</summary>
@@ -67,7 +72,8 @@ function ReviewErrorState({ message, rawOutput }: { message: string; rawOutput?:
 					</pre>
 				</details>
 			) : null}
-		</div>
+			<AlertDescription className="sr-only">Review error</AlertDescription>
+		</Alert>
 	);
 }
 
@@ -167,11 +173,11 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 	const badge = statusBadgeFor(file);
 
 	return (
-		<section className="rounded-card border border-border bg-l5-secondary-background">
+		<Card className="bg-l5-secondary-background shadow-none">
 			<div className="flex items-center gap-2 border-b border-border px-3 py-2">
-				<span className={cn("shrink-0 rounded-chip px-2 py-0.5 text-caption font-medium", STATUS_BADGE_CLASSES[badge])}>
+				<Badge className={cn("shrink-0", STATUS_BADGE_CLASSES[badge])}>
 					{badge}
-				</span>
+				</Badge>
 				<span className="min-w-0 flex-1 truncate font-mono text-mono text-foreground">
 					{file.oldPath ? `${file.oldPath} \u2192 ${file.path}` : file.path}
 				</span>
@@ -189,7 +195,7 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 					<ReviewFilePreviewBody preview={preview} />
 				)}
 			</div>
-		</section>
+		</Card>
 	);
 }
 
@@ -280,31 +286,33 @@ export function ReviewPane({ cwd, width, topInset, onWidthChange, onClose }: Rev
 						</div>
 					) : null}
 				</div>
-				<button
+				<Button
 					type="button"
 					aria-label="Refresh review"
-					className="flex size-8 items-center justify-center rounded-medium text-muted-foreground transition-colors hover:bg-muted/70"
+					variant="ghost"
+					size="icon-sm"
 					onClick={() => void refresh()}
 				>
 					<ICONS.refresh className={cn("size-4", isLoading ? "animate-spin" : "")} strokeWidth={1.8} />
-				</button>
-				<button
+				</Button>
+				<Button
 					type="button"
 					aria-label="Close review"
-					className="flex size-8 items-center justify-center rounded-medium text-muted-foreground transition-colors hover:bg-muted/70"
+					variant="ghost"
+					size="icon-sm"
 					onClick={onClose}
 				>
 					<ICONS.close className="size-4" strokeWidth={1.8} />
-				</button>
+				</Button>
 			</header>
 
 			{snapshot?.isAvailable ? (
 				<div className="border-b border-border px-4 py-2">
-					<input
+					<Input
 						value={filter}
 						onChange={(event) => setFilter(event.target.value)}
 						placeholder="Filter changed files"
-						className="w-full rounded-input border border-border bg-transparent px-3 py-1.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+						className="bg-transparent"
 					/>
 				</div>
 			) : null}

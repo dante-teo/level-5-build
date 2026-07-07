@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
+import {
+	Dialog,
+	DialogContent,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { electroview } from "@/lib/electrobun";
-import { ICONS } from "@/lib/icon-map";
 import { ACP_PROVIDER_LABELS, type AcpProviderId } from "@shared/rpc";
 
 const ACP_PROVIDER_OPTIONS: Array<{ value: AcpProviderId; label: string }> = [
@@ -9,7 +14,7 @@ const ACP_PROVIDER_OPTIONS: Array<{ value: AcpProviderId; label: string }> = [
 	{ value: "omp", label: ACP_PROVIDER_LABELS.omp },
 ];
 
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
 	const [provider, setProvider] = useState<AcpProviderId>("devin");
 	const [isLoading, setIsLoading] = useState(true);
 
@@ -33,42 +38,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 		await electroview.rpc?.request.setAcpProvider({ provider: next });
 	}
 
-	useEffect(() => {
-		function handleKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") onClose();
-		}
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [onClose]);
-
 	return (
-		<div
-			className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-foreground/18 p-6 backdrop-blur-md"
-			role="presentation"
-			onDoubleClick={(event) => event.stopPropagation()}
-			onMouseDown={(event) => {
-				if (event.target === event.currentTarget) onClose();
-			}}
-		>
-			<section
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="settings-title"
-				className="l5-adaptive-surface w-full max-w-sm rounded-panel border border-border p-5 shadow-e3"
-			>
-				<div className="flex items-start justify-between gap-3">
-					<h2 id="settings-title" className="text-h3 font-semibold text-foreground">
-						Settings
-					</h2>
-					<button
-						type="button"
-						aria-label="Close settings"
-						className="flex size-8 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-						onClick={onClose}
-					>
-						<ICONS.close className="size-4" strokeWidth={1.9} />
-					</button>
-				</div>
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent aria-describedby={undefined}>
+				<DialogHeader>
+					<DialogTitle>Settings</DialogTitle>
+				</DialogHeader>
 
 				<div className="mt-5">
 					<div className="block text-caption font-semibold text-muted-foreground">
@@ -92,7 +67,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 						</SelectContent>
 					</Select>
 				</div>
-			</section>
-		</div>
+			</DialogContent>
+		</Dialog>
 	);
 }

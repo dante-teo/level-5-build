@@ -16,7 +16,39 @@ import LiquidGlass from "liquid-glass-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { useStickToBottom } from "use-stick-to-bottom";
 import type { LucideIcon } from "lucide-react";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@/components/ui/command";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuGroup,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { IconButton } from "@/components/level5";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
 import { cn } from "@/lib/utils";
@@ -151,10 +183,8 @@ type QueuedPrompt = {
 
 const adaptivePopoverClass =
 	"l5-adaptive-surface border border-border text-foreground shadow-e2";
-const adaptiveDialogClass = "l5-adaptive-surface border border-border shadow-e3";
 const adaptiveChipClass =
 	"l5-adaptive-chip electrobun-webkit-app-region-no-drag rounded-chip border border-border text-caption font-medium text-muted-foreground shadow-e1";
-const adaptiveHoverClass = "hover:bg-muted/70";
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 	return (
@@ -486,7 +516,6 @@ function App() {
 	const optimisticUserTextRef = useRef<string | null>(null);
 	const pendingPromptProjectFolderRef = useRef<string | null | undefined>(undefined);
 	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
-	const planPopoverRef = useRef<HTMLDivElement | null>(null);
 	const composerStatusTimerRef = useRef<number | null>(null);
 	const gitRefreshTimerRef = useRef<number | null>(null);
 	const projectFolderRef = useRef<string | null>(null);
@@ -730,36 +759,6 @@ function App() {
 	]);
 
 	useEffect(() => {
-		if (!isPlanPopoverOpen) {
-			return;
-		}
-
-		function closePopover() {
-			setIsPlanPopoverOpen(false);
-		}
-
-		function handlePointerDown(event: globalThis.PointerEvent) {
-			if (planPopoverRef.current?.contains(event.target as Node)) {
-				return;
-			}
-			closePopover();
-		}
-
-		function handleKeyDown(event: globalThis.KeyboardEvent) {
-			if (event.key === "Escape") {
-				closePopover();
-			}
-		}
-
-		document.addEventListener("pointerdown", handlePointerDown);
-		document.addEventListener("keydown", handleKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", handlePointerDown);
-			document.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [isPlanPopoverOpen]);
-
-	useEffect(() => {
 		const handler = ({ sessionId, update }: AgentUpdateMessage) => {
 			// Each project now runs its own concurrent agent process (see
 			// AGENTS.md per-project process pool notes), so a background
@@ -891,58 +890,10 @@ function App() {
 	}, []);
 
 	useEffect(() => {
-		if (!contextMenu) {
-			return;
-		}
-
-		function closeMenu() {
-			setContextMenu(null);
-		}
-
-		function handleKeyDown(event: globalThis.KeyboardEvent) {
-			if (event.key === "Escape") {
-				closeMenu();
-			}
-		}
-
-		document.addEventListener("pointerdown", closeMenu);
-		document.addEventListener("keydown", handleKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", closeMenu);
-			document.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [contextMenu]);
-
-	useEffect(() => {
 		if (!isProjectMenuOpen) {
 			return;
 		}
-
-		function closeMenu() {
-			setIsProjectMenuOpen(false);
-			setProjectSearch("");
-		}
-
-		function handlePointerDown(event: globalThis.PointerEvent) {
-			if (projectMenuRef.current?.contains(event.target as Node)) {
-				return;
-			}
-			closeMenu();
-		}
-
-		function handleKeyDown(event: globalThis.KeyboardEvent) {
-			if (event.key === "Escape") {
-				closeMenu();
-			}
-		}
-
-		document.addEventListener("pointerdown", handlePointerDown);
-		document.addEventListener("keydown", handleKeyDown);
 		projectSearchRef.current?.focus();
-		return () => {
-			document.removeEventListener("pointerdown", handlePointerDown);
-			document.removeEventListener("keydown", handleKeyDown);
-		};
 	}, [isProjectMenuOpen]);
 
 	useEffect(() => {
@@ -951,70 +902,10 @@ function App() {
 		}
 	}, [hasConversation, isRunning, isProjectMenuOpen]);
 
-	useEffect(() => {
-		if (!isPlusMenuOpen) {
-			return;
-		}
-
-		function closeMenu() {
-			setIsPlusMenuOpen(false);
-		}
-
-		function handlePointerDown(event: globalThis.PointerEvent) {
-			if (plusMenuRef.current?.contains(event.target as Node)) {
-				return;
-			}
-			closeMenu();
-		}
-
-		function handleKeyDown(event: globalThis.KeyboardEvent) {
-			if (event.key === "Escape") {
-				closeMenu();
-			}
-		}
-
-		document.addEventListener("pointerdown", handlePointerDown);
-		document.addEventListener("keydown", handleKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", handlePointerDown);
-			document.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [isPlusMenuOpen]);
-
 	// Note: no longer force-closed while running -- the composer (and its
 	// attachment/approval-mode menus) stays interactive during an active
 	// turn so the user can compose/queue the next prompt (see
 	// QueuedPrompt/handleSend).
-
-	useEffect(() => {
-		if (!isApprovalMenuOpen) {
-			return;
-		}
-
-		function closeMenu() {
-			setIsApprovalMenuOpen(false);
-		}
-
-		function handlePointerDown(event: globalThis.PointerEvent) {
-			if (approvalMenuRef.current?.contains(event.target as Node)) {
-				return;
-			}
-			closeMenu();
-		}
-
-		function handleKeyDown(event: globalThis.KeyboardEvent) {
-			if (event.key === "Escape") {
-				closeMenu();
-			}
-		}
-
-		document.addEventListener("pointerdown", handlePointerDown);
-		document.addEventListener("keydown", handleKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", handlePointerDown);
-			document.removeEventListener("keydown", handleKeyDown);
-		};
-	}, [isApprovalMenuOpen]);
 
 	useEffect(() => {
 		if (contextMenu && !sessions.some((session) => session.sessionId === contextMenu.sessionId)) {
@@ -1803,24 +1694,30 @@ function App() {
 				</button>
 			</div>
 
-			{contextMenu && menuSession ? (
-				<div
-					className={cn("electrobun-webkit-app-region-no-drag fixed z-30 w-44 rounded-card p-1.5", adaptivePopoverClass)}
-					style={{ left: contextMenu.x, top: contextMenu.y }}
-					onDoubleClick={(event) => event.stopPropagation()}
-					onPointerDown={(event) => event.stopPropagation()}
-				>
+			<DropdownMenu open={Boolean(contextMenu && menuSession)} onOpenChange={(open) => !open && setContextMenu(null)} modal={false}>
+				<DropdownMenuTrigger asChild>
 					<button
 						type="button"
-						className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-body font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
-						disabled={isRunning && contextMenu.sessionId === activeSessionId}
-						onClick={() => openDeleteDialog(contextMenu.sessionId)}
-					>
-						<ICONS.delete className="size-4 shrink-0" strokeWidth={1.9} />
-						<span>Delete Chat...</span>
-					</button>
-				</div>
-			) : null}
+						aria-label="Chat actions"
+						className="fixed size-px opacity-0"
+						style={{ left: contextMenu?.x ?? 0, top: contextMenu?.y ?? 0 }}
+					/>
+				</DropdownMenuTrigger>
+				{contextMenu && menuSession ? (
+					<DropdownMenuContent align="start" side="bottom" sideOffset={0} className="w-44">
+						<DropdownMenuGroup>
+							<DropdownMenuItem
+								variant="destructive"
+								disabled={isRunning && contextMenu.sessionId === activeSessionId}
+								onClick={() => openDeleteDialog(contextMenu.sessionId)}
+							>
+								<ICONS.delete className="size-4 shrink-0" strokeWidth={1.9} />
+								<span>Delete Chat...</span>
+							</DropdownMenuItem>
+						</DropdownMenuGroup>
+					</DropdownMenuContent>
+				) : null}
+			</DropdownMenu>
 
 			{isDashboardEligible ? (
 				<div
@@ -1834,32 +1731,45 @@ function App() {
 					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
-					<div className="relative">
-						<LiquidGlassButton
-							aria-label="Toggle dashboard"
-							title="Toggle dashboard"
-							aria-pressed={isDashboardPinned}
-							className={cn(
-								"transition-[color,transform] duration-standard",
-								isDashboardPinned ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
-							)}
-							style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
-							onClick={() => {
-								const shouldOpen = !isDashboardPinned;
-								setIsDashboardPinned(shouldOpen);
-								if (shouldOpen) {
-									void refreshProjectGitStatus(projectFolder);
-								}
-							}}
-						>
-							<ICONS.dashboard className="size-5" strokeWidth={1.9} />
-						</LiquidGlassButton>
+					<Popover
+						open={isDashboardPinned}
+						onOpenChange={(open) => {
+							setIsDashboardPinned(open);
+							if (open) {
+								void refreshProjectGitStatus(projectFolder);
+							}
+						}}
+					>
+						<PopoverAnchor asChild>
+							<div>
+								<LiquidGlassButton
+									aria-label="Toggle dashboard"
+									title="Toggle dashboard"
+									aria-pressed={isDashboardPinned}
+									className={cn(
+										"transition-[color,transform] duration-standard",
+										isDashboardPinned ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
+									)}
+									style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
+									onClick={() => {
+										const shouldOpen = !isDashboardPinned;
+										setIsDashboardPinned(shouldOpen);
+										if (shouldOpen) {
+											void refreshProjectGitStatus(projectFolder);
+										}
+									}}
+								>
+									<ICONS.dashboard className="size-5" strokeWidth={1.9} />
+								</LiquidGlassButton>
+							</div>
+						</PopoverAnchor>
 
 						{isDashboardPinned ? (
-							<section
+							<PopoverContent
 								aria-label="Session dashboard"
-								className="l5-liquid-popover absolute right-0 top-full mt-3 w-[21rem] max-w-[calc(100vw-3rem)] rounded-panel border border-border p-4 text-foreground shadow-e2"
-								onPointerDown={(event) => event.stopPropagation()}
+								align="end"
+								side="bottom"
+								className="l5-liquid-popover w-[21rem] max-w-[calc(100vw-3rem)] p-4"
 							>
 								<div className="flex items-center gap-3">
 									<div className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-l5-selected-surface text-l5-accent">
@@ -1892,9 +1802,9 @@ function App() {
 										value={attachmentSummary(attachments.length, lastSubmittedAttachmentCount)}
 									/>
 								</div>
-							</section>
+							</PopoverContent>
 						) : null}
-					</div>
+					</Popover>
 				</div>
 			) : null}
 
@@ -1998,13 +1908,11 @@ function App() {
 									</div>
 								) : null}
 								{planItems && planItems.length > 0 ? (
-									<div ref={planPopoverRef}>
-										<PlanChip
-											items={planItems}
-											isOpen={isPlanPopoverOpen}
-											onToggle={() => setIsPlanPopoverOpen((value) => !value)}
-										/>
-									</div>
+									<PlanChip
+										items={planItems}
+										isOpen={isPlanPopoverOpen}
+										onOpenChange={setIsPlanPopoverOpen}
+									/>
 								) : null}
 							</div>
 						) : null}
@@ -2088,141 +1996,101 @@ function App() {
 
 							<div className="flex items-center gap-3 px-5 pb-3 pt-1">
 								<div ref={plusMenuRef} className="relative">
-									<IconButton
-										label="Add to prompt"
-										aria-haspopup="menu"
-										aria-expanded={isPlusMenuOpen}
-										onClick={() => setIsPlusMenuOpen((value) => !value)}
-									>
-										<ICONS.add className="size-5" strokeWidth={1.9} />
-									</IconButton>
+									<DropdownMenu open={isPlusMenuOpen} onOpenChange={setIsPlusMenuOpen} modal={false}>
+										<DropdownMenuTrigger asChild>
+											<IconButton label="Add to prompt">
+												<ICONS.add className="size-5" strokeWidth={1.9} />
+											</IconButton>
+										</DropdownMenuTrigger>
+										<DropdownMenuContent align="start" side="top" className="app-scrollbar-transparent max-h-[420px] w-[320px] overflow-y-auto">
+											<DropdownMenuGroup>
+												<DropdownMenuItem onSelect={(event) => { event.preventDefault(); void handleUploadFile(); }}>
+													<ICONS.attach className="size-4" strokeWidth={1.8} />
+													<span>Upload file</span>
+												</DropdownMenuItem>
+												<DropdownMenuItem onSelect={(event) => { event.preventDefault(); void handleUploadFolder(); }}>
+													<ICONS.folder className="size-4" strokeWidth={1.8} />
+													<span>Upload folder</span>
+												</DropdownMenuItem>
+											</DropdownMenuGroup>
 
-									{isPlusMenuOpen ? (
-										<div
-											role="menu"
-											aria-label="Add to prompt"
-											className={cn(
-												"electrobun-webkit-app-region-no-drag app-scrollbar-transparent absolute bottom-[calc(100%+8px)] left-0 z-30 max-h-[420px] w-[320px] overflow-y-auto rounded-panel p-2",
-												adaptivePopoverClass,
+											<DropdownMenuSeparator />
+											<DropdownMenuLabel>Slash commands</DropdownMenuLabel>
+											{slashCommands.length === 0 ? (
+												<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
+													No commands available from the current agent
+												</div>
+											) : (
+												<DropdownMenuGroup>
+													{slashCommands.map((command) => (
+														<DropdownMenuItem key={command.name} onSelect={() => handleSelectSlashCommand(command)}>
+															<span className="flex size-6 shrink-0 items-center justify-center font-mono text-mono text-muted-foreground">/</span>
+															<span className="min-w-0 flex-1 truncate">{command.name}</span>
+															{command.description ? (
+																<span className="max-w-[45%] shrink-0 truncate text-[13px] font-normal text-muted-foreground">
+																	{command.description}
+																</span>
+															) : null}
+														</DropdownMenuItem>
+													))}
+												</DropdownMenuGroup>
 											)}
-											onDoubleClick={(event) => event.stopPropagation()}
-											onPointerDown={(event) => event.stopPropagation()}
-										>
-											<div className="flex flex-col gap-1">
-												<ComposerMenuItem
-													icon={<ICONS.attach className="size-4" strokeWidth={1.8} />}
-													label="Upload file"
-													onClick={() => void handleUploadFile()}
-												/>
-												<ComposerMenuItem
-													icon={<ICONS.folder className="size-4" strokeWidth={1.8} />}
-													label="Upload folder"
-													onClick={() => void handleUploadFolder()}
-												/>
-											</div>
-
-											<div className="mt-2 border-t border-border pt-2">
-												<div className="px-2 pb-1 text-caption font-semibold text-muted-foreground">Slash commands</div>
-												{slashCommands.length === 0 ? (
-													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
-														No commands available from the current agent
-													</div>
-												) : (
-													<div className="flex flex-col gap-1">
-														{slashCommands.map((command) => (
-															<ComposerMenuItem
-																key={command.name}
-																icon={<span className="font-mono text-mono">/</span>}
-																label={command.name}
-																description={command.description}
-																onClick={() => handleSelectSlashCommand(command)}
-															/>
-														))}
-													</div>
-												)}
-											</div>
 
 											{skills.length > 0 ? (
-												<div className="mt-2 border-t border-border pt-2">
-													<div className="px-2 pb-1 text-caption font-semibold text-muted-foreground">Skills</div>
-													<div className="flex flex-col gap-1">
+												<>
+													<DropdownMenuSeparator />
+													<DropdownMenuLabel>Skills</DropdownMenuLabel>
+													<DropdownMenuGroup>
 														{skills.map((skill) => (
-															<ComposerMenuItem
-																key={skill.id}
-																icon={<ICONS.agent className="size-4" strokeWidth={1.8} />}
-																label={skill.name}
-																description={skill.description}
-																onClick={() => handleSelectSkill(skill)}
-															/>
+															<DropdownMenuItem key={skill.id} onSelect={() => handleSelectSkill(skill)}>
+																<ICONS.agent className="size-4" strokeWidth={1.8} />
+																<span className="min-w-0 flex-1 truncate">{skill.name}</span>
+																{skill.description ? (
+																	<span className="max-w-[45%] shrink-0 truncate text-[13px] font-normal text-muted-foreground">
+																		{skill.description}
+																	</span>
+																) : null}
+															</DropdownMenuItem>
 														))}
-													</div>
-												</div>
+													</DropdownMenuGroup>
+												</>
 											) : null}
-										</div>
-									) : null}
+										</DropdownMenuContent>
+									</DropdownMenu>
 								</div>
 								<div ref={approvalMenuRef} className="relative">
-									<button
-										type="button"
-										aria-haspopup="menu"
-										aria-expanded={isApprovalMenuOpen}
-										aria-label="Approval mode"
-										className={cn(
-											"flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-body font-semibold text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-											adaptiveHoverClass,
-										)}
-										onClick={() => setIsApprovalMenuOpen((value) => !value)}
-									>
-										<currentApprovalOption.icon className="size-4 text-l5-accent" strokeWidth={1.8} />
-										<span>{currentApprovalOption.label}</span>
-										<ICONS.chevronDown className="size-4 text-muted-foreground" strokeWidth={1.8} />
-									</button>
-
-									{isApprovalMenuOpen ? (
-										<div
-											role="menu"
-											aria-label="Approval mode"
-											className={cn(
-												"electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[320px] rounded-panel p-3",
-												adaptivePopoverClass,
-											)}
-											onDoubleClick={(event) => event.stopPropagation()}
-											onPointerDown={(event) => event.stopPropagation()}
-										>
-											<div className="px-1 pb-2 text-[13px] font-semibold text-muted-foreground">
+									<DropdownMenu open={isApprovalMenuOpen} onOpenChange={setIsApprovalMenuOpen} modal={false}>
+										<DropdownMenuTrigger asChild>
+											<Button
+												type="button"
+												variant="ghost"
+												aria-label="Approval mode"
+												className="shrink-0 gap-2 rounded-2xl px-2 py-2 text-foreground"
+											>
+												<currentApprovalOption.icon className="size-4 text-l5-accent" strokeWidth={1.8} />
+												<span>{currentApprovalOption.label}</span>
+												<ICONS.chevronDown className="size-4 text-muted-foreground" strokeWidth={1.8} />
+											</Button>
+										</DropdownMenuTrigger>
+										<DropdownMenuContent align="start" side="top" className="w-[320px] p-3">
+											<DropdownMenuLabel className="px-1 pb-2 text-[13px]">
 												How should agent actions be approved?
-											</div>
-											<div className="flex flex-col gap-0.5">
-												{APPROVAL_MODE_OPTIONS.map((option) => {
-													const isSelected = option.value === approvalMode;
-													return (
-														<button
-															key={option.value}
-															type="button"
-															role="menuitemradio"
-															aria-checked={isSelected}
-															onClick={() => {
-																setApprovalMode(option.value);
-																setIsApprovalMenuOpen(false);
-															}}
-															className="flex w-full items-start gap-3 rounded-2xl px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
-														>
-															<option.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-															<span className="min-w-0 flex-1">
-																<span className="block text-body font-semibold text-foreground">{option.label}</span>
-																<span className="mt-0.5 block text-caption leading-4 text-muted-foreground">
-																	{option.description}
-																</span>
+											</DropdownMenuLabel>
+											<DropdownMenuRadioGroup value={approvalMode} onValueChange={(value) => setApprovalMode(value as ApprovalModeId)}>
+												{APPROVAL_MODE_OPTIONS.map((option) => (
+													<DropdownMenuRadioItem key={option.value} value={option.value}>
+														<option.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+														<span className="min-w-0 flex-1">
+															<span className="block text-body font-semibold text-foreground">{option.label}</span>
+															<span className="mt-0.5 block text-caption leading-4 text-muted-foreground">
+																{option.description}
 															</span>
-															{isSelected ? (
-																<ICONS.checkmark className="mt-0.5 size-4 shrink-0 text-foreground" strokeWidth={2} />
-															) : null}
-														</button>
-													);
-												})}
-											</div>
-										</div>
-									) : null}
+														</span>
+													</DropdownMenuRadioItem>
+												))}
+											</DropdownMenuRadioGroup>
+										</DropdownMenuContent>
+									</DropdownMenu>
 								</div>
 
 								<div className="min-w-0 flex-1" />
@@ -2275,29 +2143,90 @@ function App() {
 						{hasConversation ? null : (
 							<footer className="relative -mt-9 flex items-center justify-between rounded-panel bg-l5-secondary-background px-6 pb-3 pt-10 text-body font-medium text-muted-foreground">
 								<div ref={projectMenuRef} className="relative flex min-w-0 items-center">
-									<button
-										type="button"
-										aria-haspopup="dialog"
-										aria-expanded={isProjectMenuOpen}
-										aria-label={projectFolder ? `Choose project, current project ${projectLabel(projectFolder)}` : "Choose project"}
-										disabled={isRunning}
-										className={cn(
-											"flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors",
-											adaptiveHoverClass,
-											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
-											isRunning ? "cursor-not-allowed opacity-40" : "",
-										)}
-										onClick={() => {
+									<Popover
+										open={isProjectMenuOpen}
+										onOpenChange={(open) => {
 											if (isRunning) {
+												setIsProjectMenuOpen(false);
 												return;
 											}
-											setIsProjectMenuOpen((value) => !value);
+											setIsProjectMenuOpen(open);
+											if (!open) setProjectSearch("");
 										}}
-										title={projectFolder ?? "Choose project"}
 									>
-										<ICONS.folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-										<span className="max-w-48 truncate">{projectLabel(projectFolder)}</span>
-									</button>
+										<PopoverTrigger asChild>
+											<Button
+												type="button"
+												variant="ghost"
+												aria-label={projectFolder ? `Choose project, current project ${projectLabel(projectFolder)}` : "Choose project"}
+												disabled={isRunning}
+												className="min-w-0 gap-2 rounded-2xl px-2 py-2 text-foreground"
+												title={projectFolder ?? "Choose project"}
+											>
+												<ICONS.folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+												<span className="max-w-48 truncate">{projectLabel(projectFolder)}</span>
+											</Button>
+										</PopoverTrigger>
+										<PopoverContent
+											align="start"
+											side="top"
+											className="w-[336px] p-3"
+											onOpenAutoFocus={(event) => {
+												event.preventDefault();
+												projectSearchRef.current?.focus();
+											}}
+										>
+											<Command>
+												<label className="flex h-10 items-center gap-2 rounded-input px-2 text-muted-foreground">
+													<ICONS.search className="size-4 shrink-0" strokeWidth={1.8} />
+													<CommandInput
+														ref={projectSearchRef}
+														type="search"
+														value={projectSearch}
+														placeholder="Search projects"
+														aria-label="Search projects"
+														onChange={(event) => setProjectSearch(event.target.value)}
+													/>
+												</label>
+
+												<CommandList className="mt-2 pr-1">
+													{filteredProjects.length === 0 ? (
+														<CommandEmpty>No matching projects</CommandEmpty>
+													) : (
+														<CommandGroup>
+															{filteredProjects.map((project) => {
+																const isSelected = project.path === projectFolder;
+																return (
+																	<CommandItem
+																		key={project.path}
+																		title={project.path}
+																		className={cn(isSelected ? "bg-l5-selected-surface" : "")}
+																		onClick={() => void handleChooseProject(project.path)}
+																	>
+																		<ICONS.folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+																		<span className="min-w-0 flex-1 truncate">{project.name}</span>
+																	</CommandItem>
+																);
+															})}
+														</CommandGroup>
+													)}
+												</CommandList>
+
+												<div className="mt-2 border-t border-border pt-2">
+													<CommandGroup>
+														<CommandItem onClick={() => void handleSelectFolder()}>
+															<ICONS.add className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+															<span className="min-w-0 flex-1 truncate">New project</span>
+														</CommandItem>
+														<CommandItem onClick={() => void handleClearProject()}>
+															<ICONS.close className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+															<span className="min-w-0 flex-1 truncate">Don't work in a project</span>
+														</CommandItem>
+													</CommandGroup>
+												</div>
+											</Command>
+										</PopoverContent>
+									</Popover>
 									{projectFolder && composerProjectBranch ? (
 										<span
 											className="flex min-w-0 shrink-0 items-center gap-1 truncate px-2 text-caption text-muted-foreground"
@@ -2306,83 +2235,6 @@ function App() {
 											<ICONS.branch className="size-3.5 shrink-0" strokeWidth={1.8} />
 											<span className="min-w-0 truncate">{composerProjectBranch}</span>
 										</span>
-									) : null}
-
-									{isProjectMenuOpen ? (
-										<div
-											role="dialog"
-											aria-label="Choose project"
-											className={cn(
-												"electrobun-webkit-app-region-no-drag absolute bottom-[calc(100%+8px)] left-0 z-30 w-[336px] rounded-panel p-3",
-												adaptivePopoverClass,
-											)}
-											onDoubleClick={(event) => event.stopPropagation()}
-											onPointerDown={(event) => event.stopPropagation()}
-										>
-											<label className="flex h-10 items-center gap-2 rounded-input px-2 text-muted-foreground">
-												<ICONS.search className="size-4 shrink-0" strokeWidth={1.8} />
-												<input
-													ref={projectSearchRef}
-													type="search"
-													value={projectSearch}
-													placeholder="Search projects"
-													aria-label="Search projects"
-													className="min-w-0 flex-1 bg-transparent text-body font-medium text-foreground placeholder:text-muted-foreground focus:outline-none"
-													onChange={(event) => setProjectSearch(event.target.value)}
-												/>
-											</label>
-
-											<div className="app-scrollbar-transparent mt-2 max-h-56 overflow-y-auto pr-1">
-												{filteredProjects.length === 0 ? (
-													<div className="flex h-10 items-center rounded-2xl px-2 text-body font-semibold text-muted-foreground">
-														No matching projects
-													</div>
-												) : (
-													<div className="flex flex-col gap-1">
-														{filteredProjects.map((project) => {
-															const isSelected = project.path === projectFolder;
-															return (
-																<button
-																	key={project.path}
-																	type="button"
-																	title={project.path}
-																	className={cn(
-																		"flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold transition-colors",
-																		"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
-																		isSelected
-																			? "bg-l5-selected-surface text-foreground"
-																			: "text-foreground hover:bg-muted/70",
-																	)}
-																	onClick={() => void handleChooseProject(project.path)}
-																>
-																	<ICONS.folder className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-																	<span className="min-w-0 flex-1 truncate">{project.name}</span>
-																</button>
-															);
-														})}
-													</div>
-												)}
-											</div>
-
-											<div className="mt-2 border-t border-border pt-2">
-												<button
-													type="button"
-													className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
-													onClick={() => void handleSelectFolder()}
-												>
-													<ICONS.add className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-													<span className="min-w-0 flex-1 truncate">New project</span>
-												</button>
-												<button
-													type="button"
-													className="mt-1 flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
-													onClick={() => void handleClearProject()}
-												>
-													<ICONS.close className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-													<span className="min-w-0 flex-1 truncate">Don't work in a project</span>
-												</button>
-											</div>
-										</div>
 									) : null}
 								</div>
 								<div className="flex shrink-0 items-center gap-2 text-caption">
@@ -2396,81 +2248,35 @@ function App() {
 				</div>
 			</main>
 
-			{deleteTarget ? (
-				<div
-					className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-foreground/18 p-6 backdrop-blur-md"
-					role="presentation"
-					onDoubleClick={(event) => event.stopPropagation()}
-					onMouseDown={(event) => {
-						if (event.target === event.currentTarget) {
-							setDeleteTargetId(null);
-						}
-					}}
-				>
-					<section
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="delete-chat-title"
-						aria-describedby="delete-chat-description"
-						className={cn("w-full max-w-sm rounded-panel p-5", adaptiveDialogClass)}
-					>
+			<AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTargetId(null)}>
+				{deleteTarget ? (
+					<AlertDialogContent>
 						<div className="flex items-start gap-3">
 							<div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
 								<ICONS.delete className="size-5" strokeWidth={1.9} />
 							</div>
-							<div className="min-w-0 flex-1">
-								<h2 id="delete-chat-title" className="text-h3 font-semibold text-foreground">
-									Delete chat?
-								</h2>
-								<p id="delete-chat-description" className="mt-1 text-body leading-5 text-muted-foreground">
+							<AlertDialogHeader className="min-w-0 flex-1">
+								<AlertDialogTitle>Delete chat?</AlertDialogTitle>
+								<AlertDialogDescription>
 									This will remove "{sessionTitle(deleteTarget)}" from your recent chats.
-								</p>
-							</div>
+								</AlertDialogDescription>
+							</AlertDialogHeader>
 						</div>
-						<div className="mt-6 flex justify-end gap-2">
-							<button
-								type="button"
-								className="h-10 rounded-2xl px-4 text-body font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-								onClick={() => setDeleteTargetId(null)}
-							>
-								Cancel
-							</button>
-							<button
-								type="button"
-								className="h-10 rounded-2xl bg-destructive px-4 text-body font-semibold text-primary-foreground shadow-e2 transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
+						<AlertDialogFooter className="mt-6">
+							<AlertDialogCancel>Cancel</AlertDialogCancel>
+							<AlertDialogAction
+								className="bg-destructive text-primary-foreground hover:bg-destructive/90"
 								disabled={isRunning && deleteTarget.sessionId === activeSessionId}
 								onClick={() => void confirmDeleteSession()}
 							>
 								Delete
-							</button>
-						</div>
-					</section>
-				</div>
-			) : null}
-			{isSettingsOpen ? <SettingsDialog onClose={() => setIsSettingsOpen(false)} /> : null}
+							</AlertDialogAction>
+						</AlertDialogFooter>
+					</AlertDialogContent>
+				) : null}
+			</AlertDialog>
+			<SettingsDialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
 		</div>
-	);
-}
-
-type IconButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> & {
-	children: ReactNode;
-	label: string;
-};
-
-function IconButton({ children, label, className, ...props }: IconButtonProps) {
-	return (
-		<button
-			type="button"
-			aria-label={label}
-			title={label}
-			className={cn(
-				"flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
-				className,
-			)}
-			{...props}
-		>
-			{children}
-		</button>
 	);
 }
 
@@ -2624,36 +2430,6 @@ function AgentScrollIndicator({
 				})}
 			</div>
 		</div>
-	);
-}
-
-function ComposerMenuItem({
-	icon,
-	label,
-	description,
-	disabled = false,
-	onClick,
-}: {
-	icon: ReactNode;
-	label: string;
-	description?: string;
-	disabled?: boolean;
-	onClick?: () => void;
-}) {
-	return (
-		<button
-			type="button"
-			role="menuitem"
-			disabled={disabled}
-			onClick={onClick}
-			className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
-		>
-			<span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
-			<span className="min-w-0 flex-1 truncate">{label}</span>
-			{description ? (
-				<span className="max-w-[45%] shrink-0 truncate text-[13px] font-normal text-muted-foreground">{description}</span>
-			) : null}
-		</button>
 	);
 }
 
@@ -2829,57 +2605,45 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 function PlanChip({
 	items,
 	isOpen,
-	onToggle,
+	onOpenChange,
 }: {
 	items: AgentPlanItem[];
 	isOpen: boolean;
-	onToggle: () => void;
+	onOpenChange: (open: boolean) => void;
 }) {
 	const total = items.length;
 	const completed = items.filter((item) => item.status === "completed").length;
 	return (
-		<div className="relative">
-			<button
-				type="button"
-				aria-haspopup="dialog"
-				aria-expanded={isOpen}
-				aria-label={`Plan progress: ${completed} of ${total} steps complete`}
-				onClick={onToggle}
-				className={cn(
-					"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border px-3 py-1.5 text-caption font-medium shadow-e1 transition-colors",
-					isOpen ? "border-l5-accent/28 text-l5-accent" : "border-border text-muted-foreground",
-				)}
-			>
-				<ICONS.plan className="size-3.5" strokeWidth={1.9} />
-				<span>
-					Plan {completed}/{total}
-				</span>
-			</button>
-
-			{isOpen ? (
-				<div
-					role="dialog"
-					aria-label="Plan checklist"
+		<Popover open={isOpen} onOpenChange={onOpenChange}>
+			<PopoverTrigger asChild>
+				<button
+					type="button"
+					aria-label={`Plan progress: ${completed} of ${total} steps complete`}
 					className={cn(
-						"absolute bottom-[calc(100%+8px)] left-1/2 z-30 w-72 -translate-x-1/2 rounded-card p-3",
-						adaptivePopoverClass,
+						"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border px-3 py-1.5 text-caption font-medium shadow-e1 transition-colors",
+						isOpen ? "border-l5-accent/28 text-l5-accent" : "border-border text-muted-foreground",
 					)}
-					onPointerDown={(event) => event.stopPropagation()}
 				>
-					<div className="flex flex-col gap-2">
-						{items.map((item, index) => (
-							<div key={`${item.title}-${index}`} className="flex items-center gap-3 text-body">
-								<ICONS.statusDot className={cn("size-2 shrink-0 fill-current", statusDotClass(item.status ?? ""))} strokeWidth={0} />
-								<span className="min-w-0 flex-1 truncate">{item.title}</span>
-								{item.status ? (
-									<span className="shrink-0 text-caption font-medium text-muted-foreground">{item.status}</span>
-								) : null}
-							</div>
-						))}
-					</div>
+					<ICONS.plan className="size-3.5" strokeWidth={1.9} />
+					<span>
+						Plan {completed}/{total}
+					</span>
+				</button>
+			</PopoverTrigger>
+			<PopoverContent side="top" align="center" className="w-72 rounded-card p-3">
+				<div className="flex flex-col gap-2">
+					{items.map((item, index) => (
+						<div key={`${item.title}-${index}`} className="flex items-center gap-3 text-body">
+							<ICONS.statusDot className={cn("size-2 shrink-0 fill-current", statusDotClass(item.status ?? ""))} strokeWidth={0} />
+							<span className="min-w-0 flex-1 truncate">{item.title}</span>
+							{item.status ? (
+								<span className="shrink-0 text-caption font-medium text-muted-foreground">{item.status}</span>
+							) : null}
+						</div>
+					))}
 				</div>
-			) : null}
-		</div>
+			</PopoverContent>
+		</Popover>
 	);
 }
 

@@ -14,7 +14,7 @@ Level5 Build is a desktop-native AI coding environment. It should feel calm, foc
 
 Never design the app shell like a marketing website. Never imitate Windows settings panels. Do not use decoration without purpose.
 
-Design tokens are implemented as CSS custom properties and Tailwind v4 `@theme inline` entries in `app/src/mainview/index.css`. App code should consume the generated Tailwind utility classes (`bg-l5-surface`, `text-h2`, `rounded-card`, `shadow-e2`, ...) instead of hardcoding one-off colors, font sizes, radii, spacing, or shadow values. See `docs/ARCHITECTURE.md`'s "Design tokens" subsection for the implementation details.
+Design intent and tokens are defined here and implemented as CSS custom properties and Tailwind v4 `@theme inline` entries in `app/src/mainview/index.css`. The canonical component implementation lives in `app/src/mainview/components/ui/*` (shadcn/Radix primitives restyled to Level5 defaults) and `app/src/mainview/components/level5.tsx` (Level5 wrappers such as icon buttons, sidebar buttons, surface cards, and status/attachment badges). App code should consume those components first, and use generated Tailwind utility classes (`bg-l5-surface`, `text-h2`, `rounded-card`, `shadow-e2`, ...) directly only for app shell geometry, glass surfaces, status colors, custom visuals, or cases where no practical component path exists. See `docs/ARCHITECTURE.md`'s "Design tokens" subsection for the implementation details.
 
 This document still refers to token concepts by names like `L5Color`, `L5Font`, `L5Spacing`, `L5Radius`, `L5Size`, and `L5Elevation` throughout — these are conceptual token-scale names, not a Swift API (there is no more native Swift/SwiftUI client; see [ADR 0002](adr/0002-revert-to-electrobun.md)). Each maps directly onto the CSS implementation:
 
@@ -26,7 +26,7 @@ This document still refers to token concepts by names like `L5Color`, `L5Font`, 
 | `L5Radius.<name>` | `--radius-<name>` theme key / `rounded-<name>` utility class |
 | `L5Elevation.<name>` (E1/E2/E3) | `--shadow-<name>` theme key / `shadow-<name>` utility class |
 | `L5Icon`/`L5IconView` | `app/src/mainview/lib/icon-map.ts`'s `ICONS` map over `lucide-react` |
-| `L5ButtonStyle`, `l5InputSurface()`, `l5Surface()` | Tailwind utility class combinations on plain `<button>`/`<input>` elements, composed with `cn()` |
+| `L5ButtonStyle`, `l5InputSurface()`, `l5Surface()` | shadcn/Radix source components in `app/src/mainview/components/ui/*` plus Level5 wrappers in `app/src/mainview/components/level5.tsx`, composed with `cn()` and Level5 tokens |
 
 App icon artwork: the source image is `app/assets/AppIconSource.png`; the macOS bundle icon (`app/assets/App.icns`) and in-app icon (`app/src/mainview/assets/app-icon.png`) are regenerated from it — see `docs/ARCHITECTURE.md`'s "App icon packaging". Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
 

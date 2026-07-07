@@ -19,6 +19,7 @@ describe("durable session database", () => {
 				"session_transcript_items",
 				"session_transcript_state",
 				"sessions",
+				"settings",
 			]);
 		} finally {
 			db.close();

@@ -141,8 +141,8 @@ The app's RPC includes the agent runtime surface:
 
 - `selectProjectFolder()`: opens a directory picker. Folder selection is optional.
 - `selectAttachmentFile()` / `selectAttachmentFolder()`: open single-selection file/directory pickers for the composer's "Add to prompt" menu, independent of the project-folder picker above.
-- `prepareAgentSession({ cwd, approvalMode })`: warms up ACP for a selected project folder. By default it starts `devin --permission-mode <mode> acp`; with `LEVEL5_USE_ACP_MOCK=1`, it starts the bundled/repo-local mock server instead. It initializes ACP, creates or reuses a session for the cwd, and lets ACP `configOptions` / `available_commands_update` populate composer controls before the first prompt.
-- `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. For Devin, `approvalMode` maps to process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`.
+- `prepareAgentSession({ cwd, approvalMode })`: warms up ACP for a selected project folder using the persisted ACP provider setting (`devin` by default, or `omp`; see "Durable persistence" below) — `devin` starts `devin --permission-mode <mode> acp`, `omp` starts `omp acp`; with `LEVEL5_USE_ACP_MOCK=1`, it starts the bundled/repo-local mock server instead regardless of the provider setting. It initializes ACP, creates or reuses a session for the cwd, and lets ACP `configOptions` / `available_commands_update` populate composer controls before the first prompt.
+- `startAgentPrompt({ prompt, cwd, model, approvalMode, attachments })`: accepts a non-empty prompt and starts the ACP prompt flow if no turn is already running. `attachments` are sent as `resource_link` content blocks alongside the text block. For the `devin` provider, `approvalMode` maps to process flags: `ask` and `auto` use `--permission-mode normal`; `full-access` uses `--permission-mode bypass`. The `omp` provider takes no per-launch permission-mode flag — its approval behavior comes from `omp`'s own config (`tools.approvalMode` / CLI overrides), not this app's approval-mode selector; ACP `session/request_permission` still drives the same auto-approve/surface-to-user logic either way.
 - `cancelAgentPrompt()`: sends ACP `session/cancel` for the active turn and answers pending permission requests with ACP's cancelled outcome. The composer send button becomes this stop control while a turn is active.
 - `respondToAgentPermission({ requestId, optionId })`: answers `session/request_permission` requests that were surfaced to the user (approval mode `ask`, or any request the client could not auto-resolve). Responses use ACP's selected-outcome shape: `{ outcome: { outcome: "selected", optionId } }`.
 - `listAgentSessions()`: returns the durable local session cache directly (`AgentRuntimeContext.sortedSessions()`). There is no ACP `session/list` call anywhere in this path -- a backend's own session history must never bleed into the sidebar; this app's SQLite cache is the sidebar's only source of truth. It never spawns or talks to any agent process.
@@ -154,28 +154,30 @@ The app's RPC includes the agent runtime surface:
 - `getProjectGitStatus({ cwd })`: returns non-throwing git summary data for the selected project folder so the webview dashboard can show branch and change counts without spawning processes in React. The main process resolves the repository root with `git -C <cwd> rev-parse --show-toplevel`, reads branch/change state with `git status --porcelain=v1 --branch`, and sums tracked line counts with `git diff --numstat`. Untracked files count toward the changed-file total, but their contents are not read for line totals. Repositories before the first commit are valid: the helper detects missing `HEAD` and diffs against Git's empty tree hash instead of treating the folder as non-git.
 - `agentUpdate`: Bun-to-webview message stream used for normalized agent status, messages, plan updates, tool calls, context/usage updates, config options, slash commands, permission requests, session summaries, errors, informational notes, and stop reasons.
 - `listRecentProjects()`: returns the durable `RecentProjectStore`-backed recent-projects list (see "Durable persistence" below).
+- `getAcpProvider()`: returns the persisted ACP provider setting (`"devin"` or `"omp"`).
+- `setAcpProvider({ provider })`: persists the ACP provider setting for future sessions. Does not restart or otherwise touch any already-running `ProjectAgentConnection`; the new provider takes effect on that project's next `ensureProcess` call (see "Concurrency and race guards" below), which detects the backend change via the same cwd/permission-mode mismatch check used for approval-mode changes and transparently respawns.
 - `listAgentConfigOptions({ cwd })`: pull-based fallback for composer config (currently just the model selector) alongside the push-based `config` `agentUpdate`, since that push can race webview mount for an already-warm session.
 
 The webview should treat `startAgentPrompt` as an acceptance call, not as the whole agent turn. Agent progress arrives asynchronously through `agentUpdate` messages.
 
-### Devin ACP client flow
+### ACP client flow
 
-The app-side workflow is split between a reusable ACP protocol core in `app/src/bun/acp/`, Devin runtime helpers in `app/src/bun/agent/`, and the session adapter in `app/src/bun/index.ts`.
+The app-side workflow is split between a reusable ACP protocol core in `app/src/bun/acp/`, backend-specific runtime helpers in `app/src/bun/agent/runtime.ts`, and the session adapter in `app/src/bun/index.ts`.
 
 `app/src/bun/acp/` owns the newline-delimited JSON-RPC transport, vendored ACP `v0.11.3` schema validation, typed lifecycle errors, request timeouts, buffered notifications, and the turn idle watchdog. This layer stays provider-agnostic.
 
-`app/src/bun/agent/runtime.ts` owns backend process selection and Devin permission-mode helpers. `app/src/bun/index.ts` contains the session adapter. It:
+`app/src/bun/agent/runtime.ts` owns backend process selection (`selectedAgentBackend`/`buildAgentSpawnOptions`) and each backend's CLI-detection/permission-mode helpers; `app/src/bun/index.ts` contains the session adapter. The user-selected `AcpProviderId` (`"devin"` or `"omp"`, persisted as described in "Durable persistence" below) picks between two real backends; `LEVEL5_USE_ACP_MOCK=1` overrides both and always wins, regardless of the persisted provider. The adapter:
 
-- detects `devin` on `PATH` and emits a clear install/login error if unavailable;
-- spawns Devin as `devin --permission-mode normal acp` for `ask` / `auto`, and `devin --permission-mode bypass acp` for `full-access`;
-- skips Devin CLI detection and spawns the mock ACP server when `LEVEL5_USE_ACP_MOCK=1`, using `LEVEL5_ACP_MOCK_START_PATH` as an optional entrypoint override;
-- passes `process.env` through so Devin can use CLI login state or environment credentials such as `WINDSURF_API_KEY`;
+- detects the selected backend's CLI on `PATH` (`devin` or `omp`) and emits a clear install/login error if unavailable;
+- for `devin`, spawns `devin --permission-mode normal acp` for `ask` / `auto`, and `devin --permission-mode bypass acp` for `full-access`; for `omp`, spawns `omp acp` with no permission-mode flag (approval is governed by omp's own config, not this app's approval-mode selector);
+- skips CLI detection and spawns the mock ACP server when `LEVEL5_USE_ACP_MOCK=1`, using `LEVEL5_ACP_MOCK_START_PATH` as an optional entrypoint override;
+- passes `process.env` through so the backend can use its own CLI login state or environment credentials such as `WINDSURF_API_KEY`;
 - initializes ACP with honest v1 client capabilities: no client-side filesystem or terminal capability is advertised;
 - sends `initialize`, then `session/new` or `session/load`, then optional `session/set_config_option` for model, then `session/prompt`;
 - never calls ACP `session/list`: on app open, the webview calls `listAgentSessions`, which returns the durable local session cache directly with no live agent process involved, so the sidebar can show persisted chats without waiting for project selection or first prompt, and without a backend's own (potentially much larger, cross-app) session history bleeding into it. Composer metadata remains lazy: `listAgentSlashCommands` and `listAgentSkills` return cached/empty data until a session is prepared or loaded;
-- warms up Devin on project selection through `prepareAgentSession` so model config and slash commands are available before first send;
-- when Devin sends `session/request_permission`, `auto` chooses an allow-like option if one is available and emits an informational note; otherwise the request is surfaced to the webview;
-- preserves the selected approval mode across process restarts caused by cwd or permission-mode changes;
+- warms up the selected backend on project selection through `prepareAgentSession` so model config and slash commands are available before first send;
+- when the backend sends `session/request_permission`, `auto` chooses an allow-like option if one is available and emits an informational note; otherwise the request is surfaced to the webview;
+- preserves the selected approval mode across process restarts caused by cwd, permission-mode, or ACP provider changes;
 - watches active prompt turns for inbound ACP activity. If a turn goes silent past the configured idle budget, or if the user hits stop, the adapter sends `session/cancel`, answers pending permission requests with ACP's cancelled outcome, and rejects local pending requests;
 - reuses the current session for subsequent prompts in the same cwd;
 - closes and recreates the session if the selected folder changes;
@@ -191,6 +193,8 @@ Full transcript caches are still in memory and are reset when the main process e
 ### Durable persistence
 
 `app/src/bun/persistence/database.ts` owns a single `bun:sqlite` connection at `~/.level5build/level5.sqlite` and an ordered list of migrations. `RecentProjectStore` (`app/src/bun/persistence/recentProjectStore.ts`) persists the recent-projects list there: `upsertSelectedFolder` records normalized path, display name, and timestamps on project selection, and `listRecentProjects` (exposed to the webview via the `listRecentProjects` RPC) returns them ordered by last-opened, pruned to the 10 most recent.
+
+`app/src/bun/persistence/settingsStore.ts` persists app-wide settings as a generic `settings(key, value)` key-value table sharing the same connection, rather than a dedicated column/table per setting: `getSetting`/`setSetting` are the only two operations. The ACP provider choice (`AcpProviderId`) is stored under the `"acpProvider"` key (`SETTINGS_KEY_ACP_PROVIDER` in `app/src/bun/agent/runtime.ts`), loaded once into `AgentRuntimeContext.acpProvider` at process startup, read by `ProjectAgentConnection.ensureProcess`, and updated via the `setAcpProvider` RPC (see "Main process ⇄ webview RPC" above).
 
 Sessions themselves warm up eagerly but are not written to SQLite until the first message is actually sent: `prepareSession`'s warm-up path (project selection, composer priming) passes `persist: false`, while `startPrompt`'s actual send always persists, even when reusing an already-warmed session. This keeps an unsent "New chat" from appearing in the sidebar or on disk.
 

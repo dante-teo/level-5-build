@@ -2,12 +2,18 @@ import type { RPCSchema } from "electrobun";
 
 export type AgentModelId = string;
 export type ApprovalModeId = "ask" | "auto" | "full-access";
+export type AcpProviderId = "devin" | "omp";
 export type AgentRunStatus = "idle" | "starting" | "running" | "stopping" | "completed" | "error";
 
 export const APPROVAL_MODE_LABELS: Record<ApprovalModeId, string> = {
 	ask: "Ask for approval",
 	auto: "Approve for me",
 	"full-access": "Full access",
+};
+
+export const ACP_PROVIDER_LABELS: Record<AcpProviderId, string> = {
+	devin: "Devin",
+	omp: "Oh My Pi (omp)",
 };
 
 export type AgentContentBlock =
@@ -313,6 +319,14 @@ export type AppRPC = {
 			listRecentProjects: {
 				params: void;
 				response: RecentProjectSummary[];
+			};
+			getAcpProvider: {
+				params: void;
+				response: AcpProviderId;
+			};
+			setAcpProvider: {
+				params: { provider: AcpProviderId };
+				response: boolean;
 			};
 			listAgentSlashCommands: {
 				params: void;

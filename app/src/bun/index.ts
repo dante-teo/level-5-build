@@ -29,6 +29,7 @@ import {
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
 	resolveAgentCwd,
+	shouldPersistSessionInfoUpdate,
 } from "./agent/runtime";
 import { getProjectGitStatus } from "./git/status";
 import { getFileDiffPreview, getProjectReviewSnapshot } from "./git/review";
@@ -472,6 +473,35 @@ class ProjectAgentConnection {
 
 	listConfigOptions(): AgentConfigOption[] {
 		return this.configOptions;
+	}
+
+	/**
+	 * Lets a caller (AgentAcpClient's pull-based listConfigOptions/
+	 * listSlashCommands) wait for whatever ensureProcess/ensureInitialized/
+	 * ensureSession setup is currently in flight -- or already finished --
+	 * on this connection, without itself joining the mutual-exclusion
+	 * queue (see withConnectionSetupLock). A pure read-only wait: against
+	 * a real backend (devin/omp), the eager home-directory/project warm-up
+	 * at module bottom is fire-and-forget, so a one-shot snapshot read of
+	 * configOptions/slashCommands taken the instant the webview mounts
+	 * loses the race against the real subprocess spawn + initialize +
+	 * session/new handshake (measured 0.6-3s+ for real omp/devin, versus
+	 * near-0ms for the mock server) every single time. Resolves once that
+	 * in-flight setup settles, or immediately if none is pending. Bounded
+	 * by the ACP transport's own per-request timeout
+	 * (ACP_REQUEST_TIMEOUTS_MS.setup, 15s) rather than hanging
+	 * indefinitely if the backend itself is unresponsive -- though a
+	 * queued chain of setup steps that each individually time out (e.g.
+	 * ensureProcess -> ensureInitialized -> ensureSession all stalling)
+	 * can still stack up to tens of seconds before this resolves. That's
+	 * an acceptable tradeoff, not a hang: the only caller
+	 * (listConfigOptions/listSlashCommands) is invoked by the frontend's
+	 * fire-and-forget refreshComposerMenuData (never awaited by anything
+	 * blocking), and the RPC transport's own maxRequestTime is minutes,
+	 * not seconds.
+	 */
+	awaitSetup(): Promise<void> {
+		return this.connectionSetupChain.catch(() => undefined);
 	}
 
 	async prepareSession(params: PrepareAgentSessionParams, cwd: string): Promise<PrepareAgentSessionResponse> {
@@ -985,6 +1015,23 @@ class ProjectAgentConnection {
 			return;
 		}
 		if (updateType === "session_info_update") {
+			// A session created only for warm-up (composer priming on
+			// project selection, or the eager home-directory prime) must
+			// stay invisible in the sidebar/DB until an actual send flips
+			// sessionPersisted (see persistCurrentSession) -- otherwise a
+			// backend that fires session_info_update right after
+			// session/new (e.g. the mock server's post-create timer, and
+			// plausibly real Devin too) would write an unsent "New chat"
+			// row to SQLite before the user ever typed anything.
+			if (
+				!shouldPersistSessionInfoUpdate({
+					sessionId,
+					currentSessionId: this.sessionId,
+					sessionPersisted: this.sessionPersisted,
+				})
+			) {
+				return;
+			}
 			this.runtime.rememberSession(
 				normalizeSessionSummary({
 					sessionId,
@@ -1148,11 +1195,13 @@ class AgentAcpClient {
 		return this.runtime.sortedSessions();
 	}
 
-	listSlashCommands(): AgentSlashCommand[] {
+	async listSlashCommands(): Promise<AgentSlashCommand[]> {
 		if (!this.lastActiveProjectKey) {
 			return [];
 		}
-		return this.connections.get(this.lastActiveProjectKey)?.listSlashCommands() ?? [];
+		const connection = this.connections.get(this.lastActiveProjectKey);
+		await connection?.awaitSetup();
+		return connection?.listSlashCommands() ?? [];
 	}
 
 	/**
@@ -1162,12 +1211,22 @@ class AgentAcpClient {
 	 * call and prepareSession) can fire before the webview has mounted its
 	 * message listener, silently dropping it. Called from the frontend's
 	 * mount-time refreshComposerMenuData alongside slash commands/skills.
+	 * Awaits the connection's in-flight setup (see
+	 * ProjectAgentConnection.awaitSetup) rather than sampling
+	 * configOptions immediately: against a real backend (devin/omp) the
+	 * warm-up's process spawn + initialize + session/new handshake takes
+	 * real wall-clock time (measured 0.6-3s+), so a bare snapshot read
+	 * taken at webview-mount time reliably loses that race and leaves the
+	 * model selector permanently empty -- the mock server's near-0ms
+	 * response had been masking this.
 	 */
-	listConfigOptions(): AgentConfigOption[] {
+	async listConfigOptions(): Promise<AgentConfigOption[]> {
 		if (!this.lastActiveProjectKey) {
 			return [];
 		}
-		return this.connections.get(this.lastActiveProjectKey)?.listConfigOptions() ?? [];
+		const connection = this.connections.get(this.lastActiveProjectKey);
+		await connection?.awaitSetup();
+		return connection?.listConfigOptions() ?? [];
 	}
 
 	listSkills(): AgentSkill[] {

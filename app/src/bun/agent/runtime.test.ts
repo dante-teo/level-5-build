@@ -17,6 +17,7 @@ import {
 	normalizeApprovalMode,
 	pickAutoApproveOptionId,
 	selectedAgentBackend,
+	shouldPersistSessionInfoUpdate,
 } from "./runtime";
 
 describe("Devin ACP runtime", () => {
@@ -147,5 +148,54 @@ describe("Devin ACP runtime", () => {
 
 	test("missing omp CLI detector returns false for an empty PATH", () => {
 		expect(isOmpAvailable({ PATH: "" })).toBe(false);
+	});
+});
+
+describe("shouldPersistSessionInfoUpdate", () => {
+	test("returns false for a warm-up-only session even when the session id matches, since no message has been sent yet", () => {
+		expect(
+			shouldPersistSessionInfoUpdate({
+				sessionId: "session-1",
+				currentSessionId: "session-1",
+				sessionPersisted: false,
+			}),
+		).toBe(false);
+	});
+
+	test("returns true once the session has been persisted and the notification matches the current session", () => {
+		expect(
+			shouldPersistSessionInfoUpdate({
+				sessionId: "session-1",
+				currentSessionId: "session-1",
+				sessionPersisted: true,
+			}),
+		).toBe(true);
+	});
+
+	test("returns false for a stale notification whose session id no longer matches the current session, even if persisted", () => {
+		expect(
+			shouldPersistSessionInfoUpdate({
+				sessionId: "old-session",
+				currentSessionId: "new-session",
+				sessionPersisted: true,
+			}),
+		).toBe(false);
+	});
+
+	test("returns false when there is no active session at all, regardless of sessionPersisted", () => {
+		expect(
+			shouldPersistSessionInfoUpdate({
+				sessionId: "session-1",
+				currentSessionId: null,
+				sessionPersisted: true,
+			}),
+		).toBe(false);
+		expect(
+			shouldPersistSessionInfoUpdate({
+				sessionId: "session-1",
+				currentSessionId: null,
+				sessionPersisted: false,
+			}),
+		).toBe(false);
 	});
 });

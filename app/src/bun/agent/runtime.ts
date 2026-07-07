@@ -159,6 +159,29 @@ export function buildSelectedPermissionResponse(optionId: string): { outcome: { 
 	return { outcome: { outcome: "selected", optionId } };
 }
 
+/**
+ * Guards a backend's `session_info_update` notification against
+ * persisting a session that only exists for warm-up (composer priming on
+ * project selection, or the eager home-directory prime): those sessions
+ * must stay invisible in the sidebar/DB until an actual send flips
+ * `sessionPersisted` (see `persistCurrentSession` in `bun/index.ts`).
+ * Some backends (the mock server's post-`session/new` timer, and
+ * plausibly real Devin too) fire `session_info_update` unprompted right
+ * after session creation, before any message was ever sent. The
+ * `sessionId === currentSessionId` half of the guard is a separate,
+ * equally necessary check: it drops a stale/late notification for a
+ * session the connection has since closed or replaced (e.g. the user
+ * switched projects, or a new session/new superseded it), so a
+ * lagging notification can never write into the wrong session's row.
+ */
+export function shouldPersistSessionInfoUpdate(input: {
+	sessionId: string;
+	currentSessionId: string | null;
+	sessionPersisted: boolean;
+}): boolean {
+	return input.sessionId === input.currentSessionId && input.sessionPersisted;
+}
+
 function isAllowLikePermissionOption(option: AgentPermissionOption): boolean {
 	const values = [option.kind, option.name, option.optionId].filter((value): value is string => Boolean(value));
 	return values.some((value) => {

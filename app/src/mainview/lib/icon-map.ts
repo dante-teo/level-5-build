@@ -1,14 +1,18 @@
 import {
 	AlertTriangle,
+	ArrowRightLeft,
+	Brain,
 	Check,
 	CheckCircle2,
 	ChevronDown,
+	ChevronRight,
 	Circle,
 	FileText,
 	Folder,
 	GitBranch,
 	GitCommitHorizontal,
 	GitPullRequest,
+	Globe,
 	Hand,
 	Laptop,
 	LayoutDashboard,
@@ -18,6 +22,7 @@ import {
 	type LucideIcon,
 	MessageSquare,
 	MoreHorizontal,
+	Move,
 	Paperclip,
 	PanelLeftClose,
 	PanelLeftOpen,
@@ -76,6 +81,7 @@ export const ICONS = {
 	attach: Paperclip,
 	checkmark: Check,
 	chevronDown: ChevronDown,
+	chevronRight: ChevronRight,
 	delete: Trash2,
 	edit: Pencil,
 	folder: Folder,
@@ -93,3 +99,21 @@ export const ICONS = {
 } as const satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;
+
+/**
+ * Per-ToolKind icons for the transcript working section (see docs/DESIGN.md
+ * "Chat"). Keys match ACP's ToolKind enum (schema.unstable.json); an
+ * unrecognized/empty kind falls back to `ICONS.tool` at call sites.
+ */
+export const TOOL_KIND_ICONS: Record<string, LucideIcon> = {
+	read: FileText,
+	edit: ICONS.edit,
+	delete: Trash2,
+	move: Move,
+	search: ICONS.search,
+	execute: SquareTerminal,
+	think: Brain,
+	fetch: Globe,
+	switch_mode: ArrowRightLeft,
+	other: ICONS.tool,
+};

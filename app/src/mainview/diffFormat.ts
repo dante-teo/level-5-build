@@ -4,6 +4,8 @@
 // module scope, which requires `window.__electrobun` and throws outside a
 // real webview (see AGENTS.md's documented WKWebView limitation).
 
+import { createPatch } from "diff";
+
 export type DiffLineKind = "meta" | "hunk" | "add" | "remove" | "context";
 
 export type DiffLine = {
@@ -46,4 +48,16 @@ export function parseUnifiedDiffLines(diff: string): DiffLine[] {
 		if (newLine !== undefined) newLine += 1;
 		return line;
 	});
+}
+
+export function buildUnifiedDiff(path: string, oldText: string | null, newText: string): string {
+	return createPatch(path, oldText ?? "", newText, "", "", { context: 3 });
+}
+
+export function countDiffLines(oldText: string | null, newText: string): { added: number; removed: number } {
+	const lines = parseUnifiedDiffLines(buildUnifiedDiff("", oldText, newText));
+	return {
+		added: lines.filter((line) => line.kind === "add").length,
+		removed: lines.filter((line) => line.kind === "remove").length,
+	};
 }

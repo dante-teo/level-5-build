@@ -25,6 +25,7 @@
 		"ajv": "^8.20.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"diff": "^9.0.0",
 		"electrobun": "1.18.1",
 		"jotai": "^2.20.1",
 		"liquid-glass-react": "^1.1.1",

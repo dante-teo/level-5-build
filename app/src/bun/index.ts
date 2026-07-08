@@ -161,10 +161,21 @@ class AgentRuntimeContext {
 	// Sessions whose most recent turn was manually cancelled: late
 	// session/update notifications for that turn (which can still arrive
 	// after session/cancel is sent) are dropped rather than applied, so
-	// stale output can never leak into an immediate re-prompt. Cleared the
-	// moment the backend echoes the *next* prompt's user message for that
-	// session -- not merely when the next prompt is sent -- to bridge any
-	// race between a new send and the cancelled turn's last trailing output.
+	// stale output can never leak into an immediate re-prompt. Cleared
+	// synchronously the moment the NEXT startPrompt call resolves a real
+	// session id for this session (see startPrompt), not by waiting for a
+	// `user_message_chunk` echo -- real Devin/omp has been observed to
+	// never send that echo at all, so waiting for it left staleness stuck
+	// forever on non-mock backends. This is safe without a leak window:
+	// `isProjectRunning`/`this.running` blocks any resend at the RPC
+	// boundary until the CANCELLED turn's own `session/prompt` request
+	// promise has fully settled (either the backend responds after
+	// processing the cancel, or `forceStopActiveTurn`'s hard reset
+	// synchronously kills the process and fails that pending promise) --
+	// and the transport parses stdout strictly line-by-line in arrival
+	// order, so every trailing notification for the cancelled turn is
+	// guaranteed to have already reached `handleNotification` before
+	// `running` can flip back to false and unblock a resend.
 	readonly staleSessionIds = new Set<string>();
 	acpProvider: AcpProviderId;
 
@@ -396,6 +407,34 @@ class ProjectAgentConnection {
 				throw new Error("Agent session was not created.");
 			}
 			const sessionId = this.sessionId;
+			// A fresh send un-sticks staleness for this session, even if the
+			// previous turn was cancelled -- safe without a leak window; see
+			// the staleSessionIds field comment above for why. Done here
+			// (synchronously, before session/prompt is even dispatched)
+			// rather than waiting on a `user_message_chunk` echo -- see
+			// handleNotification's dropped echo handling below for why that
+			// echo can no longer be trusted.
+			this.runtime.staleSessionIds.delete(sessionId);
+			// The backend is the sole source of truth for the user's own
+			// prompt landing in the durable transcript -- it must not depend
+			// on the ACP process echoing it back as `user_message_chunk`.
+			// Real Devin/omp has been observed to never send that echo at
+			// all (only the mock server always does), which previously left
+			// every persisted session missing its own opening question:
+			// nothing ever wrote a `kind: "message", role: "user"` row to
+			// SQLite, so it vanished the moment the app relaunched even
+			// though it was visible all session long via the renderer's
+			// purely-local optimistic bubble (see dispatchPrompt/
+			// optimisticUserTextRef in App.tsx). That optimistic bubble's
+			// own text-match dedup already treats this synthesized update
+			// exactly like it used to treat a live echo, so no frontend
+			// change is required.
+			this.runtime.emitTranscriptUpdate(sessionId, {
+				kind: "message",
+				role: "user",
+				messageId: crypto.randomUUID(),
+				content: { type: "text", text: params.prompt },
+			});
 
 			if (params.model && this.configOptions.some((option) => option.id === "model")) {
 				await this.requireAcp().setConfigOption({
@@ -954,6 +993,7 @@ class ProjectAgentConnection {
 			sessionId === this.primingSessionId &&
 			(updateType === "user_message_chunk" ||
 				updateType === "agent_message_chunk" ||
+				updateType === "agent_thought_chunk" ||
 				updateType === "plan" ||
 				updateType === "tool_call" ||
 				updateType === "tool_call_update" ||
@@ -966,22 +1006,38 @@ class ProjectAgentConnection {
 			return;
 		}
 
-		if (updateType === "user_message_chunk") {
-			// The fresh echo of a new prompt un-sticks staleness for this
-			// session, even if the previous turn was cancelled: this update
-			// and everything after it is accepted as live output again.
-			this.runtime.staleSessionIds.delete(sessionId);
-		} else if (this.runtime.staleSessionIds.has(sessionId)) {
+		if (this.runtime.staleSessionIds.has(sessionId)) {
 			// Late output from an already-cancelled turn: drop it entirely
 			// (not just skip rendering) so it can never leak into an
-			// immediate re-prompt in the same session.
+			// immediate re-prompt in the same session. Un-sticking now
+			// happens at the authoritative send point in startPrompt --
+			// synchronously before session/prompt is even dispatched --
+			// rather than waiting for a `user_message_chunk` echo that real
+			// Devin/omp has been observed to never send.
 			return;
 		}
 
-		if (updateType === "user_message_chunk" || updateType === "agent_message_chunk") {
+		if (updateType === "user_message_chunk") {
+			// Never persisted from here: startPrompt already wrote the
+			// authoritative `kind: "message", role: "user"` entry at send
+			// time (see its comment). Treating this live echo the same way
+			// would either duplicate that entry (contiguous-merge in
+			// upsertTranscriptUpdate) or race it, depending on arrival
+			// order.
+			return;
+		}
+		if (updateType === "agent_message_chunk") {
 			this.runtime.emitTranscriptUpdate(sessionId, {
 				kind: "message",
-				role: updateType === "user_message_chunk" ? "user" : "agent",
+				role: "agent",
+				messageId: asString(update.messageId),
+				content: normalizeContent(update.content),
+			});
+			return;
+		}
+		if (updateType === "agent_thought_chunk") {
+			this.runtime.emitTranscriptUpdate(sessionId, {
+				kind: "thought",
 				messageId: asString(update.messageId),
 				content: normalizeContent(update.content),
 			});
@@ -1351,13 +1407,41 @@ function upsertTranscriptUpdate(current: AgentUpdate[], update: AgentUpdate): Ag
 			: -1;
 		const lastIndex = current.length - 1;
 		const lastEntry = current[lastIndex];
-		const contiguousIndex = lastEntry?.kind === "message" && lastEntry.role === update.role ? lastIndex : -1;
+		// Only fall back to "merge into whatever's last" when this update
+		// carries no messageId of its own to check -- some backends omit it
+		// on message chunks, so adjacency is the only correlation signal
+		// available. A real, non-matching messageId (e.g. a distinct
+		// synthesized send-time message, see startPrompt) is a positive
+		// signal this is a genuinely new message, not a chunk continuation,
+		// and must never be silently concatenated onto an unrelated prior
+		// entry of the same role.
+		const contiguousIndex = !update.messageId && lastEntry?.kind === "message" && lastEntry.role === update.role ? lastIndex : -1;
 		const index = exactIndex >= 0 ? exactIndex : contiguousIndex;
 		if (index < 0) {
 			return [...current, update];
 		}
 		return current.map((entry, entryIndex) =>
 			entryIndex === index && entry.kind === "message"
+				? { ...entry, content: mergeContentBlock(entry.content, update.content) }
+				: entry,
+		);
+	}
+	if (update.kind === "thought") {
+		const exactIndex = update.messageId
+			? current.findIndex((entry) => entry.kind === "thought" && entry.messageId === update.messageId)
+			: -1;
+		const lastIndex = current.length - 1;
+		const lastEntry = current[lastIndex];
+		// Same messageId-presence guard as the "message" branch above: a
+		// real, non-matching messageId means a genuinely new thought, never
+		// a chunk continuation of an unrelated prior one.
+		const contiguousIndex = !update.messageId && lastEntry?.kind === "thought" ? lastIndex : -1;
+		const index = exactIndex >= 0 ? exactIndex : contiguousIndex;
+		if (index < 0) {
+			return [...current, update];
+		}
+		return current.map((entry, entryIndex) =>
+			entryIndex === index && entry.kind === "thought"
 				? { ...entry, content: mergeContentBlock(entry.content, update.content) }
 				: entry,
 		);

@@ -23,6 +23,8 @@ import { cn } from "@/lib/utils";
 import { REVIEW_PANE_DEFAULT_WIDTH, ReviewPane } from "@/ReviewPane";
 import { SettingsDialog } from "@/SettingsDialog";
 import { isDashboardPinnedAtom, isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
+import { segmentTranscript } from "@/transcript/segments";
+import { WorkingSection } from "@/transcript/WorkingSection";
 import {
 	APPROVAL_MODE_LABELS,
 	type ApprovalModeId,
@@ -115,14 +117,15 @@ type ChatMessage = {
 	text: string;
 };
 
-type ToolCallView = AgentToolCall & {
+export type ToolCallView = AgentToolCall & {
 	text?: string;
 };
 
-type TranscriptItem =
+export type TranscriptItem =
 	| { type: "message"; key: string; message: ChatMessage }
 	| { type: "tool"; key: string; tool: ToolCallView }
-	| { type: "error"; key: string; message: string };
+	| { type: "error"; key: string; message: string }
+	| { type: "thought"; key: string; thought: { id: string; text: string } };
 
 type SessionContextMenu = {
 	sessionId: string;
@@ -510,6 +513,7 @@ function App() {
 	const isRunning = runStatus === "starting" || runStatus === "running" || runStatus === "stopping";
 	const isStopping = runStatus === "stopping";
 	const hasConversation = transcriptItems.length > 0;
+	const segments = useMemo(() => segmentTranscript(transcriptItems), [transcriptItems]);
 	const activeSessionStatus = activeSessionId ? runStatus : "idle";
 	const activeSession = activeSessionId ? sessions.find((session) => session.sessionId === activeSessionId) : undefined;
 	const deleteTarget = deleteTargetId ? sessions.find((session) => session.sessionId === deleteTargetId) : undefined;
@@ -816,6 +820,10 @@ function App() {
 				applyMessageUpdate(update);
 				return;
 			}
+			if (update.kind === "thought") {
+				setTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
+				return;
+			}
 			if (update.kind === "plan") {
 				// Plan state renders as the composer-adjacent Plan N/M chip
 				// (see DESIGN.md "Prompt Composer"), never as a transcript row.
@@ -1069,6 +1077,10 @@ function App() {
 			applyMessageUpdate(update);
 			return;
 		}
+		if (update.kind === "thought") {
+			setTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
+			return;
+		}
 		if (update.kind === "plan") {
 			setPlanItems(update.items);
 			return;
@@ -1143,6 +1155,23 @@ function App() {
 		return current.map((item, itemIndex) =>
 			itemIndex === index && item.type === "message"
 				? { ...item, message: { ...item.message, text: `${item.message.text}${nextMessage.text}` } }
+				: item,
+		);
+	}
+
+	function upsertThoughtItem(current: TranscriptItem[], nextThought: { id: string; text: string }): TranscriptItem[] {
+		const thoughtId = nextThought.id.trim();
+		const exactIndex = thoughtId ? current.findIndex((item) => item.type === "thought" && item.thought.id === thoughtId) : -1;
+		const lastIndex = current.length - 1;
+		const lastItem = current[lastIndex];
+		const contiguousIndex = lastItem?.type === "thought" ? lastIndex : -1;
+		const index = exactIndex >= 0 ? exactIndex : contiguousIndex;
+		if (index < 0) {
+			return [...current, { type: "thought", key: `thought-${thoughtId || Date.now()}`, thought: { ...nextThought, id: thoughtId } }];
+		}
+		return current.map((item, itemIndex) =>
+			itemIndex === index && item.type === "thought"
+				? { ...item, thought: { ...item.thought, text: `${item.thought.text}${nextThought.text}` } }
 				: item,
 		);
 	}
@@ -1965,15 +1994,23 @@ function App() {
 								>
 									{/* DESIGN.md "Chat": spacing between messages is 20px (L5Spacing.x5). */}
 									<div ref={transcriptContentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-5">
-										{transcriptItems.map((item) => {
+									{segments.map((segment) => {
+										if (segment.type === "item") {
+											const item = segment.item;
 											if (item.type === "message") {
 												return <MessageBubble key={item.key} message={item.message} />;
 											}
-											if (item.type === "tool") {
-												return <ToolCallCard key={item.key} tool={item.tool} />;
-											}
 											return <ErrorCard key={item.key} message={item.message} />;
-										})}
+										}
+										return (
+											<WorkingSection
+												key={segment.key}
+												items={segment.items}
+												isLastSegment={segment === segments[segments.length - 1]}
+												isSessionRunning={isRunning}
+											/>
+										);
+									})}
 										{/* Reserves space for the composer overlay, which sits on top of this
 										    scroll layer (see DESIGN.md §13). Lives inside the tracked content
 										    (not a padding style on the scroll container) so useStickToBottom's
@@ -2880,44 +2917,6 @@ function PlanChip({
 				</div>
 			) : null}
 		</div>
-	);
-}
-
-// DESIGN.md "Chat": tool rows auto-expand while in_progress, auto-collapse
-// on completion unless the user manually expanded/collapsed it, and stay
-// expanded on failure.
-function ToolCallCard({ tool }: { tool: ToolCallView }) {
-	const isInProgress = tool.status === "in_progress" || tool.status === "pending" || tool.status === "running";
-	const isFailed = tool.status === "failed" || tool.status === "error";
-	const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
-	const isExpanded = manualExpanded ?? (isInProgress || isFailed);
-
-	return (
-		<section className="w-full max-w-3xl rounded-card border border-border bg-l5-elevated-surface p-4 shadow-e1">
-			<button
-				type="button"
-				className="flex w-full items-center gap-3 text-left"
-				aria-expanded={isExpanded}
-				disabled={!tool.text}
-				onClick={() => tool.text && setManualExpanded(!isExpanded)}
-			>
-				<ICONS.tool className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-				<div className="min-w-0 flex-1">
-					<div className="truncate text-body font-semibold">{tool.title}</div>
-					<div className="text-caption font-medium text-muted-foreground">{tool.kind}</div>
-				</div>
-				<span className={cn("shrink-0 text-caption font-semibold", statusDotClass(tool.status))}>{tool.status}</span>
-				{tool.text ? (
-					<ICONS.chevronDown
-						className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-quick", isExpanded ? "rotate-180" : "")}
-						strokeWidth={1.8}
-					/>
-				) : null}
-			</button>
-			{tool.text && isExpanded ? (
-				<pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-muted/70 p-3 font-mono text-caption leading-5 text-muted-foreground">{tool.text}</pre>
-			) : null}
-		</section>
 	);
 }
 

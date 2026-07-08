@@ -273,9 +273,10 @@ Rules:
 
 - Spacing between messages is `20`.
 - Timestamps and metadata use caption styling.
-- Tool calls and errors appear as compact operational transcript rows. Statuses (runtime diagnostics, raw stderr, permission audit notes, notable stop reasons like `cancelled`/`refusal`/`max_tokens`) are never shown as transcript rows, regardless of source — they exist only as internal/persisted bookkeeping.
-- Tool rows auto-expand while `in_progress`, auto-collapse when `completed` unless manually expanded, and remain expanded when `failed`.
-- Expanded tool rows show normalized status, kind, and readable detail text. Collapsed rows keep the title and a one-line detail preview.
+- Between a user message and the agent's reply, tool calls and streamed reasoning render inside a collapsible working section, never as bare transcript rows. Errors still appear as compact operational transcript rows outside the working section.
+- The working section shows a ticking "Worked for Xm Ys" summary with a horizontal divider while collapsed, and the full reasoning/tool-call list while expanded. It auto-expands while the agent is actively working on the newest turn, and auto-collapses the instant the agent's reply begins streaming in. A user can manually re-expand or re-collapse it at any point after that; the override persists for that turn only.
+- Consecutive tool calls of the same kind collapse into one grouped row (e.g. "Edited 6 files") with a per-kind icon; a single tool call of its own renders as one dimmed icon+name row. Reasoning text between tool calls renders as plain paragraphs, not inside a row.
+- A tool row (grouped or single) expands to show its sub-items — text output, terminal references, or file diffs — each independently expandable. A tool row (and the group containing it) auto-expands by default while any of its tool calls are `in_progress`/`pending`, and stays expanded once any of them fail; a manual toggle overrides this until the row's items change.
 - Chat message bodies (user and agent) render Markdown — bold/italic, inline code, links, lists, headings, blockquotes, and code blocks — via `react-markdown` with components styled from the design tokens, not raw text, so authored formatting displays instead of literal `**`/backtick/`-` syntax.
 - Never show raw JSON, schema payloads, or ACP identifiers.
 - Avoid decorative message chrome.

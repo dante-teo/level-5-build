@@ -39,7 +39,7 @@ Permission requests aren't just a standalone demo path: the edit scenario (trigg
 
 The server emits realistic `session/update` notifications for:
 
-- agent/user message chunks
+- agent/user message chunks and agent thought (reasoning) chunks
 - plans
 - tool calls and tool call updates
 - usage updates
@@ -154,7 +154,7 @@ The app's RPC includes the agent runtime surface:
 - `startNewAgentChat()`: clears the active session selection without terminating the connected Devin process.
 - `resetAgentChat()`: clears the current chat and terminates the Devin process if one is running.
 - `getProjectGitStatus({ cwd })`: returns non-throwing git summary data for the selected project folder so the webview dashboard can show branch and change counts without spawning processes in React. The main process resolves the repository root with `git -C <cwd> rev-parse --show-toplevel`, reads branch/change state with `git status --porcelain=v1 --branch`, and sums tracked line counts with `git diff --numstat`. Untracked files count toward the changed-file total, but their contents are not read for line totals. Repositories before the first commit are valid: the helper detects missing `HEAD` and diffs against Git's empty tree hash instead of treating the folder as non-git.
-- `agentUpdate`: Bun-to-webview message stream used for normalized agent status, messages, plan updates, tool calls, context/usage updates, config options, slash commands, permission requests, session summaries, errors, informational notes, and stop reasons.
+- `agentUpdate`: Bun-to-webview message stream used for normalized agent status, messages, streamed reasoning ("thought" updates), plan updates, tool calls, context/usage updates, config options, slash commands, permission requests, session summaries, errors, informational notes, and stop reasons.
 - `listRecentProjects()`: returns the durable `RecentProjectStore`-backed recent-projects list (see "Durable persistence" below).
 - `getAcpProvider()`: returns the persisted ACP provider setting (`"devin"` or `"omp"`).
 - `setAcpProvider({ provider })`: persists the ACP provider setting for future sessions. Does not restart or otherwise touch any already-running `ProjectAgentConnection`; the new provider takes effect on that project's next `ensureProcess` call (see "Concurrency and race guards" below), which detects the backend change via the same cwd/permission-mode mismatch check used for approval-mode changes and transparently respawns.
@@ -185,7 +185,8 @@ The app-side workflow is split between a reusable ACP protocol core in `app/src/
 - closes and recreates the session if the selected folder changes;
 - resolves folderless prompts to the user's home directory for ACP `cwd`, while the UI continues to show no selected project;
 - keeps an app-side in-memory map of session summaries so the sidebar can show a newly created session immediately after `session/new`;
-- keeps an app-side in-memory transcript cache for each known session, including message chunks, plans, tool calls, and the latest usage/context-window update;
+- keeps an app-side in-memory transcript cache for each known session, including message chunks, thought (reasoning) chunks, plans, tool calls, and the latest usage/context-window update;
+- writes the user's own prompt into that transcript cache itself, synchronously at send time (`startPrompt`, before `session/prompt` is even dispatched), rather than waiting for the ACP process to echo it back as a `user_message_chunk` notification — real Devin/omp has been observed to never send that echo, which previously meant no user-authored message ever made it into `~/.level5build/level5.sqlite` (see "Durable persistence" below);
 - normalizes ACP notifications into webview-friendly `AgentUpdate` messages.
 
 The default prompt idle timeout is 120 seconds and can be overridden for local testing with `LEVEL5_ACP_TURN_IDLE_TIMEOUT_MS`.
@@ -201,6 +202,8 @@ Full transcript caches are still in memory and are reset when the main process e
 Sessions themselves warm up eagerly but are not written to SQLite until the first message is actually sent: `prepareSession`'s warm-up path (project selection, composer priming) passes `persist: false`, while `startPrompt`'s actual send always persists, even when reusing an already-warmed session. This keeps an unsent "New chat" from appearing in the sidebar or on disk. When the renderer already holds a prepared session id, `startPrompt` first `session/load`s or `session/resume`s that id for backend context and then immediately calls `persistCurrentSession` before `session/prompt` can stream transcript rows; otherwise those rows would violate the transcript table's foreign key to `sessions`. Because a single `ProjectAgentConnection` can switch between already-persisted and not-yet-persisted sessions, `primeSession` must reset the per-current-session `sessionPersisted` flag whenever it switches to a different session.
 
 This invariant isn't just enforced at write time: some backends (the mock server's post-`session/new` timer, and plausibly real Devin too) push a `session_info_update` notification unprompted right after session creation, before any message was ever sent. `shouldPersistSessionInfoUpdate` (`app/src/bun/agent/runtime.ts`) guards `handleNotification`'s `session_info_update` branch against exactly that: it only persists when the notification's session id matches the connection's current session AND that session has already flipped `sessionPersisted` via an actual send, so an unprompted warm-up notification can never sneak an unsent "New chat" into SQLite through the push path either.
+
+The user's own prompt message is written into the transcript by the app itself, not by relaying an ACP echo: `startPrompt` (`app/src/bun/index.ts`) synthesizes and persists a `kind: "message", role: "user"` transcript entry the moment a real session id is resolved, before `session/prompt` is even dispatched. Earlier revisions relied on the ACP process echoing the prompt back as a `user_message_chunk` notification to trigger persistence; real Devin/omp has been observed to never send that echo at all (only the mock server always does), which meant every persisted session was silently missing its own opening question — visible for the live session via the renderer's purely local optimistic bubble, but gone the moment the app relaunched, since nothing had ever written it to SQLite. The live `user_message_chunk` notification (when a backend does send one) is now unconditionally dropped in `handleNotification`, since treating it as a second write would risk duplicating or racing the authoritative one. `upsertTranscriptUpdate`'s message/thought merge logic only falls back to "append onto whatever's last" when the incoming update carries no `messageId` at all (some backends omit it on streamed chunks) — a distinct, real `messageId` (such as this synthesized message's freshly generated one) is always treated as a new entry, never silently concatenated onto an unrelated prior message of the same role.
 
 ### Concurrency and race guards
 

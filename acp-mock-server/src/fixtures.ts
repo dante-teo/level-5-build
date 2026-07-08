@@ -145,7 +145,8 @@ export const hiddenScenarioCommands = [
 	{ name: "fail", description: "Force a failed tool call for client error-state testing." },
 	{ name: "progress-demo", description: "Run one deterministic turn with plan, tools, usage, permission, and completion states." },
 	{ name: "refuse", description: "Force a refusal stop reason." },
-	{ name: "tokens", description: "Force a max_tokens stop reason." }
+	{ name: "tokens", description: "Force a max_tokens stop reason." },
+	{ name: "think", description: "Stream live reasoning alongside tool calls to exercise the working section.", input: { hint: "topic" } }
 ];
 
 export const mockSkills = [

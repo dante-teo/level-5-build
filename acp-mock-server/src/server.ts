@@ -441,6 +441,10 @@ export class AcpMockServer {
 			await this.skillsScenario(session, turn);
 			return turn.cancelled ? "cancelled" : "end_turn";
 		}
+		if (lower.startsWith("/think") || lower.includes("reasoning")) {
+			await this.reasoningScenario(session, turn);
+			return turn.cancelled ? "cancelled" : "end_turn";
+		}
 		if (lower.startsWith("/web") || lower.includes("web") || lower.includes("fetch")) {
 			await this.webScenario(session, turn);
 			return turn.cancelled ? "cancelled" : "end_turn";
@@ -600,6 +604,16 @@ export class AcpMockServer {
 	private async skillsScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
 		await this.tool(session, "think", "Selecting mock skills", "completed", `Available mock skills: ${mockSkills.map((skill) => skill.name).join(", ")}.`, turn);
 		await this.say(session, `Mock skills available:\n\n${mockSkills.map((skill) => `- **${skill.name}**: ${skill.description}`).join("\n")}`);
+	}
+
+	private async reasoningScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
+		await this.thought(session, "I'll re-read the workspace before making any changes, then drive the implementation with focused tests first.");
+		await this.tool(session, "read", "Reading App.tsx", "completed", "Located the transcript rendering code.", turn);
+		await this.thought(session, "The tool call list has three consecutive edits — the client should auto-combine them into one row.");
+		await this.tool(session, "edit", "Editing App.tsx", "completed", "Applied the first change.", turn);
+		await this.tool(session, "edit", "Editing WorkingSection.tsx", "completed", "Applied the second change.", turn);
+		await this.tool(session, "edit", "Editing DiffView.tsx", "completed", "Applied the third change.", turn);
+		await this.say(session, "Implemented the working-section redesign with grouped tool rows and live reasoning.");
 	}
 
 	private async permissionScenario(session: SessionRecord, turn: ActiveTurn): Promise<void> {
@@ -957,6 +971,19 @@ export class AcpMockServer {
 			content: [{ type: "text", text }],
 			createdAt: new Date().toISOString()
 		});
+	}
+
+	private async thought(session: SessionRecord, text: string): Promise<void> {
+		const messageId = this.store.nextId("message");
+		const chunks = chunkText(text);
+		for (const chunk of chunks) {
+			this.sendSessionUpdate(session.sessionId, {
+				sessionUpdate: "agent_thought_chunk",
+				messageId,
+				content: { type: "text", text: chunk }
+			});
+			await this.sleep();
+		}
 	}
 
 	private async usage(session: SessionRecord, used: number, amount: number): Promise<void> {

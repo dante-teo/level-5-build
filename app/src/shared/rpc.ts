@@ -27,6 +27,12 @@ export type AgentMessageUpdate = {
 	content: AgentContentBlock;
 };
 
+export type AgentThoughtUpdate = {
+	kind: "thought";
+	messageId: string;
+	content: AgentContentBlock;
+};
+
 export type AgentPlanItem = {
 	title: string;
 	priority?: string;
@@ -198,6 +204,7 @@ export type GetFileDiffPreviewParams = {
 export type AgentUpdate =
 	| { kind: "status"; status: AgentRunStatus; sessionId?: string; cwd?: string }
 	| AgentMessageUpdate
+	| AgentThoughtUpdate
 	| { kind: "plan"; items: AgentPlanItem[] }
 	| { kind: "tool"; tool: AgentToolCall }
 	| { kind: "permission"; request: AgentPermissionRequest }

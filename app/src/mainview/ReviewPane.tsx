@@ -57,7 +57,7 @@ function formatBytes(bytes: number): string {
 
 function ReviewErrorState({ message, rawOutput }: { message: string; rawOutput?: string }) {
 	return (
-		<div className="rounded-card border border-border bg-muted/40 p-4 text-body text-muted-foreground">
+		<div className="rounded-medium bg-muted/40 p-4 text-body text-muted-foreground">
 			<div className="font-medium text-foreground">{message}</div>
 			{rawOutput && rawOutput !== message ? (
 				<details className="mt-2">
@@ -135,9 +135,12 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 
 	const badge = statusBadgeFor(file);
 
+	// DESIGN.md "Review Panel": continuous file sections divided by hairlines,
+	// no card stacks inside the column. Diff body is full-bleed under the
+	// compact header row so it gets maximum width.
 	return (
-		<section className="rounded-card border border-border bg-l5-secondary-background">
-			<div className="flex items-center gap-2 border-b border-border px-3 py-2">
+		<section className="border-t border-border py-3 first:border-t-0">
+			<div className="flex items-center gap-2 px-2 pb-2">
 				<span className={cn("shrink-0 rounded-chip px-2 py-0.5 text-caption font-medium", STATUS_BADGE_CLASSES[badge])}>
 					{badge}
 				</span>
@@ -145,19 +148,24 @@ function ReviewFileSection({ cwd, file }: { cwd: string; file: ProjectChangedFil
 					{file.oldPath ? `${file.oldPath} \u2192 ${file.path}` : file.path}
 				</span>
 				{file.additions > 0 ? (
-					<span className="shrink-0 text-caption font-medium text-l5-success">+{file.additions}</span>
+					<span className="shrink-0 text-caption font-medium tabular-nums text-l5-success">+{file.additions}</span>
 				) : null}
 				{file.deletions > 0 ? (
-					<span className="shrink-0 text-caption font-medium text-l5-danger">-{file.deletions}</span>
+					<span className="shrink-0 text-caption font-medium tabular-nums text-l5-danger">-{file.deletions}</span>
 				) : null}
 			</div>
-			<div className="px-3 py-2">
-				{isLoading ? (
-					<div className="py-4 text-center text-caption text-muted-foreground">Loading diff...</div>
-				) : (
-					<ReviewFilePreviewBody preview={preview} />
-				)}
-			</div>
+			{isLoading ? (
+				// DESIGN.md "Loading": skeleton shaped like a few diff lines;
+				// global reduced-motion CSS disables animate-pulse.
+				<div role="status" aria-label="Loading diff" className="flex animate-pulse flex-col gap-1 px-2 py-1">
+					<div className="h-4 w-3/4 rounded-small bg-muted/50" />
+					<div className="h-4 w-1/2 rounded-small bg-muted/50" />
+					<div className="h-4 w-2/3 rounded-small bg-muted/50" />
+					<div className="h-4 w-2/5 rounded-small bg-muted/50" />
+				</div>
+			) : (
+				<ReviewFilePreviewBody preview={preview} />
+			)}
 		</section>
 	);
 }
@@ -273,27 +281,50 @@ export function ReviewPane({ cwd, width, topInset, onWidthChange, onClose }: Rev
 						value={filter}
 						onChange={(event) => setFilter(event.target.value)}
 						placeholder="Filter changed files"
-						className="w-full rounded-input border border-border bg-transparent px-3 py-1.5 text-body outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+						className="w-full rounded-input border border-transparent bg-muted/40 px-3 py-1.5 text-body text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 					/>
 				</div>
 			) : null}
 
-			<div className="app-scrollbar-transparent flex-1 overflow-y-auto px-4 py-4">
+			<div className="app-scrollbar-transparent flex-1 overflow-y-auto px-2 py-3">
 				{!snapshot ? (
-					<div className="py-10 text-center text-body text-muted-foreground">Loading review...</div>
+					// DESIGN.md "Loading": skeleton shaped like a file header row
+					// plus diff lines, preserving the loaded layout's dimensions.
+					<div role="status" aria-label="Loading review" className="flex animate-pulse flex-col gap-1 px-2 py-1">
+						<div className="flex items-center gap-2 pb-2">
+							<div className="h-5 w-16 rounded-chip bg-muted/50" />
+							<div className="h-4 w-2/3 rounded-small bg-muted/50" />
+							<div className="ml-auto h-4 w-10 rounded-small bg-muted/50" />
+						</div>
+						<div className="h-4 w-3/4 rounded-small bg-muted/50" />
+						<div className="h-4 w-1/2 rounded-small bg-muted/50" />
+						<div className="h-4 w-2/3 rounded-small bg-muted/50" />
+						<div className="h-4 w-2/5 rounded-small bg-muted/50" />
+					</div>
 				) : !snapshot.isAvailable ? (
-					<ReviewErrorState message={snapshot.error.message} rawOutput={snapshot.error.rawOutput} />
+					<div className="px-2 py-2">
+						<ReviewErrorState message={snapshot.error.message} rawOutput={snapshot.error.rawOutput} />
+					</div>
 				) : filteredFiles.length === 0 ? (
-					<div className="py-10 text-center text-body text-muted-foreground">
-						{files.length === 0 ? "No changes in this project." : "No files match this filter."}
+					// DESIGN.md "Empty States": explain what happened and point
+					// to the next action.
+					<div className="px-4 py-10 text-center">
+						<div className="text-body font-medium text-foreground">
+							{files.length === 0 ? "No changes yet" : "No files match this filter"}
+						</div>
+						<div className="mt-1 text-caption text-muted-foreground">
+							{files.length === 0
+								? "Working-tree edits in this project will show up here."
+								: "Clear the filter to see all changed files."}
+						</div>
 					</div>
 				) : (
-					<div className="flex flex-col gap-4">
+					<div className="flex flex-col">
 						{filteredFiles.map((file) => (
 							<ReviewFileSection key={file.oldPath ? `${file.oldPath}->${file.path}` : file.path} cwd={cwd} file={file} />
 						))}
 						{snapshot.overflowCount > 0 ? (
-							<div className="pt-2 text-center text-caption text-muted-foreground">
+							<div className="border-t border-border pt-3 text-center text-caption text-muted-foreground">
 								+{snapshot.overflowCount} more changed file{snapshot.overflowCount === 1 ? "" : "s"} not shown
 							</div>
 						) : null}

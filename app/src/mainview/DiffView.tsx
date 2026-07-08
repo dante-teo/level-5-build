@@ -2,13 +2,17 @@ import { parseUnifiedDiffLines } from "@/diffFormat";
 import { cn } from "@/lib/utils";
 
 export function DiffGutterNumber({ value }: { value: number | undefined }) {
-	return <span className="inline-block w-8 shrink-0 select-none text-right text-muted-foreground/60">{value ?? ""}</span>;
+	return (
+		<span className="inline-block w-8 shrink-0 select-none text-right tabular-nums text-muted-foreground/60">
+			{value ?? ""}
+		</span>
+	);
 }
 
 export function UnifiedDiffView({ diff }: { diff: string }) {
 	const lines = parseUnifiedDiffLines(diff);
 	return (
-		<pre className="app-scrollbar-transparent overflow-x-auto rounded-medium bg-muted/40 p-3 font-mono text-mono leading-5 text-foreground">
+		<pre className="app-scrollbar-transparent overflow-x-auto font-mono text-mono leading-5 text-foreground">
 			{lines.map((line, index) => (
 				<div
 					key={index}

@@ -43,7 +43,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 
 	return (
 		<div
-			className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-foreground/18 p-6 backdrop-blur-md"
+			className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-md"
 			role="presentation"
 			onDoubleClick={(event) => event.stopPropagation()}
 			onMouseDown={(event) => {
@@ -54,7 +54,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 				role="dialog"
 				aria-modal="true"
 				aria-labelledby="settings-title"
-				className="l5-adaptive-surface w-full max-w-sm rounded-panel border border-border p-5 shadow-e3"
+				className="l5-adaptive-surface l5-glass-rim w-full max-w-sm animate-in fade-in-0 zoom-in-95 rounded-panel p-5 shadow-e3 duration-quick ease-out"
 			>
 				<div className="flex items-start justify-between gap-3">
 					<h2 id="settings-title" className="text-h3 font-semibold text-foreground">
@@ -63,7 +63,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 					<button
 						type="button"
 						aria-label="Close settings"
-						className="flex size-8 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						className="flex size-8 shrink-0 items-center justify-center rounded-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 						onClick={onClose}
 					>
 						<ICONS.close className="size-4" strokeWidth={1.9} />

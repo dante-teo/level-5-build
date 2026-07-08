@@ -54,7 +54,7 @@ function SubItemRow({ item }: { item: ToolSubItem }) {
 	}
 	const { added, removed } = countDiffLines(item.oldText, item.newText);
 	return (
-		<div className="rounded-card border border-border bg-l5-secondary-background">
+		<div className="overflow-hidden rounded-medium border border-border/70 bg-muted/30">
 			<button
 				type="button"
 				aria-expanded={isExpanded}

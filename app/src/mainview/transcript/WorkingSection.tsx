@@ -48,9 +48,13 @@ function ToolRow({ tool }: { tool: ToolCallView }) {
 				aria-expanded={isExpanded}
 				disabled={!tool.text && !hasSubItemContent(tool)}
 				onClick={toggleExpanded}
-				className="flex w-full items-center gap-2 text-body text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default disabled:hover:text-muted-foreground"
+				className="flex w-full items-center gap-2 text-body text-muted-foreground transition-colors duration-quick hover:text-foreground disabled:hover:text-muted-foreground"
 			>
-				<Icon className="size-4 shrink-0" strokeWidth={1.8} />
+				{isInProgress ? (
+					<ICONS.loading className="size-4 shrink-0 animate-spin text-l5-accent" strokeWidth={1.8} />
+				) : (
+					<Icon className={cn("size-4 shrink-0", isFailed ? "text-l5-danger" : "")} strokeWidth={1.8} />
+				)}
 				<span className="min-w-0 flex-1 truncate text-left">{tool.title}</span>
 				{isFailed ? <span className="shrink-0 text-caption font-medium text-l5-danger">Failed</span> : null}
 			</button>
@@ -84,7 +88,7 @@ function ToolGroupRow({ kind, tools }: { kind: string; tools: ToolCallView[] }) 
 				type="button"
 				aria-expanded={isExpanded}
 				onClick={toggleExpanded}
-				className="flex w-full items-center gap-2 text-body text-muted-foreground transition-colors hover:text-foreground"
+				className="flex w-full items-center gap-2 text-body text-muted-foreground transition-colors duration-quick hover:text-foreground"
 			>
 				<Icon className="size-4 shrink-0" strokeWidth={1.8} />
 				<span className="min-w-0 flex-1 truncate text-left">{label}</span>
@@ -140,14 +144,17 @@ export function WorkingSection({
 				type="button"
 				aria-expanded={isExpanded}
 				onClick={toggleExpanded}
-				className="flex w-full items-center gap-1.5 text-caption font-medium text-muted-foreground transition-colors hover:text-foreground"
+				className="group flex w-full items-center gap-1.5 text-caption font-medium text-muted-foreground transition-colors duration-quick hover:text-foreground"
 			>
-				<span>Worked for {formatElapsed(elapsedMs)}</span>
+				{isActive ? <ICONS.loading className="size-3.5 shrink-0 animate-spin text-l5-accent" strokeWidth={1.8} /> : null}
+				<span>{isActive ? `Working for ${formatElapsed(elapsedMs)}` : `Worked for ${formatElapsed(elapsedMs)}`}</span>
 				<ICONS.chevronRight className={cn("size-3.5 shrink-0 transition-transform duration-quick", isExpanded ? "rotate-90" : "")} strokeWidth={1.8} />
+				{/* Hairline runs from the label to the right edge, fading out --
+				    a quieter boundary than a full-width rule under the text. */}
+				<span aria-hidden="true" className="ml-2 h-px min-w-0 flex-1 bg-gradient-to-r from-border to-transparent" />
 			</button>
-			{!isExpanded ? <div className="h-px w-full bg-border" /> : null}
 			{isExpanded ? (
-				<div className="flex flex-col gap-3">
+				<div className="flex flex-col gap-3 border-l border-border/70 pl-4">
 					{groupWorkingItems(items).map((row) =>
 						row.type === "thought" ? (
 							<ThoughtRow key={row.key} text={row.text} />

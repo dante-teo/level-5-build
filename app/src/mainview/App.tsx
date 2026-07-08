@@ -152,11 +152,15 @@ type QueuedPrompt = {
 	attachments: AttachmentItem[];
 };
 
+// Shared glass chrome. Popovers/menus animate in with a 120ms ease-out
+// fade+scale (DESIGN.md "Motion": subtle, functional, clarifies that the
+// surface belongs to its trigger); the global reduced-motion CSS disables it.
 const adaptivePopoverClass =
-	"l5-adaptive-surface border border-border text-foreground shadow-e2";
-const adaptiveDialogClass = "l5-adaptive-surface border border-border shadow-e3";
+	"l5-adaptive-surface l5-glass-rim text-foreground animate-in fade-in-0 zoom-in-95 duration-quick ease-out";
+const adaptiveDialogClass =
+	"l5-adaptive-surface l5-glass-rim shadow-e3 animate-in fade-in-0 zoom-in-95 duration-quick ease-out";
 const adaptiveChipClass =
-	"l5-adaptive-chip electrobun-webkit-app-region-no-drag rounded-chip border border-border text-caption font-medium text-muted-foreground shadow-e1";
+	"l5-adaptive-chip electrobun-webkit-app-region-no-drag rounded-chip border border-border text-caption font-medium text-muted-foreground";
 const adaptiveHoverClass = "hover:bg-muted/70";
 
 function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
@@ -814,6 +818,31 @@ function App() {
 				pendingPromptProjectFolderRef.current !== undefined &&
 				(update.kind !== "status" || (update.cwd ?? null) === (pendingPromptProjectFolderRef.current ?? null));
 
+			// The backend's eager home-directory warm-up (module-bottom
+			// `prepareSession({ cwd: null, ... })`, fired at boot before any
+			// project is ever chosen) pushes its `config`/`slashCommands`
+			// exactly like a real project selection would, but it never runs
+			// through handleChooseProject/dispatchPrompt -- so
+			// pendingPromptProjectFolderRef is never set for it and
+			// isOwnPendingUpdate above is unconditionally false. Without this,
+			// that push was silently dropped by the isForActiveSession gate
+			// below, and the pull-based refreshComposerMenuData fallback
+			// (listAgentSlashCommands/listAgentConfigOptions) independently
+			// loses the same race against the backend's own async
+			// available_commands_update/config_option_update notification
+			// (see AgentAcpClient.listConfigOptions's awaitSetup comment) --
+			// so the "+ " menu's slash commands never appeared before a
+			// project was selected. Safe to accept unconditionally here:
+			// with no active session AND nothing else pending, there is no
+			// other in-flight flow this push could ambiguously belong to,
+			// and config/slashCommands carry no session-identity
+			// implications (unlike message/tool/plan), so no
+			// setActiveSessionId adoption is needed alongside it.
+			const isUntrackedWarmupUpdate =
+				activeSessionIdRef.current === null &&
+				pendingPromptProjectFolderRef.current === undefined &&
+				(update.kind === "config" || update.kind === "slashCommands");
+
 			// A session doesn't exist yet the moment initialize()'s response
 			// pushes its config (emitted with an empty sessionId) -- only
 			// adopt a real, non-empty session id as active.
@@ -822,7 +851,7 @@ function App() {
 				sessionProjectFoldersRef.current.set(sessionId, pendingPromptProjectFolderRef.current ?? null);
 			}
 
-			const isForActiveSession = sessionId === activeSessionIdRef.current || isOwnPendingUpdate;
+			const isForActiveSession = sessionId === activeSessionIdRef.current || isOwnPendingUpdate || isUntrackedWarmupUpdate;
 
 			if (update.kind === "status") {
 				if (isForActiveSession) {
@@ -1714,7 +1743,7 @@ function App() {
 			/>
 			<div
 				className={cn(
-					"l5-liquid-pane fixed z-30 flex flex-col overflow-hidden text-l5-glass-text transition-[opacity,transform,width] duration-standard ease-out",
+					"l5-liquid-pane l5-glass-rim fixed z-30 flex flex-col overflow-hidden text-l5-glass-text transition-[opacity,transform,width] duration-standard ease-out",
 					isSidebarCollapsed
 						? "pointer-events-none -translate-x-4 opacity-0"
 						: "translate-x-0 opacity-100",
@@ -1754,13 +1783,17 @@ function App() {
 							</SidebarButton>
 
 							<section className="mt-3 flex min-h-0 flex-1 flex-col" aria-label="All chats">
-								<div className="flex h-9 shrink-0 items-center justify-between px-3 text-[13px] font-semibold text-l5-glass-muted">
-									<span>All chats</span>
-									<ICONS.more className="size-4" strokeWidth={1.8} />
+								{/* DESIGN.md "Don't": no decorative icons -- the header is a
+								    plain group label. */}
+								<div className="flex h-9 shrink-0 items-center px-3 text-caption font-semibold uppercase tracking-wide text-l5-glass-muted">
+									All chats
 								</div>
 								{sessions.length === 0 ? (
-									<div className="flex flex-1 items-start justify-center px-3 pt-3 text-center text-body font-semibold text-l5-glass-muted">
-										No recent chats
+									<div className="px-3 pt-2 text-left">
+										<p className="text-body font-medium text-l5-glass-text">No chats yet</p>
+										<p className="mt-1 text-caption leading-4 text-l5-glass-muted">
+											Start with New chat above — conversations you send show up here.
+										</p>
 									</div>
 								) : (
 									<div className="app-scrollbar-transparent min-h-0 flex-1 overflow-y-auto pr-1">
@@ -1776,14 +1809,14 @@ function App() {
 														className={cn(
 															"h-10 w-full justify-start gap-2 px-3 text-body font-medium",
 															isActive
-																? "bg-l5-selected-surface text-l5-glass-text ring-1 ring-inset ring-l5-glass-border"
+																? "bg-l5-selected-surface text-l5-glass-text"
 																: "text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text",
 															isRunning ? "cursor-not-allowed opacity-60" : "",
 														)}
 														onClick={() => void handleSelectSession(session.sessionId)}
 														onContextMenu={(event) => handleSessionContextMenu(event, session.sessionId)}
 													>
-														<ICONS.chat className="size-4 shrink-0" strokeWidth={1.7} />
+														<ICONS.chat className={cn("size-4 shrink-0", isActive ? "text-l5-accent" : "")} strokeWidth={1.7} />
 														<span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
 														{isActive ? (
 														<SessionActivityIndicator
@@ -1867,7 +1900,7 @@ function App() {
 				>
 					<button
 						type="button"
-						className="flex h-10 w-full items-center gap-2 rounded-2xl px-3 text-left text-body font-semibold text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-40"
+						className="flex h-10 w-full items-center gap-2 rounded-medium px-3 text-left text-body font-semibold text-destructive transition-colors duration-quick hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/45 disabled:cursor-not-allowed disabled:opacity-40"
 						disabled={isRunning && contextMenu.sessionId === activeSessionId}
 						onClick={() => openDeleteDialog(contextMenu.sessionId)}
 					>
@@ -1913,20 +1946,20 @@ function App() {
 						{isDashboardPinned ? (
 							<section
 								aria-label="Session dashboard"
-								className="l5-liquid-popover absolute right-0 top-full mt-3 w-[21rem] max-w-[calc(100vw-3rem)] rounded-panel border border-border p-4 text-foreground shadow-e2"
+								className="l5-liquid-popover l5-glass-rim absolute right-0 top-full mt-3 w-[21rem] max-w-[calc(100vw-3rem)] animate-in fade-in-0 zoom-in-95 rounded-panel p-4 text-foreground duration-quick ease-out"
 								onPointerDown={(event) => event.stopPropagation()}
 							>
 								<div className="flex items-center gap-3">
-									<div className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-l5-selected-surface text-l5-accent">
+									<div className="flex size-9 shrink-0 items-center justify-center rounded-medium bg-l5-selected-surface text-l5-accent">
 										<ICONS.dashboard className="size-5" strokeWidth={1.8} />
 									</div>
 									<div className="min-w-0 flex-1">
-										<div className="truncate text-[15px] font-semibold">Dashboard</div>
+										<div className="truncate text-body font-semibold">Dashboard</div>
 										<div className="truncate text-caption font-medium text-muted-foreground">{topBarTitle}</div>
 									</div>
 									<IconButton
 										label="Refresh dashboard"
-										className="size-9 rounded-2xl hover:bg-muted/70"
+										className="size-9 rounded-medium hover:bg-muted/70"
 										disabled={isGitStatusRefreshing}
 										onClick={() => void refreshProjectGitStatus(projectFolder)}
 									>
@@ -2072,6 +2105,17 @@ function App() {
 							</div>
 						) : null}
 
+						{/* Empty-chat ready state (DESIGN.md "Empty States"): the blank
+						    workspace is intentional; one quiet line anchors the composer
+						    as the obvious next action. No hero layouts. */}
+						{hasConversation ? null : (
+							<div className="mx-auto mb-6 w-full max-w-3xl select-none">
+								<h1 className="text-h2 font-semibold text-foreground">
+									{projectFolder ? `Working in ${projectLabel(projectFolder)}` : "What should we build?"}
+								</h1>
+							</div>
+						)}
+
 						{/* DESIGN.md "Prompt Composer": queued prompts "render
 						    compactly above the composer and can be removed
 						    before they start", below the Plan N/M chip. */}
@@ -2110,7 +2154,7 @@ function App() {
 							ref={composerContainerRef}
 							className={cn("mx-auto flex w-full max-w-3xl shrink-0 flex-col", hasConversation ? "relative z-10 mt-auto" : "")}
 						>
-						<div className="relative z-10 overflow-visible rounded-panel border border-border bg-l5-surface backdrop-blur-2xl">
+						<div className="l5-glass-composer l5-glass-rim relative z-10 overflow-visible rounded-panel">
 							{pendingPermission ? (
 								<ApprovalPrompt request={pendingPermission} onRespond={handlePermission} onDraftFeedback={handleDraftFeedback} />
 							) : (
@@ -2127,7 +2171,7 @@ function App() {
 									<div
 										ref={promptOverlayRef}
 										aria-hidden="true"
-										className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-h2 font-medium leading-6 text-foreground"
+										className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-h3 font-medium leading-6 text-foreground"
 									>
 										{renderComposerPreview(prompt)}
 									</div>
@@ -2140,7 +2184,7 @@ function App() {
 										// "Prompt Composer"'s queued-prompts behavior).
 										placeholder="Do anything"
 										aria-label="Message the agent"
-										className="relative block w-full resize-none bg-transparent text-h2 font-medium leading-6 text-transparent caret-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+										className="relative block w-full resize-none bg-transparent text-h3 font-medium leading-6 text-transparent caret-l5-accent placeholder:text-muted-foreground/60 focus:outline-none"
 										style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
 										onChange={(event) => setPrompt(event.target.value)}
 										onKeyDown={handleComposerKeyDown}
@@ -2187,8 +2231,8 @@ function App() {
 											<div className="mt-2 border-t border-border pt-2">
 												<div className="px-2 pb-1 text-caption font-semibold text-muted-foreground">Slash commands</div>
 												{slashCommands.length === 0 ? (
-													<div className="flex h-10 items-center rounded-2xl px-2 text-[13px] font-medium text-muted-foreground">
-														No commands available from the current agent
+													<div className="rounded-medium px-2 py-2 text-caption font-medium leading-4 text-muted-foreground">
+														The current agent hasn't published any commands.
 													</div>
 												) : (
 													<div className="flex flex-col gap-1">
@@ -2231,7 +2275,7 @@ function App() {
 										aria-expanded={isApprovalMenuOpen}
 										aria-label="Approval mode"
 										className={cn(
-											"flex shrink-0 items-center gap-2 rounded-2xl px-2 py-2 text-body font-semibold text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+											"flex shrink-0 items-center gap-2 rounded-medium px-2 py-2 text-body font-semibold text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40",
 											adaptiveHoverClass,
 										)}
 										onClick={() => setIsApprovalMenuOpen((value) => !value)}
@@ -2252,7 +2296,7 @@ function App() {
 											onDoubleClick={(event) => event.stopPropagation()}
 											onPointerDown={(event) => event.stopPropagation()}
 										>
-											<div className="px-1 pb-2 text-[13px] font-semibold text-muted-foreground">
+											<div className="px-1 pb-2 text-caption font-semibold text-muted-foreground">
 												How should agent actions be approved?
 											</div>
 											<div className="flex flex-col gap-0.5">
@@ -2268,7 +2312,7 @@ function App() {
 																setApprovalMode(option.value);
 																setIsApprovalMenuOpen(false);
 															}}
-															className="flex w-full items-start gap-3 rounded-2xl px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+															className="flex w-full items-start gap-3 rounded-medium px-2 py-2.5 text-left transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 														>
 															<option.icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
 															<span className="min-w-0 flex-1">
@@ -2304,11 +2348,10 @@ function App() {
 									type="button"
 									aria-label={isRunning ? "Stop agent" : "Send message"}
 									className={cn(
-										"relative flex size-11 shrink-0 items-center justify-center rounded-full transition-colors",
-										isRunning
-											? "bg-foreground text-background shadow-e2 hover:bg-foreground/90"
-											: prompt.trim()
-											? "bg-foreground text-background shadow-e2 hover:bg-foreground/90"
+										"relative flex size-11 shrink-0 items-center justify-center rounded-full transition-[background-color,transform] duration-quick",
+										"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35 active:scale-95",
+										isRunning || prompt.trim()
+											? "bg-l5-accent text-l5-accent-foreground hover:bg-l5-accent/90"
 											: "bg-muted text-muted-foreground",
 									)}
 									disabled={isRunning ? isStopping : !prompt.trim()}
@@ -2336,7 +2379,7 @@ function App() {
 						    "Choose project", z-30 below) inside a capped
 						    sub-context that could never escape above it. */}
 						{hasConversation ? null : (
-							<footer className="relative -mt-9 flex items-center justify-between rounded-panel bg-l5-secondary-background px-6 pb-3 pt-10 text-body font-medium text-muted-foreground">
+							<footer className="relative -mt-9 flex items-center justify-between rounded-panel bg-l5-secondary-background/70 px-6 pb-3 pt-10 text-body font-medium text-muted-foreground backdrop-blur-xl">
 								<div ref={projectMenuRef} className="relative flex min-w-0 items-center">
 									<button
 										type="button"
@@ -2345,7 +2388,7 @@ function App() {
 										aria-label={projectFolder ? `Choose project, current project ${projectLabel(projectFolder)}` : "Choose project"}
 										disabled={isRunning}
 										className={cn(
-											"flex min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-foreground transition-colors",
+											"flex min-w-0 items-center gap-2 rounded-medium px-2 py-2 text-foreground transition-colors",
 											adaptiveHoverClass,
 											"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
 											isRunning ? "cursor-not-allowed opacity-40" : "",
@@ -2397,8 +2440,8 @@ function App() {
 
 											<div className="app-scrollbar-transparent mt-2 max-h-56 overflow-y-auto pr-1">
 												{filteredProjects.length === 0 ? (
-													<div className="flex h-10 items-center rounded-2xl px-2 text-body font-semibold text-muted-foreground">
-														No matching projects
+													<div className="rounded-medium px-2 py-2 text-body font-medium text-muted-foreground">
+														No projects match — try a shorter name.
 													</div>
 												) : (
 													<div className="flex flex-col gap-1">
@@ -2410,7 +2453,7 @@ function App() {
 																	type="button"
 																	title={project.path}
 																	className={cn(
-																		"flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold transition-colors",
+																		"flex h-10 w-full items-center gap-2 rounded-medium px-2 text-left text-body font-semibold transition-colors",
 																		"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35",
 																		isSelected
 																			? "bg-l5-selected-surface text-foreground"
@@ -2430,7 +2473,7 @@ function App() {
 											<div className="mt-2 border-t border-border pt-2">
 												<button
 													type="button"
-													className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+													className="flex h-10 w-full items-center gap-2 rounded-medium px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 													onClick={() => void handleSelectFolder()}
 												>
 													<ICONS.add className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
@@ -2438,7 +2481,7 @@ function App() {
 												</button>
 												<button
 													type="button"
-													className="mt-1 flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+													className="mt-1 flex h-10 w-full items-center gap-2 rounded-medium px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 													onClick={() => void handleClearProject()}
 												>
 													<ICONS.close className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
@@ -2461,7 +2504,7 @@ function App() {
 
 			{deleteTarget ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-foreground/18 p-6 backdrop-blur-md"
+					className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-md"
 					role="presentation"
 					onDoubleClick={(event) => event.stopPropagation()}
 					onMouseDown={(event) => {
@@ -2493,14 +2536,14 @@ function App() {
 						<div className="mt-6 flex justify-end gap-2">
 							<button
 								type="button"
-								className="h-10 rounded-2xl px-4 text-body font-semibold text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+								className="h-10 rounded-medium px-4 text-body font-semibold text-muted-foreground transition-colors duration-quick hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 								onClick={() => setDeleteTargetId(null)}
 							>
 								Cancel
 							</button>
 							<button
 								type="button"
-								className="h-10 rounded-2xl bg-destructive px-4 text-body font-semibold text-primary-foreground shadow-e2 transition-colors hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
+								className="h-10 rounded-medium bg-destructive px-4 text-body font-semibold text-l5-danger-foreground transition-colors duration-quick hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/45 disabled:cursor-not-allowed disabled:opacity-40"
 								disabled={isRunning && deleteTarget.sessionId === activeSessionId}
 								onClick={() => void confirmDeleteSession()}
 							>
@@ -2527,7 +2570,7 @@ function IconButton({ children, label, className, ...props }: IconButtonProps) {
 			aria-label={label}
 			title={label}
 			className={cn(
-				"flex size-10 shrink-0 items-center justify-center rounded-2xl text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40",
+				"flex size-10 shrink-0 items-center justify-center rounded-medium text-muted-foreground transition-colors duration-quick hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35 disabled:cursor-not-allowed disabled:opacity-40",
 				className,
 			)}
 			{...props}
@@ -2539,9 +2582,9 @@ function IconButton({ children, label, className, ...props }: IconButtonProps) {
 
 function DashboardRow({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
 	return (
-		<div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-muted/55 px-3 py-2">
+		<div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-3 rounded-medium bg-muted/55 px-3 py-2">
 			<div className="text-caption font-semibold text-muted-foreground">{label}</div>
-			<div className="flex min-w-0 items-center justify-end gap-1.5 text-right text-[13px] font-semibold text-foreground">
+			<div className="flex min-w-0 items-center justify-end gap-1.5 text-right text-caption font-semibold text-foreground">
 				{icon ? <span className="shrink-0 text-muted-foreground">{icon}</span> : null}
 				<span className="min-w-0 truncate">{value}</span>
 			</div>
@@ -2555,7 +2598,7 @@ function DashboardPlanSection({ items }: { items: AgentPlanItem[] | null }) {
 	}
 
 	return (
-		<section className="rounded-2xl bg-muted/55 px-3 py-2.5">
+		<section className="rounded-medium bg-muted/55 px-3 py-2.5">
 			<div className="flex items-center justify-between gap-3">
 				<div className="text-caption font-semibold text-muted-foreground">Plan</div>
 				<div className="shrink-0 text-caption font-semibold text-muted-foreground">
@@ -2564,7 +2607,7 @@ function DashboardPlanSection({ items }: { items: AgentPlanItem[] | null }) {
 			</div>
 			<div className="mt-2 flex flex-col gap-1.5">
 				{items.map((item, index) => (
-					<div key={`${item.title}-${index}`} className="flex items-start gap-2 text-[13px] font-semibold leading-5 text-foreground">
+					<div key={`${item.title}-${index}`} className="flex items-start gap-2 text-caption font-semibold leading-5 text-foreground">
 						<ICONS.statusDot className={cn("mt-[7px] size-2 shrink-0 fill-current", statusDotClass(item.status ?? ""))} strokeWidth={0} />
 						<span className="min-w-0 flex-1 break-words">{item.title}</span>
 						{item.status ? (
@@ -2709,12 +2752,12 @@ function ComposerMenuItem({
 			role="menuitem"
 			disabled={disabled}
 			onClick={onClick}
-			className="flex h-10 w-full items-center gap-2 rounded-2xl px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+			className="flex h-10 w-full items-center gap-2 rounded-medium px-2 text-left text-body font-semibold text-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
 		>
 			<span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">{icon}</span>
 			<span className="min-w-0 flex-1 truncate">{label}</span>
 			{description ? (
-				<span className="max-w-[45%] shrink-0 truncate text-[13px] font-normal text-muted-foreground">{description}</span>
+				<span className="max-w-[45%] shrink-0 truncate text-caption font-normal text-muted-foreground">{description}</span>
 			) : null}
 		</button>
 	);
@@ -2723,7 +2766,7 @@ function ComposerMenuItem({
 function AttachmentChip({ attachment, onRemove }: { attachment: AttachmentItem; onRemove: (id: string) => void }) {
 	const Icon = attachment.type === "directory" ? ICONS.folder : ICONS.attach;
 	return (
-		<span className="inline-flex max-w-full items-center gap-1.5 rounded-chip bg-muted/70 px-3 py-1.5 text-[13px] font-medium text-foreground">
+		<span className="inline-flex max-w-full items-center gap-1.5 rounded-chip bg-muted/70 px-3 py-1.5 text-caption font-medium text-foreground">
 			<Icon className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
 			<span className="max-w-48 truncate">{attachment.name}</span>
 			<button
@@ -2773,15 +2816,14 @@ function ContextUsageRing({ used, size }: { used: number; size: number }) {
 			<div
 				role="tooltip"
 				className={cn(
-					"pointer-events-none absolute bottom-[calc(100%+12px)] left-1/2 z-30 w-[196px] -translate-x-1/2 rounded-2xl px-4 py-3 text-center opacity-0 transition-opacity duration-quick group-hover:opacity-100 group-focus:opacity-100",
+					"pointer-events-none absolute bottom-[calc(100%+12px)] left-1/2 z-30 w-[196px] -translate-x-1/2 rounded-medium px-4 py-3 text-center opacity-0 transition-opacity duration-quick group-hover:opacity-100 group-focus:opacity-100",
 					adaptivePopoverClass,
 				)}
 			>
-				<div className="text-[13px] font-medium text-muted-foreground">Context window:</div>
+				<div className="text-caption font-medium text-muted-foreground">Context window:</div>
 				<div className="mt-1 text-body font-semibold text-foreground">
 					{usedPercent}% used ({leftPercent}% left)
 				</div>
-				<div className="absolute left-1/2 top-full -mt-1.5 size-3 -translate-x-1/2 rotate-45 rounded-[2px] border-b border-r border-border bg-l5-elevated-surface" />
 			</div>
 		</div>
 	);
@@ -2837,7 +2879,7 @@ const MARKDOWN_COMPONENTS: Components = {
 			href={href}
 			target="_blank"
 			rel="noreferrer"
-			className="text-l5-accent underline underline-offset-2"
+			className="text-l5-accent underline decoration-l5-accent/40 underline-offset-2 transition-colors duration-quick hover:decoration-l5-accent"
 		>
 			{children}
 		</a>
@@ -2845,24 +2887,26 @@ const MARKDOWN_COMPONENTS: Components = {
 	code: ({ className, children }) => {
 		const isBlock = Boolean(className);
 		return isBlock ? (
-			<code className={cn("font-mono text-[13px]", className)}>{children}</code>
+			<code className={cn("font-mono text-mono", className)}>{children}</code>
 		) : (
-			<code className="rounded bg-muted px-1 py-0.5 font-mono text-[13px]">{children}</code>
+			<code className="rounded-small bg-muted px-1 py-0.5 font-mono text-mono">{children}</code>
 		);
 	},
 	pre: ({ children }) => (
-		<pre className="app-scrollbar-transparent my-2 overflow-x-auto rounded-xl bg-muted/70 p-3 last:mb-0">
+		<pre className="app-scrollbar-transparent my-2 overflow-x-auto rounded-medium border border-border/60 bg-muted/50 p-3 leading-relaxed last:mb-0">
 			{children}
 		</pre>
 	),
 	ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
 	ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
 	li: ({ children }) => <li>{children}</li>,
-	h1: ({ children }) => <h1 className="mb-2 text-[18px] font-semibold last:mb-0">{children}</h1>,
-	h2: ({ children }) => <h2 className="mb-2 text-[16px] font-semibold last:mb-0">{children}</h2>,
-	h3: ({ children }) => <h3 className="mb-2 text-[15px] font-semibold last:mb-0">{children}</h3>,
+	// Markdown headings inside chat map onto the compact end of the type
+	// scale (DESIGN.md "Typography": match display text to its container).
+	h1: ({ children }) => <h1 className="mb-2 mt-4 text-h3 font-semibold first:mt-0 last:mb-0">{children}</h1>,
+	h2: ({ children }) => <h2 className="mb-2 mt-3 text-body font-semibold first:mt-0 last:mb-0">{children}</h2>,
+	h3: ({ children }) => <h3 className="mb-2 mt-3 text-body font-semibold text-muted-foreground first:mt-0 last:mb-0">{children}</h3>,
 	blockquote: ({ children }) => (
-		<blockquote className="mb-2 border-l-2 border-border pl-3 text-muted-foreground last:mb-0">
+		<blockquote className="mb-2 border-l-2 border-l5-accent/30 pl-3 text-muted-foreground last:mb-0">
 			{children}
 		</blockquote>
 	),
@@ -2870,14 +2914,19 @@ const MARKDOWN_COMPONENTS: Components = {
 
 function MessageBubble({ message }: { message: ChatMessage }) {
 	const isUser = message.role === "user";
+	// DESIGN.md "Chat": agent replies are readable text blocks, not speech
+	// bubbles; user messages carry a subtle tint only -- no shadows, no
+	// decorative chrome on either.
+	if (!isUser) {
+		return (
+			<div className="w-full text-body leading-6 text-foreground">
+				<ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.text}</ReactMarkdown>
+			</div>
+		);
+	}
 	return (
-		<div className={cn("flex w-full gap-3", isUser ? "justify-end" : "justify-start")}>
-			<div
-				className={cn(
-					"max-w-3xl rounded-card px-4 py-3 text-body leading-6 shadow-e1",
-					isUser ? "bg-l5-selected-surface text-foreground" : "bg-l5-elevated-surface text-foreground",
-				)}
-			>
+		<div className="flex w-full justify-end">
+			<div className="max-w-[85%] rounded-card bg-l5-selected-surface px-4 py-3 text-body leading-6 text-foreground">
 				<ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.text}</ReactMarkdown>
 			</div>
 		</div>
@@ -2909,7 +2958,7 @@ function PlanChip({
 				aria-label={`Plan progress: ${completed} of ${total} steps complete`}
 				onClick={onToggle}
 				className={cn(
-					"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border px-3 py-1.5 text-caption font-medium shadow-e1 transition-colors",
+					"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex items-center gap-2 rounded-chip border px-3 py-1.5 text-caption font-medium transition-colors duration-quick",
 					isOpen ? "border-l5-accent/28 text-l5-accent" : "border-border text-muted-foreground",
 				)}
 			>
@@ -3034,10 +3083,10 @@ function ApprovalPrompt({
 
 	return (
 		<div className="px-6 py-5">
-			<div className="text-[16px] font-semibold leading-6 text-foreground">{approvalQuestion(request)}</div>
+			<div className="text-body font-semibold leading-6 text-foreground">{approvalQuestion(request)}</div>
 
 			{visibleDetails ? (
-				<div className="mt-3 rounded-2xl bg-muted/70 p-3">
+				<div className="mt-3 rounded-medium bg-muted/70 p-3">
 					<pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-caption leading-5 text-muted-foreground">
 						{visibleDetails}
 					</pre>
@@ -3060,13 +3109,13 @@ function ApprovalPrompt({
 						type="button"
 						disabled={isSubmitting}
 						className={cn(
-							"flex items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-body font-medium text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+							"flex items-center gap-3 rounded-medium px-3 py-2.5 text-left text-body font-medium text-foreground transition-colors duration-quick focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35 disabled:cursor-not-allowed disabled:opacity-60",
 							index === highlightedIndex ? "bg-muted/80" : "hover:bg-muted/50",
 						)}
 						onMouseEnter={() => setHighlightedIndex(index)}
 						onClick={() => void submitOption(option.optionId)}
 					>
-						<span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-l5-elevated-surface text-caption font-semibold text-muted-foreground shadow-sm">
+						<span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-l5-elevated-surface text-caption font-semibold text-muted-foreground">
 							{index + 1}
 						</span>
 						<span className="min-w-0 flex-1 truncate">{option.name}</span>
@@ -3101,7 +3150,7 @@ function ApprovalPrompt({
 						<button
 							type="button"
 							disabled={isSubmitting}
-							className="shrink-0 rounded-xl px-2 py-1 text-[13px] font-semibold text-muted-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-60"
+							className="shrink-0 rounded-small px-2 py-1 text-caption font-semibold text-muted-foreground transition-colors hover:bg-muted/70 disabled:cursor-not-allowed disabled:opacity-60"
 							onClick={() => {
 								setIsWritingFeedback(false);
 								setFeedbackText("");
@@ -3112,7 +3161,7 @@ function ApprovalPrompt({
 						<button
 							type="button"
 							disabled={isSubmitting}
-							className="shrink-0 rounded-xl bg-foreground px-3 py-1.5 text-[13px] font-semibold text-background transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-60"
+							className="shrink-0 rounded-small bg-l5-accent px-3 py-1.5 text-caption font-semibold text-l5-accent-foreground transition-colors hover:bg-l5-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
 							onClick={submitFeedback}
 						>
 							Submit
@@ -3122,7 +3171,7 @@ function ApprovalPrompt({
 					<button
 						type="button"
 						disabled={isSubmitting}
-						className="flex items-center gap-2 rounded-2xl px-3 py-2 text-left text-body font-medium text-muted-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60"
+						className="flex items-center gap-2 rounded-medium px-3 py-2 text-left text-body font-medium text-muted-foreground transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-60"
 						onClick={() => setIsWritingFeedback(true)}
 					>
 						<ICONS.edit className="size-4 shrink-0" strokeWidth={1.8} />
@@ -3136,9 +3185,9 @@ function ApprovalPrompt({
 
 function ErrorCard({ message }: { message: string }) {
 	return (
-		<div className="flex w-full max-w-3xl items-center gap-3 rounded-card border border-destructive/20 bg-destructive/10 p-4 text-body font-medium text-destructive shadow-e1">
-			<ICONS.error className="size-4 shrink-0" strokeWidth={2} />
-			<span>{message}</span>
+		<div className="flex w-full max-w-3xl items-start gap-3 rounded-card border border-destructive/20 bg-destructive/10 px-4 py-3 text-body font-medium text-destructive">
+			<ICONS.error className="mt-1 size-4 shrink-0" strokeWidth={2} />
+			<span className="min-w-0 flex-1">{message}</span>
 		</div>
 	);
 }

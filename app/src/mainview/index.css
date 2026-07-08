@@ -60,12 +60,15 @@
 	--l5-success: #16a34a;
 	--l5-warning: #f59e0b;
 	--l5-danger: #dc2626;
+	--l5-danger-foreground: #ffffff;
 	--l5-glass-pane: rgba(255, 255, 255, 0.4);
 	--l5-glass-pane-strong: rgba(244, 244, 248, 0.55);
 	--l5-glass-control: rgba(0, 0, 0, 0.05);
 	--l5-glass-control-hover: rgba(0, 0, 0, 0.1);
 	--l5-glass-border: rgba(0, 0, 0, 0.08);
 	--l5-glass-highlight: rgba(255, 255, 255, 0.35);
+	--l5-glass-rim-strong: rgba(255, 255, 255, 0.9);
+	--l5-glass-rim-soft: rgba(255, 255, 255, 0.38);
 	--l5-glass-text: #171717;
 	--l5-glass-muted: #6b7280;
 	--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.1);
@@ -113,12 +116,15 @@
 		--l5-success: #3fd176;
 		--l5-warning: #fbbc05;
 		--l5-danger: #f87171;
+		--l5-danger-foreground: #2a0d0d;
 		--l5-glass-pane: rgba(30, 30, 30, 0.55);
 		--l5-glass-pane-strong: rgba(20, 20, 20, 0.7);
 		--l5-glass-control: rgba(255, 255, 255, 0.08);
 		--l5-glass-control-hover: rgba(255, 255, 255, 0.15);
 		--l5-glass-border: rgba(255, 255, 255, 0.1);
 		--l5-glass-highlight: rgba(255, 255, 255, 0.05);
+		--l5-glass-rim-strong: rgba(255, 255, 255, 0.28);
+		--l5-glass-rim-soft: rgba(255, 255, 255, 0.08);
 		--l5-glass-text: #f0f0f0;
 		--l5-glass-muted: #b3b3b3;
 		--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.24);
@@ -165,6 +171,7 @@
 	--color-l5-success: var(--l5-success);
 	--color-l5-warning: var(--l5-warning);
 	--color-l5-danger: var(--l5-danger);
+	--color-l5-danger-foreground: var(--l5-danger-foreground);
 	--color-l5-glass-pane: var(--l5-glass-pane);
 	--color-l5-glass-pane-strong: var(--l5-glass-pane-strong);
 	--color-l5-glass-control: var(--l5-glass-control);
@@ -178,15 +185,21 @@
 	--font-sans: "Barlow", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	--font-mono: "Departure Mono", "SF Mono", SFMono-Regular, ui-monospace, monospace;
 
-	/* Level5 type scale (docs/DESIGN.md); pair with font-bold/font-semibold/font-medium at each usage site */
+	/* Level5 type scale (docs/DESIGN.md); pair with font-bold/font-semibold/font-medium
+	   at each usage site. Display sizes carry slightly tight tracking for an
+	   optically balanced, native feel; body/caption stay neutral. */
 	--text-display: 32px;
 	--text-display--line-height: 1.2;
+	--text-display--letter-spacing: -0.02em;
 	--text-h1: 28px;
 	--text-h1--line-height: 1.2;
+	--text-h1--letter-spacing: -0.02em;
 	--text-h2: 22px;
 	--text-h2--line-height: 1.3;
+	--text-h2--letter-spacing: -0.01em;
 	--text-h3: 18px;
 	--text-h3--line-height: 1.3;
+	--text-h3--letter-spacing: -0.01em;
 	--text-body: 14px;
 	--text-body--line-height: 1.45;
 	--text-caption: 12px;
@@ -209,10 +222,22 @@
 	--radius-small: 8px;
 	--radius-chip: 999px;
 
-	/* Level5 elevation scale (docs/DESIGN.md / L5Elevation): quiet, low-opacity depth */
-	--shadow-e1: 0 6px 14px rgba(0, 0, 0, 0.08);
-	--shadow-e2: 0 12px 22px rgba(0, 0, 0, 0.12);
-	--shadow-e3: 0 20px 34px rgba(0, 0, 0, 0.16);
+	/* Level5 elevation scale (docs/DESIGN.md / L5Elevation): quiet, layered
+	   depth. Each level pairs a hairline contact edge with a tight key shadow
+	   and a soft ambient falloff so panels read as material, not as flat
+	   web drop-shadows. */
+	--shadow-e1:
+		0 0 0 0.5px rgba(0, 0, 0, 0.04),
+		0 1px 2px rgba(0, 0, 0, 0.05),
+		0 4px 12px rgba(0, 0, 0, 0.05);
+	--shadow-e2:
+		0 0 0 0.5px rgba(0, 0, 0, 0.05),
+		0 2px 6px rgba(0, 0, 0, 0.07),
+		0 12px 32px rgba(0, 0, 0, 0.11);
+	--shadow-e3:
+		0 0 0 0.5px rgba(0, 0, 0, 0.06),
+		0 4px 12px rgba(0, 0, 0, 0.1),
+		0 24px 64px rgba(0, 0, 0, 0.2);
 
 	/* Level5 spacing scale (docs/DESIGN.md / L5Spacing): e.g. gap-l5-x5, p-l5-x4 */
 	--spacing-l5-x1: 4px;
@@ -233,19 +258,58 @@
 	--size-l5-hit-target: 32px;
 
 	/* Level5 motion durations (docs/DESIGN.md "Motion"): the only three
-	   allowed durations, ease-out, no bounce. */
+	   allowed durations, ease-out, no bounce. The defaults below make every
+	   un-annotated transition land on the quick token + ease-out instead of
+	   Tailwind's stock 150ms/ease. */
 	--duration-quick: 120ms;
 	--duration-standard: 180ms;
 	--duration-slow: 240ms;
+	--default-transition-duration: 120ms;
+	--default-transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
 	}
+	html {
+		/* Native shells never expose rubber-band overscroll glow or text
+		   cursors on chrome. */
+		overscroll-behavior: none;
+	}
 	body {
 		@apply bg-background text-foreground;
 		font-family: "Barlow", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
+		/* App chrome is not selectable text; content areas opt back in below. */
+		user-select: none;
+		-webkit-user-select: none;
+		cursor: default;
+	}
+
+	/* Message bodies, code, diffs, and inputs remain real selectable text. */
+	p,
+	pre,
+	code,
+	kbd,
+	samp,
+	blockquote,
+	li,
+	input,
+	textarea,
+	[data-selectable] {
+		user-select: text;
+		-webkit-user-select: text;
+	}
+
+	button,
+	[role="button"] {
+		cursor: default;
+	}
+
+	::selection {
+		background: color-mix(in srgb, var(--l5-accent) 24%, transparent);
 	}
 
 	code,
@@ -267,6 +331,54 @@
 		height: 0;
 	}
 
+	/* tw-animate-css's enter/exit keyframes default to 150ms, which is off
+	   the DESIGN.md motion scale; utilities below re-pin them. The
+	   duration-quick/standard/slow utilities only affect transitions. */
+	.animate-in,
+	.animate-out {
+		animation-duration: var(--duration-quick);
+		animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+	}
+
+	/* ---- Liquid glass material family ----------------------------------
+	   The signature surface treatment. Every member layers, in order:
+	   1. a specular top-left highlight wash (light "catching" the glass),
+	   2. an adaptive tint (the sidebar adds its matcha wash),
+	   3. the translucent pane color over backdrop blur + saturation,
+	   4. a 1px rim drawn by a masked ::before ring so the highlight hugs
+	      the rounded corners exactly -- inset box-shadows can't follow
+	      corner curvature and read as a flat web card.
+	   Depth comes from the material itself; outer shadows stay minimal
+	   grounding only (DESIGN.md "Elevation & Depth"). */
+	.l5-glass-rim {
+		position: relative;
+	}
+
+	.l5-glass-rim::before {
+		content: "";
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+		padding: 1px;
+		background: linear-gradient(
+			165deg,
+			var(--l5-glass-rim-strong) 0%,
+			var(--l5-glass-rim-soft) 24%,
+			transparent 48%,
+			transparent 82%,
+			var(--l5-glass-rim-soft) 100%
+		);
+		-webkit-mask:
+			linear-gradient(#000 0 0) content-box,
+			linear-gradient(#000 0 0);
+		-webkit-mask-composite: xor;
+		mask:
+			linear-gradient(#000 0 0) content-box,
+			linear-gradient(#000 0 0);
+		mask-composite: exclude;
+		pointer-events: none;
+	}
+
 	.l5-liquid-pane {
 		background:
 			linear-gradient(135deg, var(--l5-glass-highlight), transparent 34%),
@@ -275,12 +387,8 @@
 		border: 1px solid transparent;
 		background-clip: padding-box;
 		box-shadow:
-			inset 0 1px 0 rgba(255, 255, 255, 0.24),
-			inset 0 -1px 0 rgba(0, 0, 0, 0.06),
-			inset 1px 0 0 rgba(255, 255, 255, 0.1),
-			inset -1px 0 0 rgba(0, 0, 0, 0.05),
-			0 8px 18px rgba(0, 0, 0, 0.12),
-			0 1px 3px rgba(0, 0, 0, 0.08);
+			0 1px 2px rgba(0, 0, 0, 0.05),
+			0 8px 24px rgba(0, 0, 0, 0.1);
 		backdrop-filter: blur(34px) saturate(1.65);
 		-webkit-backdrop-filter: blur(34px) saturate(1.65);
 	}
@@ -368,18 +476,10 @@
 		color: var(--l5-accent);
 	}
 
-	.l5-liquid-popover {
-		background:
-			linear-gradient(135deg, var(--l5-glass-highlight), transparent 38%),
-			color-mix(in srgb, var(--l5-background) 82%, transparent);
-		backdrop-filter: blur(64px) saturate(1.75);
-		-webkit-backdrop-filter: blur(64px) saturate(1.75);
-		box-shadow:
-			inset 0 1px 0 var(--l5-glass-highlight),
-			0 18px 42px rgba(0, 0, 0, 0.2),
-			0 1px 3px rgba(0, 0, 0, 0.12);
-	}
-
+	/* Floating glass: popovers, menus, dialogs, and the composer surface.
+	   Same optical recipe as the pane, denser backing for legibility. Pair
+	   with .l5-glass-rim in markup for the corner-hugging highlight ring. */
+	.l5-liquid-popover,
 	.l5-adaptive-surface {
 		background:
 			linear-gradient(135deg, var(--l5-glass-highlight), transparent 38%),
@@ -388,20 +488,37 @@
 		-webkit-backdrop-filter: blur(64px) saturate(1.75);
 		box-shadow:
 			inset 0 1px 0 var(--l5-glass-highlight),
-			0 18px 42px rgba(0, 0, 0, 0.2),
-			0 1px 3px rgba(0, 0, 0, 0.12);
+			0 2px 6px rgba(0, 0, 0, 0.06),
+			0 16px 40px rgba(0, 0, 0, 0.16);
 	}
 
 	.l5-adaptive-chip {
-		background-color: color-mix(in srgb, var(--l5-background) 74%, transparent);
+		background:
+			linear-gradient(135deg, var(--l5-glass-highlight), transparent 46%),
+			color-mix(in srgb, var(--l5-background) 74%, transparent);
 		backdrop-filter: blur(40px) saturate(1.55);
 		-webkit-backdrop-filter: blur(40px) saturate(1.55);
+	}
+
+	/* The composer's own glass: lighter than a popover (it sits over the
+	   workspace, not over content it must fully occlude), denser than the
+	   sidebar pane so multi-line text stays comfortably readable. */
+	.l5-glass-composer {
+		background:
+			linear-gradient(135deg, var(--l5-glass-highlight), transparent 40%),
+			color-mix(in srgb, var(--l5-background) 68%, transparent);
+		backdrop-filter: blur(48px) saturate(1.6);
+		-webkit-backdrop-filter: blur(48px) saturate(1.6);
+		box-shadow:
+			0 1px 2px rgba(0, 0, 0, 0.04),
+			0 10px 32px rgba(0, 0, 0, 0.1);
 	}
 
 	@supports not (background-color: color-mix(in srgb, black, transparent)) {
 		.l5-liquid-popover,
 		.l5-adaptive-surface,
-		.l5-adaptive-chip {
+		.l5-adaptive-chip,
+		.l5-glass-composer {
 			background-color: var(--l5-background);
 		}
 	}

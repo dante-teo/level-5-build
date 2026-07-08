@@ -4,7 +4,7 @@ export default {
 	app: {
 		name: "Level5 Build",
 		identifier: "io.anvia.level5.build",
-		version: "2.2.3",
+		version: "2.2.5",
 	},
 	build: {
 		bun: {

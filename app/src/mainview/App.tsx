@@ -70,7 +70,7 @@ const COMPOSER_MAX_HEIGHT = 192;
 const DASHBOARD_REFRESH_DEBOUNCE_MS = 500;
 const DASHBOARD_RESERVED_WIDTH_REM = 24;
 const MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM = 42;
-const AGENT_SCROLL_INDICATOR_LEFT_INSET = 14;
+const AGENT_SCROLL_INDICATOR_LEFT_INSET = -28;
 const AGENT_SCROLL_INDICATOR_MIN_RAIL_HEIGHT = 132;
 const AGENT_SCROLL_INDICATOR_MAX_RAIL_HEIGHT = 220;
 const AGENT_SCROLL_INDICATOR_MIN_THUMB_HEIGHT = 48;
@@ -478,6 +478,7 @@ function App() {
 	const [composerProjectBranch, setComposerProjectBranch] = useState<string | null>(null);
 	const [composerHeight, setComposerHeight] = useState(224);
 	const [viewportWidth, setViewportWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
+	const [isTranscriptScrolled, setIsTranscriptScrolled] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 	const promptOverlayRef = useRef<HTMLDivElement | null>(null);
 	const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -656,6 +657,28 @@ function App() {
 		window.addEventListener("resize", updateViewportWidth);
 		return () => window.removeEventListener("resize", updateViewportWidth);
 	}, []);
+
+	useEffect(() => {
+		if (!hasConversation) {
+			setIsTranscriptScrolled(false);
+			return;
+		}
+		const element = transcriptScrollRef.current;
+		if (!element) {
+			return;
+		}
+
+		function updateScrolled() {
+			setIsTranscriptScrolled((current) => {
+				const next = element!.scrollTop > 0;
+				return current === next ? current : next;
+			});
+		}
+
+		updateScrolled();
+		element.addEventListener("scroll", updateScrolled, { passive: true });
+		return () => element.removeEventListener("scroll", updateScrolled);
+	}, [transcriptScrollRef, hasConversation]);
 
 	useEffect(() => {
 		if (!isDashboardEligible) {
@@ -1683,7 +1706,10 @@ function App() {
 			<div aria-hidden="true" className="fixed inset-0 z-0 bg-l5-background" />
 			<div
 				aria-hidden="true"
-				className="l5-frame-top-gradient pointer-events-none fixed inset-x-0 top-0 z-20"
+				className={cn(
+					"l5-frame-top-gradient pointer-events-none fixed inset-x-0 top-0 z-20 transition-opacity duration-slow ease-out",
+					isTranscriptScrolled ? "opacity-100" : "opacity-0",
+				)}
 				style={{ height: `${FRAME_TOP_GRADIENT_HEIGHT}px` }}
 			/>
 			<div
@@ -2642,7 +2668,7 @@ function AgentScrollIndicator({
 			aria-hidden="true"
 			className="pointer-events-none fixed top-1/2 z-20 -translate-y-1/2"
 			style={{
-				left: `${left + AGENT_SCROLL_INDICATOR_LEFT_INSET}px`,
+				left: `${Math.max(0, left + AGENT_SCROLL_INDICATOR_LEFT_INSET)}px`,
 				maxWidth: `calc(100vw - ${left + right}px)`,
 			}}
 		>

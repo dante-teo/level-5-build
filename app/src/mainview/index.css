@@ -71,8 +71,9 @@
 	--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.1);
 	--l5-topbar-gradient-top: rgba(250, 250, 252, 0.96);
 	--l5-topbar-gradient-mid: rgba(250, 250, 252, 0.75);
-	--l5-topbar-gradient-bottom: rgba(250, 250, 252, 0);
 	--l5-topbar-control-foreground: #09090b;
+	--l5-sidebar-tint-top: rgba(151, 178, 107, 0.16);
+	--l5-sidebar-tint-bottom: rgba(151, 178, 107, 0.02);
 
 	/* shadcn-compatible aliases so existing utility classes keep resolving */
 	--background: var(--l5-background);
@@ -123,8 +124,9 @@
 		--l5-glass-pane-control-hover: rgba(0, 0, 0, 0.24);
 		--l5-topbar-gradient-top: rgba(19, 20, 22, 0.96);
 		--l5-topbar-gradient-mid: rgba(19, 20, 22, 0.75);
-		--l5-topbar-gradient-bottom: rgba(19, 20, 22, 0);
 		--l5-topbar-control-foreground: #ffffff;
+		--l5-sidebar-tint-top: rgba(151, 178, 107, 0.14);
+		--l5-sidebar-tint-bottom: rgba(151, 178, 107, 0.03);
 	}
 }
 
@@ -268,6 +270,7 @@
 	.l5-liquid-pane {
 		background:
 			linear-gradient(135deg, var(--l5-glass-highlight), transparent 34%),
+			linear-gradient(180deg, var(--l5-sidebar-tint-top), var(--l5-sidebar-tint-bottom) 65%, transparent),
 			linear-gradient(180deg, var(--l5-glass-pane), var(--l5-glass-pane-strong));
 		border: 1px solid transparent;
 		background-clip: padding-box;
@@ -283,17 +286,50 @@
 	}
 
 	.l5-frame-top-gradient {
+		/* Both the color/tint and the mask below share identical stops so
+		   the tint, blur, and opacity all fade out together -- a mismatch
+		   between them is what reads as a visible seam. Stays essentially
+		   full-strength for the first ~55% of the bar's real height, then
+		   eases out gradually over the remainder, reaching fully invisible
+		   right at the bar's own bottom edge (never spreading past it). */
 		background: linear-gradient(
 			to bottom,
 			var(--l5-topbar-gradient-top) 0%,
-			var(--l5-topbar-gradient-mid) 75%,
-			var(--l5-topbar-gradient-bottom) 100%
+			var(--l5-topbar-gradient-top) 55%,
+			var(--l5-topbar-gradient-mid) 68%,
+			transparent 100%
 		);
-		backdrop-filter: blur(18px) saturate(1.2);
-		-webkit-backdrop-filter: blur(18px) saturate(1.2);
+		backdrop-filter: blur(20px) saturate(1.15);
+		-webkit-backdrop-filter: blur(20px) saturate(1.15);
+		mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black 55%,
+			rgba(0, 0, 0, 0.9) 63%,
+			rgba(0, 0, 0, 0.72) 71%,
+			rgba(0, 0, 0, 0.5) 79%,
+			rgba(0, 0, 0, 0.28) 87%,
+			rgba(0, 0, 0, 0.1) 94%,
+			transparent 100%
+		);
+		-webkit-mask-image: linear-gradient(
+			to bottom,
+			black 0%,
+			black 55%,
+			rgba(0, 0, 0, 0.9) 63%,
+			rgba(0, 0, 0, 0.72) 71%,
+			rgba(0, 0, 0, 0.5) 79%,
+			rgba(0, 0, 0, 0.28) 87%,
+			rgba(0, 0, 0, 0.1) 94%,
+			transparent 100%
+		);
 	}
 
 	.l5-topbar-glass-control .glass {
+		background:
+			linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 42%),
+			var(--l5-glass-control);
+		border: 1px solid var(--l5-glass-border);
 		box-shadow: none !important;
 	}
 

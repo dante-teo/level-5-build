@@ -164,6 +164,7 @@ Rules:
 - Never collapse into icon-only mode automatically.
 - Manual collapse hides the sidebar completely. Keep the collapse/expand affordance reachable when the sidebar is hidden.
 - The expanded sidebar is a floating liquid-glass pane, currently inset `8px` from the window on the left/top/bottom with `26px` corner radius.
+- The glass pane carries a very subtle green ("matcha") tint gradient behind the glass, strongest near the top and fading to nothing by roughly two-thirds of the way down. It is a faint color wash, not a flat tinted panel — token definitions only (`--l5-sidebar-tint-top`/`--l5-sidebar-tint-bottom`), adaptive per light/dark like the rest of the glass tokens.
 - The native macOS traffic lights are real OS controls visually embedded in the pane's top glass row. Do not fake or hide them.
 - The pane's top row is about `44px` high. The in-pane collapse button is a small circular icon aligned to that row; when collapsed, the same affordance animates into the left top-bar position and grows to the top-bar control size.
 - Selected rows use a subtle surface tint plus the accent color.
@@ -198,7 +199,7 @@ Rules:
 - Let the bottom composer anchor the interaction model.
 - The transcript scroll layer spans the full workspace/window behind the floating sidebar and top chrome. Keep transcript content centered for readability, and apply left clearance while the sidebar pane is expanded so readable content is not covered.
 - Native transcript scrollbars should stay hidden; scrolling must still work.
-- The transcript uses a custom visual scroll indicator on the left edge of the agent pane. It is not an interactive scrollbar replacement: keep native wheel/trackpad scrolling on the transcript container, keep the indicator partial-height and vertically centered, and render it as stacked horizontal dashes where low-opacity dashes show the rail and higher-opacity dashes show the current scroll position.
+- The transcript uses a custom visual scroll indicator positioned in the clearance gap between the sidebar and the transcript's own content gutter (near the sidebar's edge, not inside the transcript's text padding). It is not an interactive scrollbar replacement: keep native wheel/trackpad scrolling on the transcript container, keep the indicator partial-height and vertically centered, and render it as stacked horizontal dashes where low-opacity dashes show the rail and higher-opacity dashes show the current scroll position.
 
 ### Top Bar
 
@@ -207,7 +208,7 @@ Height is content-driven. The current workspace toolbar row uses circular `44px`
 Rules:
 
 - The workspace top bar is a translucent overlay, not a second opaque app header.
-- Use native/material glass behavior with a top-to-bottom fade so transcript content can begin under it while remaining readable through scroll content inset.
+- Use native/material glass behavior with a top-to-bottom fade so transcript content can begin under it while remaining readable through scroll content inset. The blur/tint is implicit, not a hard bar: fully invisible while the transcript is scrolled to the top, fading in only once the user scrolls down. Stays essentially full-strength for most of the bar's own height, then eases out gradually over many gradient stops within that same height (never spreading into the content below it) so the falloff has no perceptible edge, like a soft shadow rather than a sharp cutoff line.
 - Do not hide the macOS traffic-light controls to achieve this treatment.
 - Controls stay sparse. Dashboard and Review align to the right edge; the sidebar expand affordance aligns near the traffic-light cluster when the sidebar is collapsed.
 - Do not show an app/session title capsule in the top bar.

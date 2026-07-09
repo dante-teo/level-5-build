@@ -31,6 +31,7 @@ import {
 	resolveAgentCwd,
 	shouldPersistSessionInfoUpdate,
 } from "./agent/runtime";
+import { buildPromptContent } from "./agent/promptContent";
 import { getProjectGitStatus } from "./git/status";
 import { getFileDiffPreview, getProjectReviewSnapshot } from "./git/review";
 import { applyMacWindowEffects } from "./macWindowEffects";
@@ -74,7 +75,6 @@ import type {
 	AgentPermissionOption,
 	AgentPermissionRequest,
 	AgentPlanItem,
-	AgentPromptAttachment,
 	AgentSessionSummary,
 	AgentSkill,
 	AgentSlashCommand,
@@ -449,7 +449,7 @@ class ProjectAgentConnection {
 			const result = asObject(
 				await this.requireAcp().prompt({
 					sessionId,
-					prompt: buildPromptContent(params.prompt, params.attachments),
+					prompt: buildPromptContent(params.prompt, params.attachments, params.planMode ?? false),
 				}),
 			);
 			if (this.cancellationRequested) {
@@ -1508,19 +1508,6 @@ function normalizeToolCall(value: JsonValue | undefined, options: { isUpdate?: b
 		locations: Array.isArray(object.locations) ? object.locations : undefined,
 		rawInput: object.rawInput,
 	};
-}
-
-function buildPromptContent(prompt: string, attachments: AgentPromptAttachment[] | undefined): JsonValue[] {
-	const content: JsonValue[] = [{ type: "text", text: prompt }];
-	for (const attachment of attachments ?? []) {
-		content.push({
-			type: "resource_link",
-			uri: `file://${attachment.path}`,
-			name: attachment.name,
-			...(attachment.type === "directory" ? { description: "Directory" } : {}),
-		});
-	}
-	return content;
 }
 
 function normalizeSlashCommand(value: JsonValue): AgentSlashCommand {

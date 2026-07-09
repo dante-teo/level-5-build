@@ -7,6 +7,7 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Circle,
+	ClipboardList,
 	FileText,
 	Folder,
 	GitBranch,
@@ -89,6 +90,7 @@ export const ICONS = {
 	loading: LoaderCircle,
 	more: MoreHorizontal,
 	plan: ListTodo,
+	planMode: ClipboardList, // Plan-mode composer toggle/chip (distinct from plan: progress-chip icon)
 	search: Search,
 	send: Send,
 	sidebarCollapse: PanelLeftClose,

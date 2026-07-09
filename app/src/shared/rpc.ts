@@ -233,6 +233,7 @@ export type StartAgentPromptParams = {
 	cwd?: string | null;
 	model?: AgentModelId | string;
 	approvalMode?: ApprovalModeId | string;
+	planMode?: boolean;
 	attachments?: AgentPromptAttachment[];
 	// Set when continuing an already-known session (selected from the
 	// sidebar). Selecting a session is pure local retrieval and never talks

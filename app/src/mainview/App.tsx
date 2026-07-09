@@ -13,7 +13,7 @@ import {
 } from "react";
 import { useAtom } from "jotai";
 import LiquidGlass from "liquid-glass-react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import { Markdown } from "@/lib/markdown";
 import { useStickToBottom } from "use-stick-to-bottom";
 import type { LucideIcon } from "lucide-react";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -150,6 +150,7 @@ type QueuedPrompt = {
 	id: string;
 	text: string;
 	attachments: AttachmentItem[];
+	planMode: boolean;
 };
 
 // Shared glass chrome. Popovers/menus animate in with a 120ms ease-out
@@ -460,6 +461,8 @@ function App() {
 	const [runStatus, setRunStatus] = useState<AgentRunStatus>("idle");
 	const [stopReason, setStopReason] = useState<string | null>(null);
 	const [pendingPermission, setPendingPermission] = useState<AgentPermissionRequest | null>(null);
+	const [isPlanModeEnabled, setIsPlanModeEnabled] = useState(false);
+	const [pendingPlanEscalation, setPendingPlanEscalation] = useState<{ planText: string } | null>(null);
 	const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
 	const [isApprovalMenuOpen, setIsApprovalMenuOpen] = useState(false);
 	const [slashCommands, setSlashCommands] = useState<AgentSlashCommand[]>([]);
@@ -469,6 +472,9 @@ function App() {
 	const [lastSubmittedAttachmentCount, setLastSubmittedAttachmentCount] = useState(0);
 	const [queuedPrompts, setQueuedPrompts] = useState<QueuedPrompt[]>([]);
 	const queuedPromptsRef = useRef<QueuedPrompt[]>([]);
+	const planModeSendRef = useRef(false);
+	const transcriptItemsRef = useRef<TranscriptItem[]>([]);
+	const planTurnStartIndexRef = useRef(0);
 	const [gitStatus, setGitStatus] = useState<ProjectGitStatus | null>(null);
 	const [isGitStatusRefreshing, setIsGitStatusRefreshing] = useState(false);
 	const [isReviewOpen, setIsReviewOpen] = useState(false);
@@ -873,7 +879,7 @@ function App() {
 				return;
 			}
 			if (update.kind === "thought") {
-				setTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
+				updateTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
 				return;
 			}
 			if (update.kind === "plan") {
@@ -883,7 +889,7 @@ function App() {
 				return;
 			}
 			if (update.kind === "tool") {
-				setTranscriptItems((current) => upsertToolItem(current, update.tool));
+				updateTranscriptItems((current) => upsertToolItem(current, update.tool));
 				if (shouldRefreshGitAfterTool(update.tool)) {
 					scheduleGitStatusRefresh();
 				}
@@ -921,13 +927,43 @@ function App() {
 				setStopReason(update.stopReason);
 				setRunStatus("completed");
 				void refreshAgentSessions();
+				if (planModeSendRef.current) {
+					planModeSendRef.current = false;
+					if (update.stopReason === "end_turn") {
+						const items = transcriptItemsRef.current;
+						const startIndex = planTurnStartIndexRef.current;
+						let planText: string | null = null;
+						for (let i = items.length - 1; i >= startIndex; i--) {
+							const item = items[i];
+							if (item.type === "message" && item.message.role === "agent" && item.message.text.trim() !== "") {
+								planText = item.message.text;
+								break;
+							}
+						}
+						if (planText) {
+							setPendingPlanEscalation({ planText });
+						} else {
+							showComposerStatus("Plan mode: no plan was returned. Try again.");
+							dequeueNextPrompt();
+						}
+					} else {
+						showComposerStatus("Plan mode: no plan was returned. Try again.");
+						dequeueNextPrompt();
+					}
+					return;
+				}
 				dequeueNextPrompt();
 				return;
 			}
 			if (update.kind === "error") {
 				pendingPromptProjectFolderRef.current = undefined;
-				setTranscriptItems((current) => upsertErrorItem(current, update.message));
+				updateTranscriptItems((current) => upsertErrorItem(current, update.message));
 				setRunStatus("error");
+				if (planModeSendRef.current) {
+					planModeSendRef.current = false;
+					dequeueNextPrompt();
+					return;
+				}
 				dequeueNextPrompt();
 				return;
 			}
@@ -1130,7 +1166,7 @@ function App() {
 			return;
 		}
 		if (update.kind === "thought") {
-			setTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
+			updateTranscriptItems((current) => upsertThoughtItem(current, { id: update.messageId, text: contentText(update.content) }));
 			return;
 		}
 		if (update.kind === "plan") {
@@ -1138,7 +1174,7 @@ function App() {
 			return;
 		}
 		if (update.kind === "tool") {
-			setTranscriptItems((current) => upsertToolItem(current, update.tool));
+			updateTranscriptItems((current) => upsertToolItem(current, update.tool));
 			return;
 		}
 		if (update.kind === "usage") {
@@ -1150,7 +1186,7 @@ function App() {
 			return;
 		}
 		if (update.kind === "error") {
-			setTranscriptItems((current) => upsertErrorItem(current, update.message));
+			updateTranscriptItems((current) => upsertErrorItem(current, update.message));
 		}
 	}
 
@@ -1161,7 +1197,7 @@ function App() {
 			return;
 		}
 
-		setTranscriptItems((current) => upsertMessageItem(current, { id: update.messageId, role: update.role, text }));
+		updateTranscriptItems((current) => upsertMessageItem(current, { id: update.messageId, role: update.role, text }));
 	}
 
 	function mergeToolCall(current: ToolCallView | undefined, tool: AgentToolCall): ToolCallView {
@@ -1257,6 +1293,14 @@ function App() {
 			setComposerStatus(null);
 		}, 4000);
 	}
+	/** Wrapper that keeps transcriptItemsRef in sync for same-batch reads (e.g. plan-mode stop handler). */
+	function updateTranscriptItems(updater: (current: TranscriptItem[]) => TranscriptItem[]) {
+		setTranscriptItems((current) => {
+			const next = updater(current);
+			transcriptItemsRef.current = next;
+			return next;
+		});
+	}
 
 	async function refreshAgentSessions({ reportErrors = true }: { reportErrors?: boolean } = {}) {
 		try {
@@ -1271,7 +1315,7 @@ function App() {
 			if (!reportErrors) {
 				return;
 			}
-			setTranscriptItems((current) =>
+			updateTranscriptItems((current) =>
 				upsertErrorItem(current, error instanceof Error ? error.message : "Failed to refresh chats."),
 			);
 		}
@@ -1330,13 +1374,14 @@ function App() {
 		optimisticUserTextRef.current = null;
 		pendingPromptProjectFolderRef.current = undefined;
 		setPrompt("");
-		setTranscriptItems([]);
+		updateTranscriptItems(() => []);
 		setAttachments([]);
 		setLastSubmittedAttachmentCount(0);
 		setPlanItems(null);
 		setIsPlanPopoverOpen(false);
 		setStopReason(null);
 		setPendingPermission(null);
+		setPendingPlanEscalation(null);
 		setUsage(null);
 	}
 
@@ -1431,7 +1476,7 @@ function App() {
 
 		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
-			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before switching projects."));
+			updateTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before switching projects."));
 			return;
 		}
 
@@ -1455,7 +1500,7 @@ function App() {
 		void refreshRecentProjects();
 		if (prepared?.prepared === false) {
 			pendingPromptProjectFolderRef.current = undefined;
-			setTranscriptItems((current) => upsertErrorItem(current, prepared.reason ?? "Failed to prepare agent session."));
+			updateTranscriptItems((current) => upsertErrorItem(current, prepared.reason ?? "Failed to prepare agent session."));
 			setRunStatus("error");
 			return;
 		}
@@ -1477,7 +1522,7 @@ function App() {
 
 		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
-			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before leaving this project."));
+			updateTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before leaving this project."));
 			return;
 		}
 
@@ -1503,33 +1548,50 @@ function App() {
 	}
 
 	/** The actual ACP send; shared by an immediate send and a dequeued one. */
-	async function dispatchPrompt(trimmedPrompt: string, promptAttachments: AttachmentItem[]) {
+	async function dispatchPrompt(
+		trimmedPrompt: string,
+		promptAttachments: AttachmentItem[],
+		planMode: boolean,
+		options?: { sessionId?: string | null },
+	) {
 		setStopReason(null);
+		planModeSendRef.current = planMode;
+		if (planMode) {
+			planTurnStartIndexRef.current = transcriptItemsRef.current.length;
+		}
 		setRunStatus("starting");
 		pendingPromptProjectFolderRef.current = projectFolder;
 		optimisticUserTextRef.current = trimmedPrompt;
 		setLastSubmittedAttachmentCount(promptAttachments.length);
-		setTranscriptItems((current) =>
+		updateTranscriptItems((current) =>
 			upsertMessageItem(current, { id: `local-${Date.now()}`, role: "user", text: trimmedPrompt }),
 		);
 		void scrollToBottom();
+
+		// options?.sessionId overrides the live state for the clear-context
+		// path (handlePlanClearAndImplement): handleNewChat() enqueues
+		// setActiveSessionId(null), but the state update hasn't committed
+		// yet in the same tick, so reading activeSessionId directly would
+		// still see the old session id.
+		const resolvedSessionId = options !== undefined ? (options.sessionId ?? undefined) : (activeSessionId ?? undefined);
 
 		const response = await electroview.rpc?.request.startAgentPrompt({
 			prompt: trimmedPrompt,
 			cwd: projectFolder,
 			model: selectedModel || undefined,
 			approvalMode,
+			planMode,
 			attachments: promptAttachments.map(({ type, path, name }) => ({ type, path, name })),
 			// Continuing an already-selected session: this is what triggers
 			// send-time session/load priming on the backend. Omitted for a
 			// brand-new chat, which creates a fresh session instead.
-			sessionId: activeSessionId ?? undefined,
+			sessionId: resolvedSessionId,
 		});
 		if (!response?.accepted) {
 			pendingPromptProjectFolderRef.current = undefined;
 			optimisticUserTextRef.current = null;
-			setRunStatus("idle");
-			setTranscriptItems((current) => upsertErrorItem(current, "The agent is already running or the prompt was empty."));
+			planModeSendRef.current = false;
+			updateTranscriptItems((current) => upsertErrorItem(current, "The agent is already running or the prompt was empty."));
 			// DESIGN.md/ARCHITECTURE.md: "If a queued prompt fails, the model
 			// records an error row and continues to later queued prompts."
 			dequeueNextPrompt();
@@ -1548,7 +1610,7 @@ function App() {
 			return;
 		}
 		setQueuedPrompts((current) => current.slice(1));
-		void dispatchPrompt(next.text, next.attachments);
+		void dispatchPrompt(next.text, next.attachments, next.planMode);
 	}
 
 	async function handleSend() {
@@ -1561,7 +1623,7 @@ function App() {
 		// immutable snapshot rather than being rejected outright (see
 		// QueuedPrompt/dequeueNextPrompt).
 		if (isRunning) {
-			setQueuedPrompts((current) => [...current, { id: `queued-${Date.now()}-${current.length}`, text: trimmedPrompt, attachments }]);
+			setQueuedPrompts((current) => [...current, { id: `queued-${Date.now()}-${current.length}`, text: trimmedPrompt, attachments, planMode: isPlanModeEnabled }]);
 			setPrompt("");
 			setAttachments([]);
 			return;
@@ -1570,7 +1632,7 @@ function App() {
 		setPrompt("");
 		const promptAttachments = attachments;
 		setAttachments([]);
-		await dispatchPrompt(trimmedPrompt, promptAttachments);
+		await dispatchPrompt(trimmedPrompt, promptAttachments, isPlanModeEnabled);
 	}
 
 	function removeQueuedPrompt(id: string) {
@@ -1586,7 +1648,7 @@ function App() {
 		setQueuedPrompts([]);
 		const cancelled = await electroview.rpc?.request.cancelAgentPrompt({ sessionId: activeSessionId });
 		if (!cancelled) {
-			setTranscriptItems((current) => upsertErrorItem(current, "Could not stop the active agent turn."));
+			updateTranscriptItems((current) => upsertErrorItem(current, "Could not stop the active agent turn."));
 		}
 	}
 
@@ -1629,7 +1691,7 @@ function App() {
 		// on failure would permanently freeze the composer with no way out.
 		setPendingPermission((current) => (current?.requestId === requestId ? null : current));
 		if (failureMessage) {
-			setTranscriptItems((current) => upsertErrorItem(current, failureMessage));
+			updateTranscriptItems((current) => upsertErrorItem(current, failureMessage));
 		}
 	}
 
@@ -1637,20 +1699,54 @@ function App() {
 		setPrompt(text);
 	}
 
-	async function handleNewChat() {
-		if (isRunning) {
+	function handlePlanImplement() {
+		setIsPlanModeEnabled(false);
+		setPendingPlanEscalation(null);
+		void dispatchPrompt("Go ahead and implement the plan you just proposed.", [], false);
+	}
+
+	async function handlePlanClearAndImplement() {
+		const planText = pendingPlanEscalation?.planText;
+		if (!planText) {
 			return;
+		}
+		const resetOk = await handleNewChat();
+		if (!resetOk) {
+			return;
+		}
+		setQueuedPrompts([]);
+		setIsPlanModeEnabled(false);
+		setPendingPlanEscalation(null);
+		// handleNewChat() enqueues setActiveSessionId(null), but the state
+		// (and its useEffect-synced ref) haven't committed yet in the same
+		// tick. The agentUpdate handler's isOwnPendingUpdate gate reads
+		// activeSessionIdRef.current, so we must sync the ref now — otherwise
+		// the new chat's early push updates (status/session/config) would be
+		// gated out by a stale ref that still holds the old session id.
+		activeSessionIdRef.current = null;
+		void dispatchPrompt(`Implement this plan:\n\n${planText}`, [], false, { sessionId: null });
+	}
+
+	function handlePlanReject(reason: string) {
+		setPendingPlanEscalation(null);
+		void dispatchPrompt(reason, [], true);
+	}
+
+	async function handleNewChat(): Promise<boolean> {
+		if (isRunning) {
+			return false;
 		}
 		const started = await electroview.rpc?.request.startNewAgentChat();
 		if (started === false) {
-			setTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before starting a new chat."));
-			return;
+			updateTranscriptItems((current) => upsertErrorItem(current, "Wait for the active agent turn to finish before starting a new chat."));
+			return false;
 		}
 		resetConversationPane();
 		setActiveSessionId(null);
 		setContextMenu(null);
 		setDeleteTargetId(null);
 		setRunStatus("idle");
+		return true;
 	}
 
 	/**
@@ -1697,7 +1793,7 @@ function App() {
 		const response = await electroview.rpc?.request.deleteAgentSession({ sessionId: targetId });
 		if (!response?.deleted) {
 			setDeleteTargetId(null);
-			setTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to delete chat."));
+			updateTranscriptItems((current) => upsertErrorItem(current, response?.reason ?? "Failed to delete chat."));
 			return;
 		}
 
@@ -2157,6 +2253,8 @@ function App() {
 						<div className="l5-glass-composer l5-glass-rim relative z-10 overflow-visible rounded-panel">
 							{pendingPermission ? (
 								<ApprovalPrompt request={pendingPermission} onRespond={handlePermission} onDraftFeedback={handleDraftFeedback} />
+							) : pendingPlanEscalation ? (
+								<PlanEscalationPrompt planText={pendingPlanEscalation.planText} onClearAndImplement={handlePlanClearAndImplement} onImplement={handlePlanImplement} onReject={handlePlanReject} />
 							) : (
 							<>
 							<div className="px-6 pt-4">
@@ -2226,6 +2324,15 @@ function App() {
 													label="Upload folder"
 													onClick={() => void handleUploadFolder()}
 												/>
+												<ComposerMenuItem
+													icon={<ICONS.planMode className="size-4" strokeWidth={1.8} />}
+													label="Plan mode"
+													description={isPlanModeEnabled ? "On" : undefined}
+													onClick={() => {
+														setIsPlanModeEnabled((value) => !value);
+														closePlusMenu();
+													}}
+												/>
 											</div>
 
 											<div className="mt-2 border-t border-border pt-2">
@@ -2268,6 +2375,20 @@ function App() {
 										</div>
 									) : null}
 								</div>
+								{isPlanModeEnabled ? (
+									<button
+										type="button"
+										aria-pressed="true"
+										aria-label="Plan mode enabled — click to cancel"
+										onClick={() => setIsPlanModeEnabled(false)}
+										className={cn(
+											"l5-adaptive-chip electrobun-webkit-app-region-no-drag flex shrink-0 items-center gap-1.5 rounded-chip border border-l5-accent/28 px-2.5 py-1.5 text-caption font-medium text-l5-accent transition-colors duration-quick",
+										)}
+									>
+										<ICONS.planMode className="size-3.5" strokeWidth={1.9} />
+										<span>Plan</span>
+									</button>
+								) : null}
 								<div ref={approvalMenuRef} className="relative">
 									<button
 										type="button"
@@ -2866,69 +2987,19 @@ function SelectControl({
 	);
 }
 
-// Chat message bodies render Markdown (bold/italic, inline code, links,
-// lists, headings, blockquotes, code blocks) rather than raw text, mirroring
-// the native app's L5MarkdownTheme (see docs/DESIGN.md "Chat"). Component
-// overrides keep sizing/spacing consistent with the surrounding bubble
-// instead of relying on a Tailwind Typography plugin this project does not
-// have installed.
-const MARKDOWN_COMPONENTS: Components = {
-	p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-	a: ({ children, href }) => (
-		<a
-			href={href}
-			target="_blank"
-			rel="noreferrer"
-			className="text-l5-accent underline decoration-l5-accent/40 underline-offset-2 transition-colors duration-quick hover:decoration-l5-accent"
-		>
-			{children}
-		</a>
-	),
-	code: ({ className, children }) => {
-		const isBlock = Boolean(className);
-		return isBlock ? (
-			<code className={cn("font-mono text-mono", className)}>{children}</code>
-		) : (
-			<code className="rounded-small bg-muted px-1 py-0.5 font-mono text-mono">{children}</code>
-		);
-	},
-	pre: ({ children }) => (
-		<pre className="app-scrollbar-transparent my-2 overflow-x-auto rounded-medium border border-border/60 bg-muted/50 p-3 leading-relaxed last:mb-0">
-			{children}
-		</pre>
-	),
-	ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
-	ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
-	li: ({ children }) => <li>{children}</li>,
-	// Markdown headings inside chat map onto the compact end of the type
-	// scale (DESIGN.md "Typography": match display text to its container).
-	h1: ({ children }) => <h1 className="mb-2 mt-4 text-h3 font-semibold first:mt-0 last:mb-0">{children}</h1>,
-	h2: ({ children }) => <h2 className="mb-2 mt-3 text-body font-semibold first:mt-0 last:mb-0">{children}</h2>,
-	h3: ({ children }) => <h3 className="mb-2 mt-3 text-body font-semibold text-muted-foreground first:mt-0 last:mb-0">{children}</h3>,
-	blockquote: ({ children }) => (
-		<blockquote className="mb-2 border-l-2 border-l5-accent/30 pl-3 text-muted-foreground last:mb-0">
-			{children}
-		</blockquote>
-	),
-};
-
 function MessageBubble({ message }: { message: ChatMessage }) {
 	const isUser = message.role === "user";
 	// DESIGN.md "Chat": agent replies are readable text blocks, not speech
 	// bubbles; user messages carry a subtle tint only -- no shadows, no
 	// decorative chrome on either.
 	if (!isUser) {
-		return (
-			<div className="w-full text-body leading-6 text-foreground">
-				<ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.text}</ReactMarkdown>
-			</div>
-		);
+		return <Markdown className="w-full text-body leading-6 text-foreground">{message.text}</Markdown>;
 	}
 	return (
 		<div className="flex w-full justify-end">
-			<div className="max-w-[85%] rounded-card bg-l5-selected-surface px-4 py-3 text-body leading-6 text-foreground">
-				<ReactMarkdown components={MARKDOWN_COMPONENTS}>{message.text}</ReactMarkdown>
-			</div>
+			<Markdown className="max-w-[85%] rounded-card bg-l5-selected-surface px-4 py-3 text-body leading-6 text-foreground">
+				{message.text}
+			</Markdown>
 		</div>
 	);
 }
@@ -3176,6 +3247,105 @@ function ApprovalPrompt({
 					>
 						<ICONS.edit className="size-4 shrink-0" strokeWidth={1.8} />
 						<span>No, and tell the agent what to do differently</span>
+					</button>
+				)}
+			</div>
+		</div>
+	);
+}
+
+function PlanEscalationPrompt({
+	planText,
+	onClearAndImplement,
+	onImplement,
+	onReject,
+}: {
+	planText: string;
+	onClearAndImplement: () => void;
+	onImplement: () => void;
+	onReject: (reason: string) => void;
+}) {
+	const [isWritingReason, setIsWritingReason] = useState(false);
+	const [reasonText, setReasonText] = useState("");
+	const reasonInputRef = useRef<HTMLInputElement | null>(null);
+
+	useEffect(() => {
+		if (isWritingReason) {
+			reasonInputRef.current?.focus();
+		}
+	}, [isWritingReason]);
+
+	function submitReject() {
+		if (!reasonText.trim()) {
+			return;
+		}
+		onReject(reasonText.trim());
+	}
+
+	return (
+		<div className="px-6 py-5">
+			<div className="text-body font-semibold leading-6 text-foreground">Plan ready — how should the agent proceed?</div>
+			<div className="app-scrollbar-transparent mt-3 max-h-[40vh] overflow-y-auto rounded-medium bg-muted/70 p-3">
+				<Markdown className="text-caption leading-5 text-muted-foreground">{planText}</Markdown>
+			</div>
+			<div className="mt-4 flex flex-col gap-1">
+				<button
+					type="button"
+					className="flex items-center gap-3 rounded-medium px-3 py-2.5 text-left text-body font-medium text-foreground transition-colors duration-quick hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+					onClick={onImplement}
+				>
+					<span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-l5-elevated-surface text-caption font-semibold text-muted-foreground">1</span>
+					<span className="min-w-0 flex-1 truncate">Start implementation</span>
+				</button>
+				<button
+					type="button"
+					className="flex items-center gap-3 rounded-medium px-3 py-2.5 text-left text-body font-medium text-foreground transition-colors duration-quick hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35"
+					onClick={onClearAndImplement}
+				>
+					<span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border bg-l5-elevated-surface text-caption font-semibold text-muted-foreground">2</span>
+					<span className="min-w-0 flex-1 truncate">Clear context and start implementation</span>
+				</button>
+			</div>
+			<div className="mt-2 border-t border-border pt-2">
+				{isWritingReason ? (
+					<div className="flex items-center gap-2 px-1">
+						<ICONS.edit className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+						<input
+							ref={reasonInputRef}
+							type="text"
+							value={reasonText}
+							placeholder="Tell the agent what to change"
+							aria-label="Tell the agent what to change"
+							className="min-w-0 flex-1 bg-transparent text-body text-foreground placeholder:text-muted-foreground focus:outline-none"
+							onChange={(event) => setReasonText(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									submitReject();
+								} else if (event.key === "Escape") {
+									event.preventDefault();
+									setIsWritingReason(false);
+									setReasonText("");
+								}
+							}}
+						/>
+						<button
+							type="button"
+							disabled={!reasonText.trim()}
+							className="shrink-0 rounded-small bg-l5-accent px-3 py-1.5 text-caption font-semibold text-l5-accent-foreground transition-colors hover:bg-l5-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
+							onClick={submitReject}
+						>
+							Submit
+						</button>
+					</div>
+				) : (
+					<button
+						type="button"
+						className="flex items-center gap-2 rounded-medium px-3 py-2 text-left text-body font-medium text-muted-foreground transition-colors hover:bg-muted/50"
+						onClick={() => setIsWritingReason(true)}
+					>
+						<ICONS.edit className="size-4 shrink-0" strokeWidth={1.8} />
+						<span>No, and tell the agent what to change</span>
 					</button>
 				)}
 			</div>

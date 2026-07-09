@@ -26,7 +26,7 @@ This document still refers to token concepts by names like `L5Color`, `L5Font`, 
 | `L5Radius.<name>` | `--radius-<name>` theme key / `rounded-<name>` utility class |
 | `L5Elevation.<name>` (E1/E2/E3) | `--shadow-<name>` theme key / `shadow-<name>` utility class |
 | `L5Icon`/`L5IconView` | `app/src/mainview/lib/icon-map.ts`'s `ICONS` map over `lucide-react` |
-| `L5ButtonStyle`, `l5InputSurface()`, `l5Surface()` | Tailwind utility class combinations on plain `<button>`/`<input>` elements, composed with `cn()` |
+| Shared controls | New York-style shadcn/Radix primitives in `app/src/mainview/components/ui/`, adapted to Level5 tokens |
 
 App icon artwork: the source image is `app/assets/AppIconSource.png`; the macOS bundle icon (`app/assets/App.icns`) and in-app icon (`app/src/mainview/assets/app-icon.png`) are regenerated from it — see `docs/ARCHITECTURE.md`'s "App icon packaging". Keep the icon calm and Apple-native: a clear rounded-square silhouette, restrained material depth, and simple developer-tool symbolism. Avoid loud gradients, neon accents, busy code glyphs, childish marks, and generated-logo flourishes.
 
@@ -48,9 +48,9 @@ Core tokens are implemented in `L5Color`:
 - `textSecondary`: light `#6B7280`, dark `#B3B3B3`
 - `textMuted`: light `#9CA3AF`, dark `#858585`
 - `border`: adaptive hairline, light black `8%`, dark white `10%`
-- `accent`: light `#3F5CF5`, dark `#6F8DFF`
-- `accentForeground`: adaptive primary-action foreground, light white and dark near-black for contrast
-- `selectedSurface`: adaptive accent tint, light `10%`, dark `18%`
+- `accent`: muted olive matcha, light `#667A3E`, dark `#B2C97A`
+- `accentForeground`: light white, dark `#18200F`
+- `selectedSurface`: adaptive matcha tint, light `12%`, dark `17%`
 - `success`: light `#16A34A`, dark `#3FD176`
 - `warning`: light `#F59E0B`, dark `#FBBC05`
 - `danger`: light `#DC2626`, dark `#F87171`
@@ -77,10 +77,10 @@ Use `L5Font` (the `text-*` scale utility classes) instead of one-off font-size v
 
 Type scale:
 
-- Display: `32 / 700`
-- H1: `28 / 700`
-- H2: `22 / 600`
-- H3: `18 / 600`
+- Display: `28 / 700`
+- H1: `24 / 700`
+- H2: `20 / 600`
+- H3: `17 / 600`
 - Body: `14 / 400`
 - Caption: `12 / 500`
 - Mono: `13 / 400` by default
@@ -91,18 +91,18 @@ Do not introduce arbitrary font sizes. Match display text to its container: use 
 
 The primary layout is:
 
-`Floating Sidebar | Workspace | Optional Review Column`
+`Floating Sidebar | Workspace | Optional Inspector Sidecars`
 
 Rules:
 
 - Sidebar is a floating liquid-glass pane inset from the window edge, user-resizable from `260px` to `420px`.
 - Collapsing the sidebar hides the pane completely (`0px`) rather than leaving an icon rail.
 - Workspace remains full-window behind the floating pane; readable chat/composer content receives left clearance while the pane is expanded so it is not covered.
-- Review, when open, is a true third column to the right of the workspace.
-- Review should preserve at least a `520px` workspace; hide the Review toggle when the window cannot fit the workspace, resize handle, and default Review column even after sidebar collapse.
+- Review and Dashboard use right-side columns when the readable workspace fits.
+- Preserve at least a `520px` workspace. Collapse the sidebar first; if both inspectors still cannot fit, keep the most recently opened one and close the older one.
+- At compact widths, the active inspector becomes a right drawer with `Escape`, outside-click, focus containment, and an explicit close control. Do not impose a minimum window size.
 - The Review column is user-resizable for the current open interaction and should keep a visible drag target between the workspace and Review.
-- The project dashboard adapts inside the workspace between reserved wide layout and compact popover/overlay behavior.
-- Reserved dashboard space should still feel visually connected to the transcript area, not like a separate app column.
+- Dashboard and Review may appear simultaneously only when both panels and the readable workspace fit.
 - Top bar is an overlay across the full window/workspace, not a reserved layout row.
 - Top bar actions remain right aligned and should be kept minimal.
 - Window controls remain native.
@@ -168,7 +168,8 @@ Rules:
 - The native macOS traffic lights are real OS controls visually embedded in the pane's top glass row. Do not fake or hide them.
 - The pane's top row is about `44px` high. The in-pane collapse button is a small circular icon aligned to that row; when collapsed, the same affordance animates into the left top-bar position and grows to the top-bar control size.
 - Selected rows use a subtle surface tint plus the accent color.
-- Session rows in the current chat UI live under an `All chats` header. The empty state should sit close to the header, not centered deep in the sidebar.
+- Session rows live under `cwd` project groups ordered by each group's newest chat; rows within a group are ordered by recency. Projectless chats use a dedicated `No project` group.
+- The active project group stays expanded. Expansion for other groups is remembered only for the current renderer lifetime.
 - The active session row may show a compact right-aligned state indicator: spinner while running, quiet completion glyph when done, and no indicator while idle.
 - State precedence is awaiting permission, running, successful completion, then idle.
 - Delete is available only through the row context menu as `Delete Chat...` and must use native destructive confirmation before calling the backend.
@@ -203,7 +204,7 @@ Rules:
 
 ### Top Bar
 
-Height is content-driven. The current workspace toolbar row uses circular `44px` icon buttons plus symmetric `8px` vertical padding, for an effective height of about `60px`.
+Height is content-driven. Sparse circular controls are `36px` with `16px` icons and share the native traffic lights' `28px` optical centerline.
 
 Rules:
 
@@ -212,21 +213,25 @@ Rules:
 - Do not hide the macOS traffic-light controls to achieve this treatment.
 - Controls stay sparse. Dashboard and Review align to the right edge; the sidebar expand affordance aligns near the traffic-light cluster when the sidebar is collapsed.
 - Do not show an app/session title capsule in the top bar.
+- While the sidebar is collapsed, show the current chat title as quiet truncated text immediately to the right of the sidebar control; hide it again when the sidebar expands.
 - A project-backed active session may show a top-right dashboard trigger. When the dashboard is pinned open, the trigger should visibly highlight with the single accent color.
-- Any selected project or project-backed session may show a top-right Review trigger when the default Review column can fit.
+- Any selected project or project-backed session may show a top-right Review trigger; compact layouts present Review as a drawer.
 - Dashboard and Review triggers use the same circular glass treatment. Review keeps the same icon in open and closed states.
-- Top-bar controls use high-contrast foreground colors and no shadow. Hover darkens the whole circular glass surface slightly.
+- Top-bar controls use high-contrast foreground colors and quiet E1 grounding. Hover darkens the whole circular glass surface slightly. Tooltips include shortcuts.
 - Interactive controls inside draggable regions must opt out of drag behavior.
 
 ### Project Dashboard
 
-The project dashboard is contextual, not a permanent inspector. It appears only for project-backed active sessions and should show operational state, not raw runtime payloads.
+The project dashboard is contextual, explicitly invoked, and appears only for project-backed active sessions. It shows operational state, not raw runtime payloads.
+
+In panel mode, reserve its sidecar width in layout but render the Dashboard itself as an inset floating rounded rectangle with quiet elevation and workspace visible around it. It is a calm elevated surface, not another edge-to-edge wall and not an excuse to spread liquid glass into inspector content.
 
 Behavior:
 
-- Regular and wide layouts auto-open it, but users must still be able to close it.
-- Compact layouts use a temporary popover/overlay from the dashboard button.
-- Resize, session changes, or project-context changes should return the dashboard to the adaptive policy.
+- Never auto-open Dashboard.
+- Compact layouts use the shared right-drawer shell.
+- Resize may collapse the sidebar or close the older inspector, but must never automatically reopen an inspector later.
+- Dashboard open state belongs to the current conversation context. New Chat, project changes, session selection, and deletion of the active session must close it; temporarily becoming ineligible must never preserve a hidden pinned state that reopens in a replacement session.
 - Reserve workspace width only when the remaining conversation pane can stay readable.
 - Fit content height when possible and scroll only when content would exceed available height.
 - Layout thresholds should be defined with design tokens or component-derived values, not arbitrary pixel breakpoints.
@@ -292,16 +297,16 @@ Width defaults to `600px` and is user-resizable from `420px` to `820px` for the 
 
 Contains:
 
-- Header summary, branch/root hint, running-agent stale hint, filter, refresh, and close.
-- Compact path/status filter.
-- Continuous file sections with path, rename subtitle, staged/unstaged/mixed badges, additions/deletions, and binary/image/large markers.
+- Header summary, branch/root hint, filter, refresh, and close.
+- Compact path filter.
+- One continuous stream of every visible changed-file section with path, rename context, staged/unstaged/mixed badges, additions/deletions, and binary/image/large states. Do not add file selection, a navigator, or a one-file-at-a-time preview.
 - Unified diff sections with old/new gutters and horizontal scrolling.
-- Current working-tree image previews for changed images when AppKit can load them.
+- Current working-tree image previews for changed images recognized by the Git review backend.
 - Friendly Git errors with raw details in disclosure.
 
 Rules:
 
-- Opening Review may collapse the sidebar on narrow windows to preserve workspace width.
+- Opening Review may collapse the sidebar to preserve workspace width and becomes a right drawer at compact widths.
 - Review content must clear the floating top-bar controls; keep a top inset tied to the same frame/top-control height instead of hardcoding an unrelated padding.
 - Review is non-mutating: no commit, revert, staging, discard, approval, or permission-answering actions.
 - Use Git as the source of truth; do not show ignored files or recursive submodule contents.
@@ -309,14 +314,14 @@ Rules:
 - Large per-file diffs over `200 KB` show a deterministic too-large state, not truncation.
 - Keep the continuous diff dense but readable; avoid card stacks inside the column.
 - Use the adaptive design tokens (see index.css) for Review chrome. Diff semantics are derived from `L5Color.success`, `L5Color.danger`, `L5Color.accent`, and muted text tokens, not from a fixed dark editor palette.
-- Do not show icon-only Review controls unless they have real backed behavior. Backed controls today are refresh, close, filter, running/stale hint, and project/root context.
+- Do not show icon-only Review controls unless they have real backed behavior. Backed controls today are refresh and close; filter and project/root context remain visible text controls/context.
 
 ### Diff Viewer
 
 Rules:
 
 - Use monospace.
-- Use split view when possible.
+- Keep unified diffs; Review is inspect-only and unified-diff-only.
 - Use syntax highlighting when available.
 - Use restrained addition/deletion colors.
 - Avoid excessive background color and noisy borders.
@@ -409,6 +414,7 @@ Rules:
 - Tooltips or native help must name unfamiliar icon-only actions.
 - Text must not overflow, overlap, or become unreadable on supported window sizes.
 - Interactive controls inside draggable regions must remain reachable by pointer and keyboard.
+- Compact inspector drawers are modal focus scopes: opening moves focus into the drawer; `Tab` and `Shift+Tab` wrap at both boundaries (including when focus starts on the pane itself); focus found behind the backdrop is pulled back inside; `Escape` closes; closing restores the previously focused control when it still exists.
 
 ## Do's and Don'ts
 

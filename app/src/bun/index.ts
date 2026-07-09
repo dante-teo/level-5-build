@@ -57,6 +57,7 @@ import {
 	toSessionSummary,
 } from "./persistence/sessionSync";
 import { APPROVAL_MODE_LABELS } from "../shared/rpc";
+import { WINDOW_TRAFFIC_LIGHT_OFFSET } from "../shared/windowChrome";
 import type {
 	AppRPC,
 	AcpProviderId,
@@ -1689,16 +1690,11 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 const isMacOS = process.platform === "darwin";
-const TRAFFIC_LIGHT_OFFSET = {
-	x: 18,
-	y: 22,
-} as const;
-
 mainWindow = new BrowserWindow({
 	title: "Level5 Build",
 	url,
 	titleBarStyle: "hiddenInset",
-	trafficLightOffset: TRAFFIC_LIGHT_OFFSET,
+	trafficLightOffset: WINDOW_TRAFFIC_LIGHT_OFFSET,
 	// Required for the sidebar/floating capsules' translucent surfaces to
 	// reveal genuine NSVisualEffectView vibrancy (see applyMacWindowEffects)
 	// instead of flatly blurring an opaque window background.
@@ -1712,7 +1708,7 @@ mainWindow = new BrowserWindow({
 	rpc,
 });
 
-mainWindow.setWindowButtonPosition(TRAFFIC_LIGHT_OFFSET.x, TRAFFIC_LIGHT_OFFSET.y);
+mainWindow.setWindowButtonPosition(WINDOW_TRAFFIC_LIGHT_OFFSET.x, WINDOW_TRAFFIC_LIGHT_OFFSET.y);
 
 if (isMacOS) {
 	const { vibrancy, shadow } = applyMacWindowEffects(mainWindow);

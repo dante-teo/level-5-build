@@ -54,9 +54,10 @@
 	--l5-text-secondary: #6b7280;
 	--l5-text-muted: #9ca3af;
 	--l5-border: rgba(0, 0, 0, 0.08);
-	--l5-accent: #3f5cf5;
+	--l5-accent: #667a3e;
 	--l5-accent-foreground: #ffffff;
-	--l5-selected-surface: rgba(63, 92, 245, 0.1);
+	--l5-selected-surface: rgba(102, 122, 62, 0.12);
+	--l5-focus-ring: rgba(102, 122, 62, 0.42);
 	--l5-success: #16a34a;
 	--l5-warning: #f59e0b;
 	--l5-danger: #dc2626;
@@ -75,8 +76,8 @@
 	--l5-topbar-gradient-top: rgba(250, 250, 252, 0.96);
 	--l5-topbar-gradient-mid: rgba(250, 250, 252, 0.75);
 	--l5-topbar-control-foreground: #09090b;
-	--l5-sidebar-tint-top: rgba(151, 178, 107, 0.16);
-	--l5-sidebar-tint-bottom: rgba(151, 178, 107, 0.02);
+	--l5-sidebar-tint-top: rgba(102, 122, 62, 0.17);
+	--l5-sidebar-tint-bottom: rgba(102, 122, 62, 0.025);
 
 	/* shadcn-compatible aliases so existing utility classes keep resolving */
 	--background: var(--l5-background);
@@ -110,9 +111,10 @@
 		--l5-text-secondary: #b3b3b3;
 		--l5-text-muted: #858585;
 		--l5-border: rgba(255, 255, 255, 0.1);
-		--l5-accent: #6f8dff;
-		--l5-accent-foreground: #0b0e1a;
-		--l5-selected-surface: rgba(111, 141, 255, 0.18);
+		--l5-accent: #b2c97a;
+		--l5-accent-foreground: #18200f;
+		--l5-selected-surface: rgba(178, 201, 122, 0.17);
+		--l5-focus-ring: rgba(178, 201, 122, 0.48);
 		--l5-success: #3fd176;
 		--l5-warning: #fbbc05;
 		--l5-danger: #f87171;
@@ -131,8 +133,8 @@
 		--l5-topbar-gradient-top: rgba(19, 20, 22, 0.96);
 		--l5-topbar-gradient-mid: rgba(19, 20, 22, 0.75);
 		--l5-topbar-control-foreground: #ffffff;
-		--l5-sidebar-tint-top: rgba(151, 178, 107, 0.14);
-		--l5-sidebar-tint-bottom: rgba(151, 178, 107, 0.03);
+		--l5-sidebar-tint-top: rgba(178, 201, 122, 0.15);
+		--l5-sidebar-tint-bottom: rgba(178, 201, 122, 0.03);
 	}
 }
 
@@ -188,16 +190,16 @@
 	/* Level5 type scale (docs/DESIGN.md); pair with font-bold/font-semibold/font-medium
 	   at each usage site. Display sizes carry slightly tight tracking for an
 	   optically balanced, native feel; body/caption stay neutral. */
-	--text-display: 32px;
+	--text-display: 28px;
 	--text-display--line-height: 1.2;
 	--text-display--letter-spacing: -0.02em;
-	--text-h1: 28px;
+	--text-h1: 24px;
 	--text-h1--line-height: 1.2;
 	--text-h1--letter-spacing: -0.02em;
-	--text-h2: 22px;
+	--text-h2: 20px;
 	--text-h2--line-height: 1.3;
 	--text-h2--letter-spacing: -0.01em;
-	--text-h3: 18px;
+	--text-h3: 17px;
 	--text-h3--line-height: 1.3;
 	--text-h3--letter-spacing: -0.01em;
 	--text-body: 14px;
@@ -433,12 +435,14 @@
 		);
 	}
 
-	.l5-topbar-glass-control .glass {
+	.l5-top-control {
 		background:
 			linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 42%),
 			var(--l5-glass-control);
 		border: 1px solid var(--l5-glass-border);
-		box-shadow: none !important;
+		box-shadow: var(--shadow-e1);
+		backdrop-filter: blur(28px) saturate(1.5);
+		-webkit-backdrop-filter: blur(28px) saturate(1.5);
 	}
 
 	.l5-sidebar-toggle-shell {
@@ -467,13 +471,14 @@
 		color: var(--l5-glass-text);
 	}
 
-	.l5-topbar-glass-control button:hover,
+	.l5-top-control:hover,
 	.l5-sidebar-toggle-shell button:hover {
 		background-color: var(--l5-glass-pane-control-hover);
 	}
 
-	.l5-topbar-glass-control:has(button[aria-pressed="true"]) button {
+	.l5-top-control[aria-pressed="true"] {
 		color: var(--l5-accent);
+		border-color: color-mix(in srgb, var(--l5-accent) 38%, transparent);
 	}
 
 	/* Floating glass: popovers, menus, dialogs, and the composer surface.

@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
@@ -33,49 +36,35 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 		await electroview.rpc?.request.setAcpProvider({ provider: next });
 	}
 
-	useEffect(() => {
-		function handleKeyDown(event: KeyboardEvent) {
-			if (event.key === "Escape") onClose();
-		}
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [onClose]);
-
 	return (
-		<div
-			className="electrobun-webkit-app-region-no-drag fixed inset-0 z-40 flex items-center justify-center bg-black/25 p-6 backdrop-blur-md"
-			role="presentation"
-			onDoubleClick={(event) => event.stopPropagation()}
-			onMouseDown={(event) => {
-				if (event.target === event.currentTarget) onClose();
-			}}
-		>
-			<section
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="settings-title"
-				className="l5-adaptive-surface l5-glass-rim w-full max-w-sm animate-in fade-in-0 zoom-in-95 rounded-panel p-5 shadow-e3 duration-quick ease-out"
-			>
+		<Dialog open onOpenChange={(open) => !open && onClose()}>
+			<DialogContent className="max-w-sm" onDoubleClick={(event) => event.stopPropagation()}>
 				<div className="flex items-start justify-between gap-3">
-					<h2 id="settings-title" className="text-h3 font-semibold text-foreground">
-						Settings
-					</h2>
-					<button
-						type="button"
+					<div>
+						<DialogTitle>Settings</DialogTitle>
+						<DialogDescription className="mt-1">Configure how Level5 runs coding sessions.</DialogDescription>
+					</div>
+					<Button
 						aria-label="Close settings"
-						className="flex size-8 shrink-0 items-center justify-center rounded-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+						variant="ghost"
+						size="icon"
+						className="size-8"
 						onClick={onClose}
 					>
 						<ICONS.close className="size-4" strokeWidth={1.9} />
-					</button>
+					</Button>
 				</div>
 
-				<div className="mt-5">
-					<div className="block text-caption font-semibold text-muted-foreground">
-						Agent provider
-					</div>
+				<Separator className="my-5" />
+				<section aria-labelledby="agent-settings-title">
+					<h3 id="agent-settings-title" className="text-body font-semibold text-foreground">Agent</h3>
+					<p className="mt-1 text-caption text-muted-foreground">Changes apply immediately to the next connection setup.</p>
+					<label className="mt-4 block text-caption font-semibold text-muted-foreground" htmlFor="agent-provider">
+						Provider
+					</label>
 					<Select value={provider} disabled={isLoading} onValueChange={(value) => void handleChange(value as AcpProviderId)}>
 						<SelectTrigger
+							id="agent-provider"
 							aria-label="Agent provider"
 							className="mt-2 h-10 w-full border-border bg-l5-surface px-3 text-body font-medium"
 						>
@@ -91,8 +80,8 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 							</SelectGroup>
 						</SelectContent>
 					</Select>
-				</div>
-			</section>
-		</div>
+				</section>
+			</DialogContent>
+		</Dialog>
 	);
 }

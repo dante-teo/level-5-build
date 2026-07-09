@@ -12,14 +12,25 @@ import {
 	useState,
 } from "react";
 import { useAtom } from "jotai";
-import LiquidGlass from "liquid-glass-react";
+import { InspectorBackdrop } from "@/components/InspectorBackdrop";
+import { TopBarGlassButton } from "@/components/TopBarGlassButton";
 import { Markdown } from "@/lib/markdown";
 import { useStickToBottom } from "use-stick-to-bottom";
 import type { LucideIcon } from "lucide-react";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { electroview } from "@/lib/electrobun";
 import { ICONS } from "@/lib/icon-map";
+import { resolveInspectorLayout } from "@/lib/layout";
+import { expandedSessionGroupKeys, groupSessionsByProject } from "@/lib/sessionGroups";
 import { cn } from "@/lib/utils";
+import { useDrawerFocusTrap } from "@/lib/useDrawerFocusTrap";
+import {
+	WINDOW_FRAME_INSET,
+	WINDOW_TRAFFIC_LIGHT_OFFSET,
+	WINDOW_TOP_BAR_HEIGHT,
+	WINDOW_TOP_CONTROL_SIZE,
+	WINDOW_TOP_CONTROL_TOP,
+} from "@shared/windowChrome";
 import { REVIEW_PANE_DEFAULT_WIDTH, ReviewPane } from "@/ReviewPane";
 import { SettingsDialog } from "@/SettingsDialog";
 import { isDashboardPinnedAtom, isSidebarCollapsedAtom, sidebarWidthAtom } from "@/state/ui";
@@ -49,18 +60,18 @@ import {
 
 const SIDEBAR_MIN_WIDTH = 260;
 const SIDEBAR_MAX_WIDTH = 420;
-const FRAME_INSET = 8;
+const FRAME_INSET = WINDOW_FRAME_INSET;
 const SIDEBAR_TOP_BAR_HEIGHT = 44;
 const SIDEBAR_COLLAPSE_BUTTON_SIZE = 20;
 const SIDEBAR_COLLAPSE_BUTTON_RIGHT_INSET = 16;
-const FRAME_TOP_CONTROL_TOP = 8;
-const FRAME_TOP_CONTROL_SIZE = 44;
-const FRAME_TOP_BAR_HEIGHT = FRAME_TOP_CONTROL_TOP * 2 + FRAME_TOP_CONTROL_SIZE;
+const FRAME_TOP_CONTROL_TOP = WINDOW_TOP_CONTROL_TOP;
+const FRAME_TOP_CONTROL_SIZE = WINDOW_TOP_CONTROL_SIZE;
+const FRAME_TOP_BAR_HEIGHT = WINDOW_TOP_BAR_HEIGHT;
 const FRAME_TOP_GRADIENT_HEIGHT = FRAME_TOP_BAR_HEIGHT;
 const FRAME_TOP_CONTROL_GAP = 6;
-const MAC_TRAFFIC_LIGHT_X = 18;
 const MAC_TRAFFIC_LIGHT_CLUSTER_WIDTH = 64;
-const FRAME_COLLAPSED_LEFT_CONTROLS = MAC_TRAFFIC_LIGHT_X + MAC_TRAFFIC_LIGHT_CLUSTER_WIDTH + FRAME_TOP_CONTROL_GAP;
+const FRAME_COLLAPSED_LEFT_CONTROLS =
+	WINDOW_TRAFFIC_LIGHT_OFFSET.x + MAC_TRAFFIC_LIGHT_CLUSTER_WIDTH + FRAME_TOP_CONTROL_GAP;
 const WORKSPACE_SIDEBAR_CLEARANCE = 32;
 // Taller idle/empty composer (~150px total with the toolbar row) to match
 // the reference composer's generous vertical padding around the
@@ -69,7 +80,6 @@ const COMPOSER_MIN_HEIGHT = 72;
 const COMPOSER_MAX_HEIGHT = 192;
 const DASHBOARD_REFRESH_DEBOUNCE_MS = 500;
 const DASHBOARD_RESERVED_WIDTH_REM = 24;
-const MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM = 42;
 const AGENT_SCROLL_INDICATOR_LEFT_INSET = -28;
 const AGENT_SCROLL_INDICATOR_MIN_RAIL_HEIGHT = 132;
 const AGENT_SCROLL_INDICATOR_MAX_RAIL_HEIGHT = 220;
@@ -177,31 +187,6 @@ function SidebarButton({ children, className, ...props }: SidebarButtonProps) {
 		>
 			{children}
 		</button>
-	);
-}
-
-function LiquidGlassButton({ children, className, style, ...props }: SidebarButtonProps) {
-	return (
-		<div className={cn("l5-topbar-glass-control electrobun-webkit-app-region-no-drag relative shrink-0", className)} style={style}>
-			<LiquidGlass
-				cornerRadius={FRAME_TOP_CONTROL_SIZE / 2}
-				padding="0"
-				displacementScale={38}
-				blurAmount={0.08}
-				aberrationIntensity={2}
-				elasticity={0.12}
-				style={{ position: "absolute", top: "50%", left: "50%" }}
-			>
-				<button
-					type="button"
-					className="flex items-center justify-center rounded-full text-l5-topbar-control transition-colors hover:text-l5-topbar-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-l5-accent/35 disabled:cursor-not-allowed"
-					style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
-					{...props}
-				>
-					{children}
-				</button>
-			</LiquidGlass>
-		</div>
 	);
 }
 
@@ -454,6 +439,7 @@ function App() {
 	const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>([]);
 	const [usage, setUsage] = useState<AgentUsage | null>(null);
 	const [sessions, setSessions] = useState<AgentSessionSummary[]>([]);
+	const [rememberedExpandedGroups, setRememberedExpandedGroups] = useState<Set<string>>(() => new Set());
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
 	const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
@@ -478,6 +464,7 @@ function App() {
 	const [gitStatus, setGitStatus] = useState<ProjectGitStatus | null>(null);
 	const [isGitStatusRefreshing, setIsGitStatusRefreshing] = useState(false);
 	const [isReviewOpen, setIsReviewOpen] = useState(false);
+	const [inspectorOpenedAt, setInspectorOpenedAt] = useState({ dashboard: 0, review: 0 });
 	// Not persisted across opens/relaunches by design (DESIGN.md "Review
 	// Panel": "user-resizable... for the current open interaction only. Do
 	// not persist width or open state.").
@@ -502,6 +489,7 @@ function App() {
 	const sessionProjectFoldersRef = useRef(new Map<string, string | null>());
 	const planPopoverRef = useRef<HTMLDivElement | null>(null);
 	const composerStatusTimerRef = useRef<number | null>(null);
+	const dashboardDrawerRef = useRef<HTMLElement | null>(null);
 	const gitRefreshTimerRef = useRef<number | null>(null);
 	const projectFolderRef = useRef<string | null>(null);
 	const activeSessionIdRef = useRef<string | null>(null);
@@ -525,6 +513,11 @@ function App() {
 	const isStopping = runStatus === "stopping";
 	const hasConversation = transcriptItems.length > 0;
 	const segments = useMemo(() => segmentTranscript(transcriptItems), [transcriptItems]);
+	const sessionGroups = useMemo(() => groupSessionsByProject(sessions), [sessions]);
+	const visibleSessionGroupKeys = useMemo(
+		() => expandedSessionGroupKeys(sessionGroups, rememberedExpandedGroups, projectFolder),
+		[projectFolder, rememberedExpandedGroups, sessionGroups],
+	);
 	const activeSessionStatus = activeSessionId ? runStatus : "idle";
 	const activeSession = activeSessionId ? sessions.find((session) => session.sessionId === activeSessionId) : undefined;
 	const deleteTarget = deleteTargetId ? sessions.find((session) => session.sessionId === deleteTargetId) : undefined;
@@ -534,31 +527,30 @@ function App() {
 			item.type === "message" && item.message.role === "user",
 	);
 	const activeSessionTitle = sessionTitle(activeSession);
-	const shouldShowSessionContext = hasConversation && Boolean(projectFolder);
 	const isDashboardEligible = Boolean(activeSessionId && projectFolder);
 	const dashboardReservedWidthPixels = remToPixels(DASHBOARD_RESERVED_WIDTH_REM);
-	const minWorkspaceWidthWithDashboard = remToPixels(MIN_WORKSPACE_WIDTH_WITH_DASHBOARD_REM);
-	const workspaceReadableWidth = Math.max(viewportWidth - workspaceContentLeftInset, 0);
-	const canReserveDashboardSpace = workspaceReadableWidth - dashboardReservedWidthPixels >= minWorkspaceWidthWithDashboard;
-	const dashboardReservedWidth =
-		isDashboardEligible && isDashboardPinned && canReserveDashboardSpace ? dashboardReservedWidthPixels : 0;
 	// Available for New Chat with a selected project and for project-backed
 	// active sessions, matching native's Review eligibility.
 	const isReviewEligible = Boolean(projectFolder);
-	const canFitReviewColumn = workspaceReadableWidth - reviewPaneWidth >= MIN_WORKSPACE_WIDTH_WITH_REVIEW;
-	// DESIGN.md "Review Panel": "hide the Review toggle when the window
-	// cannot fit the workspace... even after sidebar collapse" -- checked
-	// against a hypothetically-collapsed sidebar (collapsed width is
-	// always 0) so the toggle doesn't hide just because the *current*
-	// (expanded) sidebar width doesn't leave room, when collapsing it
-	// would.
-	const canFitReviewColumnIfSidebarCollapsed = viewportWidth - reviewPaneWidth >= MIN_WORKSPACE_WIDTH_WITH_REVIEW;
-	const isReviewVisible = isReviewEligible && isReviewOpen && canFitReviewColumn;
-	const reviewReservedWidth = isReviewVisible ? reviewPaneWidth : 0;
+	const inspectorLayout = resolveInspectorLayout({
+		viewportWidth,
+		sidebarExpanded: !isSidebarCollapsed,
+		sidebarWidth: FRAME_INSET + expandedSidebarWidth + WORKSPACE_SIDEBAR_CLEARANCE,
+		dashboardOpen: isDashboardEligible && isDashboardPinned,
+		reviewOpen: isReviewEligible && isReviewOpen,
+		dashboardOpenedAt: inspectorOpenedAt.dashboard,
+		reviewOpenedAt: inspectorOpenedAt.review,
+		dashboardWidth: dashboardReservedWidthPixels,
+		reviewWidth: reviewPaneWidth,
+		minimumWorkspaceWidth: MIN_WORKSPACE_WIDTH_WITH_REVIEW,
+	});
+	const dashboardReservedWidth = inspectorLayout.dashboard === "panel" ? dashboardReservedWidthPixels : 0;
+	const reviewReservedWidth = inspectorLayout.review === "panel" ? reviewPaneWidth : 0;
+	const isReviewVisible = inspectorLayout.review !== "closed";
 	const topBarTitle =
-		shouldShowSessionContext && activeSessionTitle === "New chat" && firstUserMessage
+		activeSessionTitle === "New chat" && firstUserMessage
 			? compactTitle(firstUserMessage.message.text)
-			: shouldShowSessionContext
+			: activeSession
 				? activeSessionTitle
 				: "Level5";
 	// Durable, independently-tracked list of the 10 most-recently-opened
@@ -575,6 +567,18 @@ function App() {
 			(project) => project.name.toLowerCase().includes(search) || project.path.toLowerCase().includes(search),
 		);
 	}, [projectSearch, recentProjects]);
+	useDrawerFocusTrap(dashboardDrawerRef, inspectorLayout.dashboard === "drawer", () => setIsDashboardPinned(false));
+
+	useEffect(() => {
+		if (inspectorLayout.shouldCollapseSidebar && !isSidebarCollapsed) {
+			setIsSidebarCollapsed(true);
+		}
+		if (inspectorLayout.closedForFit === "dashboard") {
+			setIsDashboardPinned(false);
+		} else if (inspectorLayout.closedForFit === "review") {
+			setIsReviewOpen(false);
+		}
+	}, [inspectorLayout.closedForFit, inspectorLayout.shouldCollapseSidebar, isSidebarCollapsed, setIsDashboardPinned, setIsSidebarCollapsed]);
 
 	async function refreshProjectGitStatus(cwd = projectFolderRef.current) {
 		if (!cwd || !activeSessionIdRef.current) {
@@ -736,19 +740,18 @@ function App() {
 				setIsDashboardPinned((value) => {
 					const shouldOpen = !value;
 					if (shouldOpen) {
+						setInspectorOpenedAt((current) => ({ ...current, dashboard: Date.now() }));
 						void refreshProjectGitStatus(projectFolder);
 					}
 					return shouldOpen;
 				});
 				return;
 			}
-			if (key === "r" && event.shiftKey && isReviewEligible && canFitReviewColumnIfSidebarCollapsed) {
+			if (key === "r" && event.shiftKey && isReviewEligible) {
 				event.preventDefault();
 				setIsReviewOpen((value) => {
 					const opening = !value;
-					if (opening && !isSidebarCollapsed && !canFitReviewColumn) {
-						setIsSidebarCollapsed(true);
-					}
+					if (opening) setInspectorOpenedAt((current) => ({ ...current, review: Date.now() }));
 					return opening;
 				});
 			}
@@ -760,9 +763,6 @@ function App() {
 	}, [
 		isDashboardEligible,
 		isReviewEligible,
-		canFitReviewColumnIfSidebarCollapsed,
-		canFitReviewColumn,
-		isSidebarCollapsed,
 		projectFolder,
 	]);
 
@@ -1373,6 +1373,10 @@ function App() {
 	function resetConversationPane() {
 		optimisticUserTextRef.current = null;
 		pendingPromptProjectFolderRef.current = undefined;
+		// Inspectors are explicitly invoked per session context. Clearing this
+		// state prevents Dashboard from reappearing when a replacement session
+		// becomes eligible after a new-chat, project, or session transition.
+		setIsDashboardPinned(false);
 		setPrompt("");
 		updateTranscriptItems(() => []);
 		setAttachments([]);
@@ -1893,34 +1897,60 @@ function App() {
 									</div>
 								) : (
 									<div className="app-scrollbar-transparent min-h-0 flex-1 overflow-y-auto pr-1">
-										<div className="flex flex-col gap-1">
-											{sessions.map((session) => {
-												const isActive = session.sessionId === activeSessionId;
+										<div className="flex flex-col gap-2">
+											{sessionGroups.map((group) => {
+												const isExpanded = visibleSessionGroupKeys.has(group.key);
 												return (
-													<SidebarButton
-														key={session.sessionId}
-														aria-label={`Open ${sessionTitle(session)}`}
-														title={sessionTitle(session)}
-														aria-disabled={isRunning}
-														className={cn(
-															"h-10 w-full justify-start gap-2 px-3 text-body font-medium",
-															isActive
-																? "bg-l5-selected-surface text-l5-glass-text"
-																: "text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text",
-															isRunning ? "cursor-not-allowed opacity-60" : "",
-														)}
-														onClick={() => void handleSelectSession(session.sessionId)}
-														onContextMenu={(event) => handleSessionContextMenu(event, session.sessionId)}
-													>
-														<ICONS.chat className={cn("size-4 shrink-0", isActive ? "text-l5-accent" : "")} strokeWidth={1.7} />
-														<span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
-														{isActive ? (
-														<SessionActivityIndicator
-															status={activeSessionStatus}
-															isAwaitingPermission={Boolean(pendingPermission)}
-														/>
-													) : null}
-													</SidebarButton>
+													<section key={group.key} aria-label={`${group.label} chats`}>
+														<button
+															type="button"
+															aria-expanded={isExpanded}
+															className="flex h-8 w-full items-center gap-2 rounded-medium px-2 text-left text-caption font-semibold text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text"
+															onClick={() => setRememberedExpandedGroups((current) => {
+																const next = new Set(current);
+																if (next.has(group.key)) next.delete(group.key);
+																else next.add(group.key);
+																return next;
+															})}
+														>
+															<ICONS.chevronRight className={cn("size-3.5 transition-transform", isExpanded && "rotate-90")} strokeWidth={2} />
+															<span className="min-w-0 flex-1 truncate">{group.label}</span>
+															<span className="tabular-nums opacity-70">{group.sessions.length}</span>
+														</button>
+												{isExpanded ? (
+													<div className="mt-1 flex flex-col gap-1">
+														{group.sessions.map((session) => {
+															const isActive = session.sessionId === activeSessionId;
+															return (
+																<SidebarButton
+																	key={session.sessionId}
+																	aria-label={`Open ${sessionTitle(session)}`}
+																	title={sessionTitle(session)}
+																	aria-disabled={isRunning}
+																	className={cn(
+																		"h-9 w-full justify-start gap-2 pl-7 pr-2 text-body font-medium",
+																		isActive
+																			? "bg-l5-selected-surface text-l5-glass-text"
+																			: "text-l5-glass-muted hover:bg-l5-glass-control-hover hover:text-l5-glass-text",
+																		isRunning ? "cursor-not-allowed opacity-60" : "",
+																	)}
+																	onClick={() => void handleSelectSession(session.sessionId)}
+																	onContextMenu={(event) => handleSessionContextMenu(event, session.sessionId)}
+																>
+																	<ICONS.chat className={cn("size-4 shrink-0", isActive ? "text-l5-accent" : "")} strokeWidth={1.7} />
+																	<span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
+																	{isActive ? (
+																		<SessionActivityIndicator
+																			status={activeSessionStatus}
+																			isAwaitingPermission={Boolean(pendingPermission)}
+																		/>
+																	) : null}
+																</SidebarButton>
+															);
+														})}
+													</div>
+												) : null}
+													</section>
 												);
 											})}
 										</div>
@@ -1986,6 +2016,19 @@ function App() {
 					)}
 				</button>
 			</div>
+			{isSidebarCollapsed ? (
+				<div
+					className="electrobun-webkit-app-region-drag pointer-events-none fixed z-40 flex items-center"
+					style={{
+						left: `${sidebarToggleLeft + FRAME_TOP_CONTROL_SIZE + 12}px`,
+						right: `${isReviewEligible ? 120 : isDashboardEligible ? 72 : 24}px`,
+						top: `${FRAME_TOP_CONTROL_TOP}px`,
+						height: `${FRAME_TOP_CONTROL_SIZE}px`,
+					}}
+				>
+					<span className="truncate text-body font-semibold text-foreground/85">{topBarTitle}</span>
+				</div>
+			) : null}
 
 			{contextMenu && menuSession ? (
 				<div
@@ -2008,41 +2051,51 @@ function App() {
 
 			{isDashboardEligible ? (
 				<div
-					className="electrobun-webkit-app-region-no-drag fixed z-40"
+					className="electrobun-webkit-app-region-no-drag fixed z-[60]"
 					style={{
 						top: `${FRAME_TOP_CONTROL_TOP}px`,
-						right:
-							isReviewEligible && canFitReviewColumnIfSidebarCollapsed
-								? `${FRAME_INSET * 2 + FRAME_TOP_CONTROL_SIZE + FRAME_TOP_CONTROL_GAP}px`
-								: `${FRAME_INSET * 2}px`,
+						right: isReviewEligible ? `${FRAME_INSET * 2 + FRAME_TOP_CONTROL_SIZE + FRAME_TOP_CONTROL_GAP}px` : `${FRAME_INSET * 2}px`,
 					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
 					<div className="relative">
-						<LiquidGlassButton
+						<TopBarGlassButton
 							aria-label="Toggle dashboard"
-							title="Toggle dashboard"
+							tooltip="Dashboard · ⇧⌘D"
 							aria-pressed={isDashboardPinned}
 							className={cn(
 								"transition-[color,transform] duration-standard",
 								isDashboardPinned ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
 							)}
-							style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
 							onClick={() => {
 								const shouldOpen = !isDashboardPinned;
 								setIsDashboardPinned(shouldOpen);
 								if (shouldOpen) {
+									setInspectorOpenedAt((current) => ({ ...current, dashboard: Date.now() }));
 									void refreshProjectGitStatus(projectFolder);
 								}
 							}}
 						>
-							<ICONS.dashboard className="size-5" strokeWidth={1.9} />
-						</LiquidGlassButton>
+							<ICONS.dashboard className="size-4" strokeWidth={1.9} />
+						</TopBarGlassButton>
 
-						{isDashboardPinned ? (
+						{inspectorLayout.dashboard === "drawer" ? (
+							<InspectorBackdrop label="Close dashboard drawer" onClose={() => setIsDashboardPinned(false)} />
+						) : null}
+						{inspectorLayout.dashboard !== "closed" ? (
 							<section
+								ref={dashboardDrawerRef}
+								tabIndex={-1}
 								aria-label="Session dashboard"
-								className="l5-liquid-popover l5-glass-rim absolute right-0 top-full mt-3 w-[21rem] max-w-[calc(100vw-3rem)] animate-in fade-in-0 zoom-in-95 rounded-panel p-4 text-foreground duration-quick ease-out"
+								className={cn(
+									"fixed flex flex-col overflow-hidden rounded-panel border border-border bg-l5-elevated-surface p-4 text-foreground shadow-e2",
+									inspectorLayout.dashboard === "drawer" ? "z-50 w-[min(92vw,24rem)]" : "z-20 w-[23rem]",
+								)}
+								style={{
+									top: `${FRAME_TOP_BAR_HEIGHT + FRAME_INSET}px`,
+									bottom: `${FRAME_INSET}px`,
+									right: `${(inspectorLayout.dashboard === "panel" ? reviewReservedWidth : 0) + FRAME_INSET}px`,
+								}}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
 								<div className="flex items-center gap-3">
@@ -2061,9 +2114,12 @@ function App() {
 									>
 										<ICONS.refresh className={cn("size-4", isGitStatusRefreshing ? "animate-spin" : "")} strokeWidth={1.8} />
 									</IconButton>
+									<IconButton label="Close dashboard" className="size-9 rounded-medium hover:bg-muted/70" onClick={() => setIsDashboardPinned(false)}>
+										<ICONS.close className="size-4" strokeWidth={1.8} />
+									</IconButton>
 								</div>
 
-								<div className="mt-4 grid gap-2">
+								<div className="app-scrollbar-transparent mt-4 grid min-h-0 gap-2 overflow-y-auto">
 									<DashboardRow label="Changes" value={gitStatusSummary(gitStatus)} />
 									<DashboardRow
 										label="Branch"
@@ -2082,7 +2138,7 @@ function App() {
 				</div>
 			) : null}
 
-			{isReviewEligible && canFitReviewColumnIfSidebarCollapsed ? (
+			{isReviewEligible ? (
 				<div
 					className="electrobun-webkit-app-region-no-drag fixed z-40"
 					style={{
@@ -2091,29 +2147,22 @@ function App() {
 					}}
 					onDoubleClick={(event) => event.stopPropagation()}
 				>
-					<LiquidGlassButton
+					<TopBarGlassButton
 						aria-label="Toggle review"
-						title="Toggle review"
+						tooltip="Review · ⇧⌘R"
 						aria-pressed={isReviewOpen}
 						className={cn(
 							"transition-[color,transform] duration-standard",
 							isReviewOpen ? "border-l5-accent/45 text-l5-accent" : "text-l5-glass-text",
 						)}
-						style={{ width: `${FRAME_TOP_CONTROL_SIZE}px`, height: `${FRAME_TOP_CONTROL_SIZE}px` }}
 						onClick={() => {
 							const opening = !isReviewOpen;
-							// DESIGN.md "Layout": "Opening Review may collapse the
-							// sidebar on narrow windows." Only collapses -- never
-							// re-expands on close, and never collapses if the
-							// current (expanded) sidebar width already leaves room.
-							if (opening && !isSidebarCollapsed && !canFitReviewColumn) {
-								setIsSidebarCollapsed(true);
-							}
+							if (opening) setInspectorOpenedAt((current) => ({ ...current, review: Date.now() }));
 							setIsReviewOpen(opening);
 						}}
 					>
-						<ICONS.review className="size-5" strokeWidth={1.9} />
-					</LiquidGlassButton>
+						<ICONS.review className="size-4" strokeWidth={1.9} />
+					</TopBarGlassButton>
 				</div>
 			) : null}
 
@@ -2122,6 +2171,7 @@ function App() {
 					cwd={projectFolder}
 					width={reviewPaneWidth}
 					topInset={FRAME_TOP_BAR_HEIGHT + FRAME_INSET}
+					presentation={inspectorLayout.review === "drawer" ? "drawer" : "panel"}
 					onWidthChange={setReviewPaneWidth}
 					onClose={() => setIsReviewOpen(false)}
 				/>
@@ -2269,7 +2319,7 @@ function App() {
 									<div
 										ref={promptOverlayRef}
 										aria-hidden="true"
-										className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-h3 font-medium leading-6 text-foreground"
+										className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-body font-medium leading-6 text-foreground"
 									>
 										{renderComposerPreview(prompt)}
 									</div>
@@ -2280,9 +2330,9 @@ function App() {
 										// again while running queues the prompt instead
 										// of being rejected (see handleSend/DESIGN.md
 										// "Prompt Composer"'s queued-prompts behavior).
-										placeholder="Do anything"
+										placeholder="Ask Level5"
 										aria-label="Message the agent"
-										className="relative block w-full resize-none bg-transparent text-h3 font-medium leading-6 text-transparent caret-l5-accent placeholder:text-muted-foreground/60 focus:outline-none"
+										className="relative block w-full resize-none bg-transparent text-body font-medium leading-6 text-transparent caret-l5-accent placeholder:text-muted-foreground/60 focus:outline-none"
 										style={{ minHeight: COMPOSER_MIN_HEIGHT, maxHeight: COMPOSER_MAX_HEIGHT }}
 										onChange={(event) => setPrompt(event.target.value)}
 										onKeyDown={handleComposerKeyDown}
@@ -2996,8 +3046,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 		return <Markdown className="w-full text-body leading-6 text-foreground">{message.text}</Markdown>;
 	}
 	return (
-		<div className="flex w-full justify-end">
-			<Markdown className="max-w-[85%] rounded-card bg-l5-selected-surface px-4 py-3 text-body leading-6 text-foreground">
+		<div className="w-full border-l-2 border-l5-accent bg-l5-selected-surface px-4 py-3">
+			<Markdown className="text-body leading-6 text-foreground">
 				{message.text}
 			</Markdown>
 		</div>

@@ -1,6 +1,6 @@
 {
 	"name": "level5-build",
-	"version": "2.2.6",
+	"version": "2.3.0",
 	"description": "Level5 Build desktop app",
 	"scripts": {
 		"build:macos-effects": "bash scripts/build-macos-effects.sh",
